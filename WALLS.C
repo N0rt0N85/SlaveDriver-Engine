@@ -1012,9 +1012,9 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
  assert(width*height<MAXVPERWALL);
 
 #if MIPMAP
- if (mipEnable &&
+ if (mipEnable && /* GCC14: also drops the original `desiredWeapon &&` gate, a leftover
+       test hack that kept mips off while holding weapon 0 (the sword) */
      width>=2 && height>=2 && /* GCC14: never halve a 1-tile dimension (bug 1) */
-     currentState.desiredWeapon &&
      coords[0].z>MIPDIST &&
      coords[1].z>MIPDIST &&
      coords[2].z>MIPDIST &&
@@ -1298,9 +1298,9 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
     return;
 
 #if MIPMAP
- if (mipEnable &&
+ if (mipEnable && /* GCC14: also drops the original `desiredWeapon &&` gate, a leftover
+       test hack that kept mips off while holding weapon 0 (the sword) */
      width>=2 && height>=2 && /* GCC14: never halve a 1-tile dimension (bug 1) */
-     currentState.desiredWeapon &&
      coords[0].z>MIPDIST &&
      coords[1].z>MIPDIST &&
      coords[2].z>MIPDIST &&

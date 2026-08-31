@@ -2064,11 +2064,13 @@ int runLevel(char *filename,int levelNm)
 
  while(1)
     {htimer=0;
-     {/* GCC14: hold exactly L+R+X to flip runtime mipmapping (mipEnable, WALLS.C) */
+     {/* GCC14: hold L+R+X together to flip runtime mipmapping (mipEnable, WALLS.C) */
       static char mipChord=0;
-      if (lastInputSample==((~(PER_DGT_TL|PER_DGT_TR|PER_DGT_X))&0xffff))
+      if ((((~lastInputSample)&(PER_DGT_TL|PER_DGT_TR|PER_DGT_X)))==
+	  (PER_DGT_TL|PER_DGT_TR|PER_DGT_X))
 	 {if (!mipChord)
 	     {mipEnable=!mipEnable;
+	      changeMessage(mipEnable? "MIPMAPPING ON": "MIPMAPPING OFF");
 	      mipChord=1;
 	     }
 	 }
