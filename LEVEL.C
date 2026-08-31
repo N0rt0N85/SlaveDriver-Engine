@@ -61,7 +61,10 @@ int loadLevel(int fd,int tileBase)
  LOADPART(level_objectParams,unsigned char,head->nmObjectParams);
  LOADPART(level_texture,unsigned char,head->nmTextureIndexes);
  LOADPART(level_vertexLight,char,head->nmLightValues);
- LOADPART(((char *)level_cutPlane),char,(head->nmCutSectors*MAXCUTSECTORS));
+ /* GCC14: LOADPART used a cast as lvalue (GCC 2.x extension); expanded by hand */
+ size=(head->nmCutSectors*MAXCUTSECTORS)*sizeof(char);
+ level_cutPlane=(unsigned char (*)[][MAXCUTSECTORS])mem_malloc(1,size);
+ fs_read(fd,(char *)level_cutPlane,size);
 
  for (i=1;i<head->nmTextureIndexes;i+=2)
     level_texture[i]+=tileBase;

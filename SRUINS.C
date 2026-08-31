@@ -2060,7 +2060,7 @@ int runLevel(char *filename,int levelNm)
  colorOffset[0]=0; colorOffset[1]=0; colorOffset[2]=0;
 #endif
 
- mipBase=createMippedPics();
+ /* GCC14: mipBase=createMippedPics() removed -- MIPMAP baked off (WALLS.C) */
 
  while(1)
     {htimer=0;
@@ -2351,8 +2351,7 @@ void main(void)
  dPrint("Acquiring system info...");
  /* aquire system info */
  {PerGetSys *sys_data;
-  PER_LInit(PER_KD_SYS,6,PER_SIZE_DGT,PadWorkArea,0);
-  while (!(sys_data=PER_GET_SYS()));
+  sys_data=(PerGetSys *)waitSystemData(PadWorkArea); /* GCC14: was PER_LInit + bare PER_GET_SYS poll, see UTIL.C */
   systemMemory=sys_data->sm;
  }
  dPrint("done.\n");

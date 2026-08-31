@@ -21,7 +21,7 @@
 #include "dma.h"
 
 #define COMPRESS16BPP 1
-#define MIPMAP 1
+#define MIPMAP 0	/* GCC14: baked OFF, retail parity -- see the note in WALLS.C */
 
 /* note: mipmaping is incompatible with locked tiles */
 

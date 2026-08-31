@@ -270,4 +270,4 @@ static void sndDspInit(void)
 					      /* サウンドＤＳＰ       */
 }					      /* プログラム領域クリア */
 
-
+

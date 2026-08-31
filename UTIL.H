@@ -68,7 +68,8 @@ void message(char *message);
 
 #ifndef NDEBUG
 
-void assertFail(char *file,int line);
+void assertFail(char *file,int line) __attribute__((noreturn)); /* GCC14 */
+void *waitSystemData(Uint8 *padWork); /* GCC14: PER_KD_SYS wait with INTBACK re-arm (UTIL.C); returns PerGetSys* */
 
 #define assert(x) do if (!(x)) assertFail(__FILE__,__LINE__); while(0)
 #define validPtr(x) do if (!((((int)x>=0x200000 && ((int)x)<=0x2fffff)) || (((int)x)>=0x6004000 && ((int)x)<=0x60fffff))) assertFail(__FILE__,__LINE__); while(0)
@@ -188,7 +189,7 @@ void resetDisable(void);
         ({ \
                 int *div_unit = (int *)0xffffff00; \
                 int dividend = x, divisor = y;     \
-                __asm__ volatile ("mov.l %1,@%2; mov.l %0,@(0x10,%2); mov.l #0,r1; mov.l r1,@(0x14,%2);" \
+                __asm__ volatile ("mov.l %1,@%2; mov.l %0,@(0x10,%2); mov #0,r1; mov.l r1,@(0x14,%2);" /* GCC14: immediate move is `mov` (SN accepted `mov.l #0,r1`, same encoding 0xe100) */ \
                         : /* no output */                          \
                         : "r" (dividend), "r" (divisor), "r" (div_unit)\
 		        : "r1"); \

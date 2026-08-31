@@ -27,6 +27,17 @@
 #include "megainit.h"
 #include "initmain.h"
 #include "local.h"
+
+/* GCC14: boot probe (make BOOTPROBE=1): paints the screen with one back-screen colour after
+   each step of main() to show how far INIT gets.  magenta = main(), red = fadeSegaLogo,
+   green = megaInit, blue = fs_init, yellow = mem_init, white = PER_GET_SYS answered. */
+#ifdef BOOTPROBE
+#define BOOT_PROBE(c) do { POKE_W(SCL_VDP2_VRAM+0x180000,0x8000); POKE_W(SCL_VDP2_VRAM+0x180020,0); \
+    POKE_W(SCL_VDP2_VRAM+0x180110,0); POKE_W(SCL_VDP2_VRAM+0x1800ac,0); POKE_W(SCL_VDP2_VRAM+0x1800ae,0); \
+    POKE_W(SCL_VDP2_VRAM,(c)); } while (0)
+#else
+#define BOOT_PROBE(c) ((void)0)
+#endif
 #ifdef JAPAN
 #include "pic.h"
 #endif
@@ -549,17 +560,22 @@ void credits(int specialMessage)
 
 void main(void)
 {int token;
+ BOOT_PROBE(0x7c1f); /* GCC14: magenta = main() reached */
  fadeSegaLogo();
+ BOOT_PROBE(0x001f); /* GCC14: red */
  megaInit();
+ BOOT_PROBE(0x03e0); /* GCC14: green */
  fs_init();
+ BOOT_PROBE(0x7c00); /* GCC14: blue */
  mem_init();
+ BOOT_PROBE(0x03ff); /* GCC14: yellow */
  set_imask(0);
  /* aquire system info */
  {PerGetSys *sys_data;
-  PER_LInit(PER_KD_SYS,6,PER_SIZE_DGT,PadWorkArea,0);
-  while (!(sys_data=PER_GET_SYS()));
+  sys_data=(PerGetSys *)waitSystemData(PadWorkArea); /* GCC14: was PER_LInit + bare PER_GET_SYS poll, see UTIL.C */
   systemMemory=sys_data->sm;
  }
+ BOOT_PROBE(0x7fff); /* GCC14: white */
  dPrint("Here we are!\n");
  SCL_Vdp2Init();
  SCL_SetDisplayMode(SCL_NON_INTER,SCL_240LINE,SCL_NORMAL_A);

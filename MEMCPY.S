@@ -36,7 +36,7 @@ _qmemcpy:
 	bt	L_jump
 	mov	r0,r1
 
-	.align  4
+	.balign 4	! GCC14: GNU as .align is a power of two (SN aligned to 4 bytes)
 L_loop1:
 	mov.b	@r5+,r0	! Copy bytes to align source
 	dt	r1
@@ -60,7 +60,7 @@ L_jump:
 	jmp	@r0
 	nop
 
-	.align 4
+	.balign 4
 L_offset_tbl:
 	.byte	L_dest00-L_offset_tbl
 	.byte	L_dest01-L_offset_tbl
@@ -69,7 +69,7 @@ L_offset_tbl:
 
 ! Destination = 00
 
-	.align 4
+	.balign 4
 L_dest00:
 	mov.l	@r5+,r0	! Read longword, write longword per iteration
 	dt	r2
@@ -82,7 +82,7 @@ L_dest00:
 
 ! Destination = 10
 
-	.align 4
+	.balign 4
 L_dest10:
 	mov.l	@r5+,r0	! Read longword, write two words per iteration
 	dt	r2
@@ -97,7 +97,7 @@ L_dest10:
 
 ! Destination = 01 or 11
 
-	.align 4
+	.balign 4
 L_dest01:
 L_dest11:
 	mov.l	@r5+,r0	! Read longword, write byte, word, byte per iteration
@@ -116,7 +116,7 @@ L_dest11:
 
 ! Cleanup last few bytes
 
-	.align 4
+	.balign 4
 L_cleanup:
 	mov	r6,r0
 	and	#3,r0
@@ -124,7 +124,7 @@ L_cleanup:
 	bt	L_exit
 	mov	r0,r6
 
-	.align 4
+	.balign 4
 L_cleanup_loop:
 	mov.b	@r5+,r0
 	dt	r6

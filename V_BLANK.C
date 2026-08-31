@@ -10,9 +10,9 @@
 #include "util.h"
 
 #define INPUTQSIZE 16 /* dont change this */
-unsigned short inputQ[INPUTQSIZE];
-unsigned short lastInputSample;
-unsigned short inputAccum;
+volatile unsigned short inputQ[INPUTQSIZE]; /* GCC14: header declares it volatile */
+volatile unsigned short lastInputSample; /* GCC14: header declares it volatile */
+volatile unsigned short inputAccum; /* GCC14: header declares it volatile */
 volatile char controlerPresent;
 volatile char analogControlerPresent;
 volatile short analogX;
@@ -23,7 +23,8 @@ volatile short analogTL;
 volatile char inputQHead,inputQTail;
 
 volatile int fadeDir,fadePos,fadeEnd;
-int abcResetEnable=0,abcResetDisable=0;
+volatile int abcResetEnable=0; /* GCC14: header declares it volatile */
+int abcResetDisable=0;
 
 /*
 volatile Uint16	PadData1  = 0x0000;
@@ -147,9 +148,10 @@ int errorQSize=0;
 #pragma interrupt
 void userBreakBlam(void)
 {int dummy[1];
- __asm__ volatile ("sts.l pr,%0\n"
-		   : "=r" ((int)dummy[0]));
- errorQ[errorQSize]=dummy[4];
+ __asm__ volatile ("sts pr,%0\n" /* GCC14: GNU as rejects "sts.l pr,Rn"; PR->register is "sts" */
+		   : "=r" (dummy[0])); /* GCC14: plain lvalue as output operand */
+ errorQ[errorQSize]=dummy[8]; /* GCC14: the exception PC; GCC 14's prologue pushes 28 bytes
+    of registers before dummy, so the hardware-pushed PC sits at @(32,r15) = dummy[8] */
  prQ[errorQSize]=dummy[0];
  errorQSize=(errorQSize+1)&0xf;
 
