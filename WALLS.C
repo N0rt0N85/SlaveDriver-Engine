@@ -35,11 +35,14 @@ short plaxBBymax,plaxBBxmax,
 static short slave_plaxBBymax,slave_plaxBBxmax,
    slave_plaxBBymin,slave_plaxBBxmin;
 
-/* GCC14: MIPMAP baked OFF -- retail parity.  The mip path is unfinished: 1-tile
-   dimensions halve to 0 (the wall is never emitted), and the texture and per-vertex
-   light lists are walked sequentially on the halved grid, so the wall's top rows repeat
-   over the whole surface (the light walk sits in rectTransform's asm).  Retail shows
-   none of this and no mip block was found in its MAIN.BIN. */
+/* GCC14: MIPMAP baked OFF -- retail parity.  The mip path is unfinished; retail shows
+   none of its symptoms and no mip block was found in its MAIN.BIN.  Of its three bugs,
+   two are fixed in place below (inert while MIPMAP is 0): (1) 1-tile dimensions halved
+   to 0, so the wall was never emitted; (2) the texture list was walked sequentially on
+   the halved grid, repeating the wall's top rows over the whole surface.  Re-enabling
+   still requires fixing (3): rectTransform (wallasm_gnu.s) walks the per-vertex light
+   list one byte per vertex of whatever grid it is given, so the halved grid needs
+   per-vertex/per-row light strides added to the asm. */
 #define MIPMAP 0
 
 #if MIPMAP
@@ -1004,7 +1007,8 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
  assert(width*height<MAXVPERWALL);
 
 #if MIPMAP
- if (currentState.desiredWeapon &&
+ if (width>=2 && height>=2 && /* GCC14: never halve a 1-tile dimension (bug 1) */
+     currentState.desiredWeapon &&
      coords[0].z>MIPDIST &&
      coords[1].z>MIPDIST &&
      coords[2].z>MIPDIST &&
@@ -1047,6 +1051,10 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
  for (h=0;h<height;h++)
     {for (w=0;w<width;w++)
 	{clip=0x8000;
+#if MIPMAP
+	 if (tileBias) /* GCC14: sample the texture list at (2h,2w), don't walk it (bug 2) */
+	    tex=theWall->textures+((h*2)*theWall->tileLength+w*2)*2;
+#endif
 	 assert(level_texture[tex]<8);
 	 ppattern=pattern[(int)level_texture[tex++]];
 	 gtable.entry[(int)*ppattern]=vCalc[row1+w].light;
@@ -1270,8 +1278,8 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
  int w,h,v,clip;
  int light;
  int tex,row1,row2;
- const int width=theWall->tileLength;
- const int height=theWall->tileHeight;
+ int width=theWall->tileLength; /* GCC14: not const, halved under #if MIPMAP */
+ int height=theWall->tileHeight;
  struct gourTable gtable;
  char *ppattern;
  struct slaveDrawResult *cacheThruResult=
@@ -1284,7 +1292,8 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
     return;
 
 #if MIPMAP
- if (currentState.desiredWeapon &&
+ if (width>=2 && height>=2 && /* GCC14: never halve a 1-tile dimension (bug 1) */
+     currentState.desiredWeapon &&
      coords[0].z>MIPDIST &&
      coords[1].z>MIPDIST &&
      coords[2].z>MIPDIST &&
@@ -1328,7 +1337,10 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
  for (h=0;h<height;h++)
     {for (w=0;w<width;w++)
 	{clip=0x8000;
-
+#if MIPMAP
+	 if (tileBias) /* GCC14: sample the texture list at (2h,2w), don't walk it (bug 2) */
+	    tex=theWall->textures+((h*2)*theWall->tileLength+w*2)*2;
+#endif
 	 ppattern=pattern[(int)level_texture[tex++]];
 	 gtable.entry[(int)*ppattern]=slave_vCalc[row1+w].light;
 	 clip&=slave_vCalc[row1+w].light;
