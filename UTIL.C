@@ -347,7 +347,8 @@ static int mem2Start=(int)&end;
 void mem_init(void)
 {memStack[0][0]=mem1Start;
  memStack[1][0]=mem2Start;
- stackPos[0]=0; stackPos[1]=0; stackPos[2]=0;
+ stackPos[0]=0; stackPos[1]=0; /* GCC14: stackPos[2]=0 removed -- out of bounds (NMAREAS
+    is 2); GCC 14's static layout made it clobber memStack[0][0] */
  areaEnd[0]=0x0300000;
  areaEnd[1]=0x6100000;
 }
@@ -441,13 +442,51 @@ int normalizeAngle(int angle)
 #ifndef NDEBUG
 void _checkStack(char *file,int line)
 {int c;
- __asm__ volatile ("mov.l r15,%0\n"
-		   : "=r" ((int)c));
+ __asm__ volatile ("mov r15,%0\n" /* GCC14: GNU as rejects "mov.l Rm,Rn" (register move is "mov"); cast dropped from the output lvalue */
+		   : "=r" (c));
  if (c<((int)mystack)+0x100)
     assertFail(file,line);
 }
 #endif
 
+
+/* GCC14: replaces the bare `PER_LInit(); while (!(sys=PER_GET_SYS()));` of INITMAIN.C /
+   SRUINS.C.  Per the SBL manual, GoIntBack() returns WITHOUT issuing the INTBACK when the
+   SMPC SF flag is busy and nothing in a bare poll re-issues it: wait vblank by vblank and
+   re-arm every 4 frames (BOOTPROBE colours: cyan = SF busy at re-arm, orange = no answer). */
+void *waitSystemData(Uint8 *padWork)
+{PerGetSys *sys_data;
+ int frames=0;
+ PER_LInit(PER_KD_SYS,6,PER_SIZE_DGT,padWork,0);
+ while (!(sys_data=PER_GET_SYS()))
+    {/* GCC14: pace one frame per attempt -- but only the vblank flag can do that while the
+	display is ON.  With TVMD's DISP bit clear the whole display interval is blanking
+	(VDP2 manual ST-058-R2, "it is in the blank condition during the display interval
+	when this bit is 0"), so TVSTAT's VBLANK bit stays 1 and the second loop never ends.
+	MAIN.BIN reaches here with the display off, INIT.BIN having disabled it before link:
+	pace on a plain count in that case. */
+     if (PEEK_W(SCL_VDP2_VRAM+0x180000) & 0x8000)
+	{while (!(PEEK_W(SCL_VDP2_VRAM+0x180004) & 8)) ;   /* wait for vblank */
+	 while ((PEEK_W(SCL_VDP2_VRAM+0x180004) & 8)) ;
+	}
+     else
+	{volatile int d;
+	 for (d=0;d<20000;d++) ;
+	}
+     if ((++frames & 3)==0)
+	{
+#ifdef BOOTPROBE
+	 {Uint16 c=((*((volatile Uint8 *)0x20100063)) & 1)? 0x7fe0 /* cyan: SF busy */ : 0x01ff /* orange */;
+	  POKE_W(SCL_VDP2_VRAM+0x180000,0x8000); POKE_W(SCL_VDP2_VRAM+0x180020,0);
+	  POKE_W(SCL_VDP2_VRAM+0x180110,0); POKE_W(SCL_VDP2_VRAM+0x1800ac,0);
+	  POKE_W(SCL_VDP2_VRAM+0x1800ae,0); POKE_W(SCL_VDP2_VRAM,c);
+	 }
+#endif
+	 PER_LInit(PER_KD_SYS,6,PER_SIZE_DGT,padWork,0);
+	}
+    }
+ return sys_data;
+}
 
 int bitScanForward(unsigned int i,int start)
 {start++;

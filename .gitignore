@@ -1,0 +1,9 @@
+build/
+*.o
+*.d
+refs/
+cd/
+__pycache__/
+# SEGA proprietary SBL 6.01 -- regenerate with tools/import_sbl6.sh SBL601.zip
+sdk/sbl6/include/
+sdk/sbl6/lib/

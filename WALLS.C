@@ -35,7 +35,12 @@ short plaxBBymax,plaxBBxmax,
 static short slave_plaxBBymax,slave_plaxBBxmax,
    slave_plaxBBymin,slave_plaxBBxmin;
 
-#define MIPMAP 1
+/* GCC14: MIPMAP baked OFF -- retail parity.  The mip path is unfinished: 1-tile
+   dimensions halve to 0 (the wall is never emitted), and the texture and per-vertex
+   light lists are walked sequentially on the halved grid, so the wall's top rows repeat
+   over the whole surface (the light walk sits in rectTransform's asm).  Retail shows
+   none of this and no mip block was found in its MAIN.BIN. */
+#define MIPMAP 0
 
 #if MIPMAP
 short mipBase;
