@@ -22,4 +22,5 @@ extern Sprite *autoTarget;
 extern MthXyz autoTFormedPos;
 
 extern short plaxBBymax,plaxBBxmax,plaxBBymin,plaxBBxmin,mipBase;
+extern int mipEnable; /* GCC14: runtime mip toggle, see WALLS.C */
 #endif

@@ -2060,10 +2060,21 @@ int runLevel(char *filename,int levelNm)
  colorOffset[0]=0; colorOffset[1]=0; colorOffset[2]=0;
 #endif
 
- /* GCC14: mipBase=createMippedPics() removed -- MIPMAP baked off (WALLS.C) */
+ mipBase=createMippedPics();
 
  while(1)
     {htimer=0;
+     {/* GCC14: hold exactly L+R+X to flip runtime mipmapping (mipEnable, WALLS.C) */
+      static char mipChord=0;
+      if (lastInputSample==((~(PER_DGT_TL|PER_DGT_TR|PER_DGT_X))&0xffff))
+	 {if (!mipChord)
+	     {mipEnable=!mipEnable;
+	      mipChord=1;
+	     }
+	 }
+      else
+	 mipChord=0;
+     }
      /* ok */
      if (framesElapsed>8)
 	framesElapsed=8;

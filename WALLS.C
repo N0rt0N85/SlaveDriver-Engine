@@ -35,18 +35,23 @@ short plaxBBymax,plaxBBxmax,
 static short slave_plaxBBymax,slave_plaxBBxmax,
    slave_plaxBBymin,slave_plaxBBxmin;
 
-/* GCC14: MIPMAP baked OFF -- retail parity.  The mip path is unfinished; retail shows
-   none of its symptoms and no mip block was found in its MAIN.BIN.  Of its three bugs,
-   two are fixed in place below (inert while MIPMAP is 0): (1) 1-tile dimensions halved
-   to 0, so the wall was never emitted; (2) the texture list was walked sequentially on
-   the halved grid, repeating the wall's top rows over the whole surface.  Re-enabling
-   still requires fixing (3): rectTransform (wallasm_gnu.s) walks the per-vertex light
-   list one byte per vertex of whatever grid it is given, so the halved grid needs
-   per-vertex/per-row light strides added to the asm. */
-#define MIPMAP 0
+/* GCC14: the mip path is compiled in but gated by mipEnable (default 0 = the retail
+   behaviour: retail shows none of its symptoms and no mip block was found in its
+   MAIN.BIN).  Hold L+R+X in game to flip it (SRUINS.C).  Two of its three bugs are
+   fixed below: (1) 1-tile dimensions halved to 0, so the wall was never emitted;
+   (2) the texture list was walked sequentially on the halved grid, repeating the
+   wall's top rows over the whole surface.  Still open when enabled: (3) rectTransform
+   (wallasm_gnu.s) walks the per-vertex light list one byte per vertex of whatever grid
+   it is given, so the halved grid reads a scrambled quarter of the light map -- fixing
+   it needs per-vertex/per-row light strides in the asm; and by design each halved cell
+   covers a 2x2 block of world tiles but shows only the (2h,2w) tile replicated four
+   times (the mip pic is the half-res tile tiled 2x2, PIC.C map()), so any texture
+   boundary inside a block bleeds a full tile row/column. */
+#define MIPMAP 1
 
 #if MIPMAP
 short mipBase;
+int mipEnable=0;
 #endif
 
 static int laserColor=0;
@@ -1007,7 +1012,8 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
  assert(width*height<MAXVPERWALL);
 
 #if MIPMAP
- if (width>=2 && height>=2 && /* GCC14: never halve a 1-tile dimension (bug 1) */
+ if (mipEnable &&
+     width>=2 && height>=2 && /* GCC14: never halve a 1-tile dimension (bug 1) */
      currentState.desiredWeapon &&
      coords[0].z>MIPDIST &&
      coords[1].z>MIPDIST &&
@@ -1292,7 +1298,8 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
     return;
 
 #if MIPMAP
- if (width>=2 && height>=2 && /* GCC14: never halve a 1-tile dimension (bug 1) */
+ if (mipEnable &&
+     width>=2 && height>=2 && /* GCC14: never halve a 1-tile dimension (bug 1) */
      currentState.desiredWeapon &&
      coords[0].z>MIPDIST &&
      coords[1].z>MIPDIST &&
