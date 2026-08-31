@@ -72,9 +72,10 @@ The SNASM sources (`START.S`, `LINK.S`, `WALLASM.S`, `BOOT/*.S`) are kept untouc
 case-insensitive checkout).  `MEMCPY.S` was already GNU syntax but its `.align 4` became `.balign 4`
 (GNU `as` on sh-elf reads `.align` as a power of two).
 
-Nine original files carry minimal edits, each tagged `/* GCC14: ... */` (`git diff` shows them
+A dozen original files carry minimal edits, each tagged `/* GCC14: ... */` (`git diff` shows them
 all): `LEVEL.C` (cast used as lvalue), `V_BLANK.C` (`volatile` to match the header, inline-asm
-mnemonics, user-break frame offset), `WALLS.C` (`const` on a variable modified under `#if MIPMAP`),
+mnemonics, user-break frame offset), `WALLS.C`/`PIC.C`/`SRUINS.C` (`MIPMAP` baked off -- the mip
+path is unfinished, see the note at `WALLS.C` `#define MIPMAP`),
 `UTIL.C` (an out-of-bounds `stackPos[2]=0` that GCC 14's static layout turned into a real bug,
 inline-asm mnemonic, and `waitSystemData()`: the `PER_KD_SYS` wait paced by vblank with an INTBACK
 re-arm, as the SBL manual asks), `UTIL.H` (`noreturn` on `assertFail`, `mov #0` mnemonic, that
@@ -90,3 +91,40 @@ this port from booting (`docs/PORTING_NOTES.md`, "Boot").
 
 Only the US/PAL configuration links; `-DJAPAN` needs `PIC.C` in the INIT/KEYGEN closures, and the
 `FLASH/` and `OLDJAP/` directories are diverged snapshots outside this build.
+
+Running the game
+----------------
+
+The repository contains no game data.  To get a playable disc you need the data files of
+a retail *PowerSlave* (US) / *Exhumed* (EU) Saturn CD you own:
+
+1. Copy the files of the CD's data track into `cd/` (flat, no subdirectory): the 24
+   `*.LEV` levels, `STATIC.DAT`, `INITLOAD.DAT`, `MAP.DAT`, `LOGOS.PCS`, `INTRO.PCS`,
+   `BONUS.BIN`/`BONUS.DAT`, the three `*.MOV` movies and the `SP_*.LIP` speech files
+   (plus their `J*` variants if present).  Do not copy the CD's `0` and `MAIN.BIN` --
+   the build replaces them.
+2. `powershell -ExecutionPolicy Bypass -File build.ps1 -NDebug` then
+   `powershell -ExecutionPolicy Bypass -File build.ps1 -NDebug iso`
+3. Boot `build/ndebug/slavedriver.iso` in an emulator (developed against Ymir) or on hardware.
+
+Build with `-NDebug` to **play**: that is the configuration the retail disc shipped (its binaries
+contain no assert strings). The default build keeps the original developer asserts, which stop the
+game on data the retail build tolerates -- for instance `PRINT.C 145 Write This Down`, the assert
+for a character missing from the font, reached through the intro movie's subtitles when the
+console's BIOS language is not English (`getLanguageNumber()`, LOCAL.C; MOV.C draws no subtitle at
+all in English). With asserts off that character is simply skipped, as on the retail disc.
+
+`make iso` stages `INIT.BIN` as `0.BIN` (the first file, which the IP loads), `MAIN.BIN`
+and the whole `cd/` directory behind SaturnRingLib's generic `IP.BIN`; another IP can be
+substituted with `make iso IPFILE=path/to/IP.BIN`.
+
+Music is the only loss: the retail disc plays its audio tracks 2-12 as CDDA (`FILE.C`
+`playCDTrack`) and a data-only ISO has none.  Everything else -- sound effects, movies,
+speech -- comes from the data files.
+
+File formats
+------------
+
+`docs/LEV_FORMAT.md` describes the `.LEV` level file: the sky block, the geometry block
+(header and the 14 arrays with their struct layouts), the sound, tile and sequence
+blocks -- as read by the engine sources and cross-checked against the retail files.
