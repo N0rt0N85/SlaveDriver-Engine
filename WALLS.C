@@ -992,6 +992,14 @@ static char pattern[][4]=
     };
 
 void EZ_specialDistSpr2(short charNm,XyInt *xy,struct gourTable *gTable);
+
+#if MIPMAP
+/* GCC14: screen-space midpoint of two projected grid corners, for the non-uniform
+   mip-block fallback (RGB555 average keeps the channels separate; bit 15 is 0 on
+   every corner beyond MIPDIST) */
+#define MIPMID(d,a,b)  (d).x=(short)((((int)(a).x)+(b).x)>>1);  (d).y=(short)((((int)(a).y)+(b).y)>>1);  (d).light=(unsigned short)(((((a).light)&0x7bde)+(((b).light)&0x7bde))>>1)
+#endif
+
 void drawRectWall(sWallType *theWall,MthXyz *coords,
 		  SectorDrawRecord *s)
 {MthXyz vWidth,vHeight;
@@ -1048,7 +1056,13 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 	       coords[0].x,coords[0].y,coords[0].z,
 	       vHeight.x,vHeight.y,vHeight.z,
 	       vCalc,
-	       (nmWallLights||wavyIndex)?&getLight:NULL);
+	       (nmWallLights||wavyIndex)?&getLight:NULL,
+#if MIPMAP
+	       tileBias?1:0,tileBias?2*(theWall->tileLength-width):0
+#else
+	       0,0
+#endif
+	       );
 
  tex=theWall->textures;
  row1=0;
@@ -1058,8 +1072,71 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
     {for (w=0;w<width;w++)
 	{clip=0x8000;
 #if MIPMAP
-	 if (tileBias) /* GCC14: sample the texture list at (2h,2w), don't walk it (bug 2) */
-	    tex=theWall->textures+((h*2)*theWall->tileLength+w*2)*2;
+	 if (tileBias)
+	    {/* GCC14: a mip cell is ONE sprite whose pic replicates ONE half-res tile 2x2
+		over a 2x2 world-tile block.  A block mixing (pattern,tile) pairs cannot be
+		mipped: fall back to its 4 full-res tiles, with the missing grid points
+		averaged in screen space.  Uniform blocks sample the (2h,2w) pair. */
+	     int fullTL=theWall->tileLength;
+	     int rr,cc,p00,p01,p10,p11;
+	     rr=h*2; cc=w*2;
+	     p00=theWall->textures+(rr*fullTL+cc)*2;
+	     p01=(cc+1<fullTL)? p00+2: p00;
+	     p10=(rr+1<theWall->tileHeight)? p00+fullTL*2: p00;
+	     p11=p10+(p01-p00);
+	     tex=p00;
+	     if (level_texture[p00]!=level_texture[p01] ||
+		 level_texture[p00]!=level_texture[p10] ||
+		 level_texture[p00]!=level_texture[p11] ||
+		 level_texture[p00+1]!=level_texture[p01+1] ||
+		 level_texture[p00+1]!=level_texture[p10+1] ||
+		 level_texture[p00+1]!=level_texture[p11+1])
+		{struct vCalc pts[3][3];
+		 int dh,dw;
+		 int pr[2][2];
+		 pr[0][0]=p00; pr[0][1]=p01; pr[1][0]=p10; pr[1][1]=p11;
+		 pts[0][0]=vCalc[row1+w];
+		 pts[0][2]=vCalc[row1+w+1];
+		 pts[2][2]=vCalc[row2+w+1];
+		 pts[2][0]=vCalc[row2+w];
+		 clip&=pts[0][0].light&pts[0][2].light&
+		       pts[2][2].light&pts[2][0].light;
+		 poly[0].x=pts[0][0].x; poly[0].y=pts[0][0].y;
+		 poly[1].x=pts[0][2].x; poly[1].y=pts[0][2].y;
+		 poly[2].x=pts[2][2].x; poly[2].y=pts[2][2].y;
+		 poly[3].x=pts[2][0].x; poly[3].y=pts[2][0].y;
+		 if (clip || !clip_visible(poly,s))
+		    continue;
+		 MIPMID(pts[0][1],pts[0][0],pts[0][2]);
+		 MIPMID(pts[1][0],pts[0][0],pts[2][0]);
+		 MIPMID(pts[1][2],pts[0][2],pts[2][2]);
+		 MIPMID(pts[2][1],pts[2][0],pts[2][2]);
+		 MIPMID(pts[1][1],pts[1][0],pts[1][2]);
+		 for (dh=0;dh<2;dh++)
+		    for (dw=0;dw<2;dw++)
+		       {int t=pr[dh][dw];
+			ppattern=pattern[(int)level_texture[t]];
+			gtable.entry[(int)*ppattern]=pts[dh][dw].light;
+			poly[(int)*ppattern].x=pts[dh][dw].x;
+			poly[(int)*ppattern].y=pts[dh][dw].y;
+			ppattern++;
+			gtable.entry[(int)*ppattern]=pts[dh][dw+1].light;
+			poly[(int)*ppattern].x=pts[dh][dw+1].x;
+			poly[(int)*ppattern].y=pts[dh][dw+1].y;
+			ppattern++;
+			gtable.entry[(int)*ppattern]=pts[dh+1][dw+1].light;
+			poly[(int)*ppattern].x=pts[dh+1][dw+1].x;
+			poly[(int)*ppattern].y=pts[dh+1][dw+1].y;
+			ppattern++;
+			gtable.entry[(int)*ppattern]=pts[dh+1][dw].light;
+			poly[(int)*ppattern].x=pts[dh+1][dw].x;
+			poly[(int)*ppattern].y=pts[dh+1][dw].y;
+			EZ_specialDistSpr2(mapPic(level_texture[t+1]),poly,&gtable);
+			nmPolys++;
+		       }
+		 continue;
+		}
+	    }
 #endif
 	 assert(level_texture[tex]<8);
 	 ppattern=pattern[(int)level_texture[tex++]];
@@ -1336,7 +1413,13 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 	       coords[0].x,coords[0].y,coords[0].z,
 	       vHeight.x,vHeight.y,vHeight.z,
 	       slave_vCalc,
-	       (snmWallLights||sWavyIndex)?sgetLight:NULL);
+	       (snmWallLights||sWavyIndex)?sgetLight:NULL,
+#if MIPMAP
+	       tileBias?1:0,tileBias?2*(theWall->tileLength-width):0
+#else
+	       0,0
+#endif
+	       );
 
  tex=theWall->textures;
  row1=0;
@@ -1345,9 +1428,77 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
     {for (w=0;w<width;w++)
 	{clip=0x8000;
 #if MIPMAP
-	 if (tileBias) /* GCC14: sample the texture list at (2h,2w), don't walk it (bug 2) */
-	    tex=theWall->textures+((h*2)*theWall->tileLength+w*2)*2;
+	 if (tileBias)
+	    {/* GCC14: a mip cell is ONE sprite whose pic replicates ONE half-res tile 2x2
+		over a 2x2 world-tile block.  A block mixing (pattern,tile) pairs cannot be
+		mipped: fall back to its 4 full-res tiles, with the missing grid points
+		averaged in screen space.  Uniform blocks sample the (2h,2w) pair. */
+	     int fullTL=theWall->tileLength;
+	     int rr,cc,p00,p01,p10,p11;
+	     rr=h*2; cc=w*2;
+	     p00=theWall->textures+(rr*fullTL+cc)*2;
+	     p01=(cc+1<fullTL)? p00+2: p00;
+	     p10=(rr+1<theWall->tileHeight)? p00+fullTL*2: p00;
+	     p11=p10+(p01-p00);
+	     tex=p00;
+	     if (level_texture[p00]!=level_texture[p01] ||
+		 level_texture[p00]!=level_texture[p10] ||
+		 level_texture[p00]!=level_texture[p11] ||
+		 level_texture[p00+1]!=level_texture[p01+1] ||
+		 level_texture[p00+1]!=level_texture[p10+1] ||
+		 level_texture[p00+1]!=level_texture[p11+1])
+		{struct vCalc pts[3][3];
+		 int dh,dw;
+		 int pr[2][2];
+		 pr[0][0]=p00; pr[0][1]=p01; pr[1][0]=p10; pr[1][1]=p11;
+		 pts[0][0]=slave_vCalc[row1+w];
+		 pts[0][2]=slave_vCalc[row1+w+1];
+		 pts[2][2]=slave_vCalc[row2+w+1];
+		 pts[2][0]=slave_vCalc[row2+w];
+		 clip&=pts[0][0].light&pts[0][2].light&
+		       pts[2][2].light&pts[2][0].light;
+		 poly[0].x=pts[0][0].x; poly[0].y=pts[0][0].y;
+		 poly[1].x=pts[0][2].x; poly[1].y=pts[0][2].y;
+		 poly[2].x=pts[2][2].x; poly[2].y=pts[2][2].y;
+		 poly[3].x=pts[2][0].x; poly[3].y=pts[2][0].y;
+		 if (clip || !clip_visible(poly,s))
+		    continue;
+		 MIPMID(pts[0][1],pts[0][0],pts[0][2]);
+		 MIPMID(pts[1][0],pts[0][0],pts[2][0]);
+		 MIPMID(pts[1][2],pts[0][2],pts[2][2]);
+		 MIPMID(pts[2][1],pts[2][0],pts[2][2]);
+		 MIPMID(pts[1][1],pts[1][0],pts[1][2]);
+		 for (dh=0;dh<2;dh++)
+		    for (dw=0;dw<2;dw++)
+		       {int t=pr[dh][dw];
+			ppattern=pattern[(int)level_texture[t]];
+			gtable.entry[(int)*ppattern]=pts[dh][dw].light;
+			poly[(int)*ppattern].x=pts[dh][dw].x;
+			poly[(int)*ppattern].y=pts[dh][dw].y;
+			ppattern++;
+			gtable.entry[(int)*ppattern]=pts[dh][dw+1].light;
+			poly[(int)*ppattern].x=pts[dh][dw+1].x;
+			poly[(int)*ppattern].y=pts[dh][dw+1].y;
+			ppattern++;
+			gtable.entry[(int)*ppattern]=pts[dh+1][dw+1].light;
+			poly[(int)*ppattern].x=pts[dh+1][dw+1].x;
+			poly[(int)*ppattern].y=pts[dh+1][dw+1].y;
+			ppattern++;
+			gtable.entry[(int)*ppattern]=pts[dh+1][dw].light;
+			poly[(int)*ppattern].x=pts[dh+1][dw].x;
+			poly[(int)*ppattern].y=pts[dh+1][dw].y;
+			cacheThruResult[nmSlavePolys].gtable=gtable;
+			for (v=0;v<4;v++)
+			   cacheThruResult[nmSlavePolys].poly[v]=poly[v];
+			cacheThruResult[nmSlavePolys].tile=level_texture[t+1];
+			nmSlavePolys++;
+			assert(nmSlavePolys<MAXNMSLAVEPOLYS);
+		       }
+		 continue;
+		}
+	    }
 #endif
+
 	 ppattern=pattern[(int)level_texture[tex++]];
 	 gtable.entry[(int)*ppattern]=slave_vCalc[row1+w].light;
 	 clip&=slave_vCalc[row1+w].light;

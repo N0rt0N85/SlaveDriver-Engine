@@ -52,6 +52,13 @@ ifeq ($(BOOTPROBE),1)
   BUILD   := $(BUILD)/probe
   DEFINES += -DBOOTPROBE
 endif
+# STATUSTEXT=1: the game's own in-game metrics overlay (SRUINS.C: fps, polys, calc/draw
+# times from the hblank line counter, free memory, texture-slot swaps).  Own tree, like
+# BOOTPROBE, so the flagged objects never mix with the normal ones.
+ifeq ($(STATUSTEXT),1)
+  BUILD   := $(BUILD)/stext
+  DEFINES += -DSTATUSTEXT
+endif
 OBJDIR   := $(BUILD)/obj
 
 # ---------------------------------------------------------------------------------------------

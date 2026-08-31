@@ -130,6 +130,8 @@ _rectTransform:
 
 	! compute light value with depth cueing
 	mov.b @r7+,r1		! get light value
+	mov.l @(40,r14),r0	! GCC14: extra per-vertex light step (0; 1 when the caller
+	add r0,r7		!        walks a full-grid light list on a halved mip grid)
 	! ... do depth cueing calculations to modify r1
 	! ... r3 = clamped z coord from above
 	shlr16 r3
@@ -175,6 +177,9 @@ _rectTransform:
 	dt r11
 	bf/s .Lrt_widthLoop
 	add #6,r12
+
+	mov.l @(44,r14),r0	! GCC14: extra per-row light skip (0; 2*(fullWidth-width) on
+	add r0,r7		!        a halved mip grid, to land on the next even row)
 
 	! re-load position from memory
 	mov.l @(8,r14),r8	! GCC14: @(r14,8)
