@@ -1,6 +1,6 @@
-# Porting SlaveDriver to a modern GCC toolchain — working notes (2026-08-30)
+# Porting SlaveDriver to a modern GCC toolchain — working notes
 
-Goal of this fork: make the 1996 SlaveDriver (PowerSlave Saturn) sources build with the
+Goal: make the 1996 SlaveDriver (PowerSlave Saturn) sources build with the
 `sh2eb-elf` GCC 14.2 toolchain shipped by SaturnRingLib, producing the same two flat
 binaries the original disc used (`INIT` = first program, `MAIN.BIN` = game).
 
@@ -34,8 +34,8 @@ binaries the original disc used (`INIT` = first program, `MAIN.BIN` = game).
   `wallRenderSlaveMain` runs on the slave. No SCU-DSP program (DSP/ is a SEGA sample; MEGAINIT only clears the DSP).
 
 ## Toolchain facts (verified)
-* `C:\Users\pcico\Projects\Mimas\SaturnRingLib\Compiler\sh2eb-elf\bin` must be on PATH
-  (gcc silently fails with rc=1 otherwise — it cannot find cc1/DLLs).
+* SaturnRingLib's `Compiler/sh2eb-elf/bin` must be on PATH (gcc silently fails with rc=1
+  otherwise — it cannot find cc1/DLLs).
 * GNU make 4.4.1: `C:\msys64\usr\bin\make.exe`; `xorrisofs` in `C:\msys64\usr\bin`.
 * Files are `*.C` (uppercase) → GCC treats them as **C++** unless `-x c` is passed. Always `-x c`.
 * SBL 6.01 archives are `coff-sh`; `ld` needs `-b coff-sh` to read them (bare, it says "file format
@@ -87,12 +87,12 @@ Also needed:
   (high work RAM, `mem_malloc(1,…)` from `&end` to 0x6100000).
 * Stack: `mystack[5096]` ints inside .bss (`_stackinit` = top). `_checkStack` asserts r15 > mystack+0x100.
 
-## Result (2026-08-30)
+## Result
 
 * `make` (via `build.ps1`) and `make NDEBUG=1` build **INIT.BIN / MAIN.BIN / KEYGEN.BIN** from a clean
-  tree, 0 errors, 0 link warnings. Sizes (text+data): INIT 116 980 (orig 146 660), MAIN 288 048
-  (orig 326 976), KEYGEN 106 724 (orig 136 980) — GCC 14 -O2 is denser than SN's GCC 2.7; .bss of MAIN
-  305 408 vs 302 488 original (same data layout).
+  tree, 0 errors, 0 link warnings. Sizes (text+data): INIT 117 036 (orig 146 660), MAIN 287 452
+  (orig 326 976), KEYGEN 106 812 (orig 136 980) — GCC 14 -O2 is denser than SN's GCC 2.7; .bss of MAIN
+  is within 1% of the original (same data layout).
 * Hand-translated asm is **byte-identical** to the shipped CPEs (verified by rebuilding the flat
   images from the CPE chunks and searching): `_qmemcpy` 154 B (after `.balign`), `_executeLink` 28 B,
   `_project_point` 56 B, `_rectTransform` 228 B, `_normTransform` 248 B (modulo the two R_SH_DIR32
@@ -114,45 +114,50 @@ Also needed:
   is unfinished and wrong three ways; retail shipped without it).
 * Remaining gaps: JAPAN variant does not link (PIC.o must join INIT/KEYGEN); FLASH/ and OLDJAP/ are
   diverged trees outside the build; MOV.C:212 `-Wsequence-point` is the one warning that may change
-  behaviour between compilers; the SBL binaries in `sdk/sbl6/lib` are SEGA's (licence decision before
-  publishing the fork).
+  behaviour between compilers; the SBL headers and binaries under `sdk/sbl6/` are SEGA's and are not
+  committed (`tools/import_sbl6.sh` regenerates them from the SBL 6.01 release).
 
-## Boot (2026-08-30) — `build/slavedriver.iso` = écran noir sur Ymir
+## Boot — `build/slavedriver.iso` was a black screen
 
-Constats (statiques, avant tout test) :
+Static findings, before any test:
 
-* `assertFail` (UTIL.C:181) affiche « Write This Down » à l'écran et un échec de `GFS_Init` finit
-  en `SYS_EXECDMP` (écran CD du BIOS) : un écran **noir** est donc un hang silencieux, pas un assert.
-* `fadeSegaLogo()` (INITMAIN.C) fond le logo au noir (offset couleur −255) puis `megaInit()` attend
-  l'interruption vblank (`syncVbI`, MEGAINIT.C:171) ; `PER_GET_SYS()` attend le SMPC. Les deux sont
-  des attentes infinies possibles ; `vbIcnt` et `PEEK_W` sont bien `volatile` (codegen vérifié).
-* **IP retail vs IP SRL** : les 0x100-0xDFF (code de sécurité SEGA) sont identiques ; le retail n'a
-  qu'un code région « U » puis `mov.l @(1,pc),r0 ; jmp @r0 ; .long 0x06004000` (offset 0xE20, IP size
-  0xE2C) — **aucun programme de boot** : `megaInit` du jeu est le premier sysinit. L'IP de SRL
-  (`modules/sgl/IP.BIN`, 4 régions JTUE) enchaîne à 0xE80 le sysinit SGL (vecteurs vblank via
-  0x06000300, purge cache, effacement VDP/SCU/son — le même travail que MEGAINIT.C) avant de sauter.
-* La disposition de l'ISO est saine : `0.BIN` (INIT, 116 980 o) est la 1re entrée du répertoire
-  racine, 98 fichiers comme le retail ; `_start` est à 0x06004000, `.data` contiguë à `.text`.
+* `assertFail` (UTIL.C:181) prints "Write This Down" on screen and a failed `GFS_Init` ends in
+  `SYS_EXECDMP` (the BIOS CD screen): a **black** screen is therefore a silent hang, not an assert.
+* `fadeSegaLogo()` (INITMAIN.C) fades the logo to black (colour offset −255), then `megaInit()`
+  waits for the vblank interrupt (`syncVbI`, MEGAINIT.C:171) and `PER_GET_SYS()` waits for the
+  SMPC. Both are possible infinite waits; `vbIcnt` and `PEEK_W` are properly `volatile` (codegen
+  checked).
+* **Retail IP vs SaturnRingLib IP**: bytes 0x100-0xDFF (the SEGA security code) are identical; the
+  retail one carries a single "U" region code then `mov.l @(1,pc),r0 ; jmp @r0 ; .long 0x06004000`
+  (offset 0xE20, IP size 0xE2C) — **no boot program at all**: the game's `megaInit` is the first
+  sysinit. SaturnRingLib's IP (`modules/sgl/IP.BIN`, four JTUE regions) chains the SGL sysinit at
+  0xE80 (vblank vectors through 0x06000300, cache purge, VDP/SCU/sound clear — the same work
+  MEGAINIT.C does) before jumping.
+* The ISO layout is sound: `0.BIN` (INIT) is the first entry of the root directory, 98 files like
+  the retail disc; `_start` is at 0x06004000 and `.data` is contiguous with `.text`.
 
-Outils livrés :
+Tools this port adds for that hunt:
 
-* `make BOOTPROBE=1` (`build.ps1 -Probe`) → `build/probe/` : `INITMAIN.C` peint tout l'écran d'une
-  couleur après chaque étape de `main()` (`BOOT_PROBE`, écran de fond VDP2 : TVMD on, BGON 0,
-  CLOFEN 0, BKTAU/BKTAL 0, couleur à VRAM 0) : magenta = entrée de `main`, rouge = après `fadeSegaLogo`, vert = après
-  `megaInit`, bleu = après `fs_init`, jaune = après `mem_init`, blanc = après `PER_GET_SYS`.
-* `make iso-ipjump` → `slavedriver-ipjump.iso` : IP SRL dont le programme de boot est remplacé par
-  le stub retail (`tools/mk_ip_jump.py`, header 0xE0 = 0xE8C).
+* `make BOOTPROBE=1` (`build.ps1 -Probe`) → `build/probe/`: `INITMAIN.C` paints the whole screen
+  one colour after each step of `main()` (`BOOT_PROBE`, VDP2 back screen: TVMD on, BGON 0, CLOFEN 0,
+  BKTAU/BKTAL 0, colour word at VRAM 0): magenta = `main` entered, red = after `fadeSegaLogo`,
+  green = after `megaInit`, blue = after `fs_init`, yellow = after `mem_init`, white = after
+  `PER_GET_SYS`.
+* `make iso-ipjump` → `slavedriver-ipjump.iso`: the SaturnRingLib IP with its boot program replaced
+  by the retail-style stub (`tools/mk_ip_jump.py`, header 0xE0 = 0xE8C).
 
-Résultats (propriétaire, Ymir) : disques `retailbins` (0/MAIN.BIN retail sur notre recette) **bootent**
-⇒ recette/IP/émulateur hors de cause ; nos INIT (IP SRL et IP saut) : magenta→rouge→vert→bleu→**jaune**
-puis gel, PC 0x060040DC-E2 = la boucle `while (!(sys_data=PER_GET_SYS()))`. Avec le ré-armement
-INTBACK de `waitSystemData` : **orange** = INTBACK émis, jamais d'interruption SMPC.
+Results (emulator): discs built from the **retail** `0`/`MAIN.BIN` on our own ISO recipe boot, which
+clears the recipe, the IP and the emulator. Our INIT (with either IP) went
+magenta→red→green→blue→**yellow** then froze, PC 0x060040DC-E2 = the
+`while (!(sys_data=PER_GET_SYS()))` loop. With the INTBACK re-arm of `waitSystemData`: **orange** =
+INTBACK issued, no SMPC interrupt ever.
 
-**Cause trouvée** : `INT_SetScuFunc` (lib INT 6.01) lisait sa table `___interrupt_handler[]` à
-`.data + 0x40` (0x060204F0 au lieu de 0x060204B0) ⇒ `SYS_SETUINT(0x47, handler87)` au lieu de
-`handler71` ⇒ le trampoline 87 lit `___interrupt_vector[87]` = NULL ⇒ rien. 0x40 = la VMA COFF de
-`.data` dans `int.o` : `objcopy -I coff-sh -O elf32-sh` conserve les VMA de section et l'éditeur ELF
-résout `.data - 0x40` (reloc COFF, valeur en place 0x40) en `.data + 0x40`. Toute référence
-section-relative des 66/342 objets SBL concernés était décalée. Fix : lier les `.A` **en COFF**
-(`-Wl,-b,coff-sh sdk/sbl6/lib/coff/SEGA_SAT.A -Wl,-b,elf32-sh`), vérifié : même 39 membres tirés,
-table lue à l'adresse de `.data`(int.o) du `.map` ; garde-fou dans la règle de lien du Makefile.
+**Root cause**: `INT_SetScuFunc` (SBL 6.01 INT library) read its `___interrupt_handler[]` table at
+`.data + 0x40` (0x060204F0 instead of 0x060204B0), so it registered `handler87` for SCU vector 0x47
+instead of `handler71`; trampoline 87 reads `___interrupt_vector[87]` = NULL and does nothing. 0x40
+is the COFF VMA of `.data` in `int.o`: `objcopy -I coff-sh -O elf32-sh` keeps the section VMAs, and
+the ELF link then resolves `.data - 0x40` (the COFF reloc, in-place value 0x40) to `.data + 0x40`.
+Every section-relative reference of the 66 affected objects (of 342) was shifted the same way. Fix:
+link the `.A` archives **as COFF** (`-Wl,-b,coff-sh sdk/sbl6/lib/coff/SEGA_SAT.A -Wl,-b,elf32-sh`);
+verified to pull the same 39 members and to read the table at the `.data`(int.o) address from the
+`.map`. The Makefile's link rule keeps a guard on that address.

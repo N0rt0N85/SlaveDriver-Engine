@@ -18,7 +18,11 @@
 # ---------------------------------------------------------------------------------------------
 # Toolchain
 # ---------------------------------------------------------------------------------------------
-TOOLCHAIN_BIN ?= /c/Users/pcico/Projects/Mimas/SaturnRingLib/Compiler/sh2eb-elf/bin
+# SaturnRingLib (https://github.com/ReyeMe/SaturnRingLib) provides both the sh2eb-elf toolchain
+# (setup_compiler.bat) and the generic IP.BIN used by `make iso`: point SRL_DIR at your checkout,
+# or put sh2eb-elf-gcc on PATH and set IPFILE yourself.  build.ps1 locates both on Windows.
+SRL_DIR       ?= ../SaturnRingLib
+TOOLCHAIN_BIN ?= $(SRL_DIR)/Compiler/sh2eb-elf/bin
 ifneq ($(wildcard $(TOOLCHAIN_BIN)/sh2eb-elf-gcc*),)
   export PATH := $(TOOLCHAIN_BIN):$(PATH)
 endif
@@ -235,7 +239,7 @@ size: $(ELFS)
 #               (VDP/SCU/sound-RAM clear, vblank vectors -- the same job as MEGAINIT.C) and jumps.
 #    iso-ipjump the same header/security code/area codes, boot program replaced by what the retail
 #               PowerSlave disc has: `mov.l @(1,pc),r0; jmp @r0` -> 0x06004000, nothing else.
-IPFILE   ?= /c/Users/pcico/Projects/Mimas/SaturnRingLib/modules/sgl/IP.BIN
+IPFILE   ?= $(SRL_DIR)/modules/sgl/IP.BIN
 IPJUMP   := $(BUILD)/ip_jump.bin
 CDDIR    ?= cd
 ISO      := $(BUILD)/slavedriver.iso

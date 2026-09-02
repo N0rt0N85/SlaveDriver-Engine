@@ -32,7 +32,7 @@ Packaged by Lobotomy Software Open Source Group.
 Building with GCC
 -----------------
 
-This fork builds the three flat Saturn programs with the free `sh2eb-elf` GCC 14.2
+The sources build as three flat Saturn programs with the free `sh2eb-elf` GCC 14.2
 toolchain shipped by [SaturnRingLib](https://github.com/ReyeMe/SaturnRingLib)
 (`SaturnRingLib/setup_compiler.bat`) and the SEGA Basic Library 6.01 import in `sdk/sbl6/`
 (see `sdk/sbl6/README.md`; the original build used SN Systems Psy-Q and produced the `.CPE`
