@@ -66,10 +66,18 @@ int findFloorDistance(int s,MthXyz *p);
 char *catFixed(char *buffer,int fixed,int frac);
 void message(char *message);
 
+/* GCC14: declared for every build -- the definition in UTIL.C is not conditional, and an
+   NDEBUG build was calling it through an implicit declaration */
+void *waitSystemData(Uint8 *padWork); /* PER_KD_SYS wait with INTBACK re-arm; returns PerGetSys* */
+
+/* GCC14: the sources call these without including the standard headers (the SN compiler
+   declared them implicitly); same signatures as newlib, so a mismatch would not compile */
+int abs(int j);
+char *strcpy(char *dest,const char *src);
+
 #ifndef NDEBUG
 
 void assertFail(char *file,int line) __attribute__((noreturn)); /* GCC14 */
-void *waitSystemData(Uint8 *padWork); /* GCC14: PER_KD_SYS wait with INTBACK re-arm (UTIL.C); returns PerGetSys* */
 
 #define assert(x) do if (!(x)) assertFail(__FILE__,__LINE__); while(0)
 #define validPtr(x) do if (!((((int)x>=0x200000 && ((int)x)<=0x2fffff)) || (((int)x)>=0x6004000 && ((int)x)<=0x60fffff))) assertFail(__FILE__,__LINE__); while(0)
