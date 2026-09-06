@@ -4,6 +4,7 @@
 #
 #   make            -> build/INIT.BIN build/MAIN.BIN build/KEYGEN.BIN (+ .elf/.map)   [debug, like the CPEs]
 #   make NDEBUG=1   -> the same under build/ndebug/ (asserts off); the two trees never mix
+#   make PAL=1       -> build/pal/: the European (Exhumed) configuration, for EU game data
 #   make BOOTPROBE=1 iso iso-ipjump -> build/probe/: INIT paints a colour per boot step (INITMAIN.C
 #                      BOOT_PROBE) + two discs: SRL IP (SGL sysinit first) / jump-only IP (retail style)
 #   make BOOTPROBE=1 iso-retailbins -> the RETAIL 0 + MAIN.BIN (refs/extract/PS) on our disc recipe, both IPs
@@ -62,6 +63,13 @@ endif
 ifeq ($(STATUSTEXT),1)
   BUILD   := $(BUILD)/stext
   DEFINES += -DSTATUSTEXT
+endif
+# PAL=1: the European (Exhumed) configuration -- 50 Hz timing, the PAL logo and title picture
+# indexes and the PAL credits layout.  The picture sets differ between the two releases, so
+# this has to match the disc the data in cd/ came from.  Own tree, like the other switches.
+ifeq ($(PAL),1)
+  BUILD   := $(BUILD)/pal
+  DEFINES += -DPAL
 endif
 OBJDIR   := $(BUILD)/obj
 
