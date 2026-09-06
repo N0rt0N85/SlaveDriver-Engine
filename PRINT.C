@@ -90,7 +90,17 @@ int initFonts(int spriteNm,int fontMask)
 	   }
      /* map accented chars */
      {static unsigned char *charEquiv[]=
-	 {"\355\315","\372\332","\351\311",NULL};
+	 {"\355\315","\372\332","\351\311",
+		  /* GCC14: codes that occur in the shipped subtitle and menu text but have no
+		     glyph in the font -- mapped onto the nearest glyph it does have, through
+		     the same mechanism.  Measured on the retail OPEN/GOOD/BAD.MOV (all four
+		     language blocks) and on INITLOAD.DAT; without them a debug build stops on
+		     assert(0) in drawStringN and a release build drops the character. */
+		  "\222'",		/* right single quote, French subtitles -> apostrophe */
+		  "\357i",		/* i diaeresis, French subtitles       -> i          */
+		  "\334U",		/* U diaeresis, German subtitles       -> U          */
+		  "\261\361",	/* the Spanish menu text encodes n tilde as 0xb1     */
+		  NULL};
       for (i=0;charEquiv[i];i++)
 	 {int one=charEquiv[i][0];
 	  int two=charEquiv[i][1];
