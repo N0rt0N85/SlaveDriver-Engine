@@ -167,6 +167,17 @@ void resetDisable(void);
 
 #define POKE_B(adr,data) (*((volatile Uint8 *)(adr))=((Uint8)(data)))
 #define POKE_W(adr,data) (*((volatile Uint16 *)(adr))=((Uint16)(data)))
+
+/* GCC14: boot/hang probe (make BOOTPROBE=1).  Paints the whole screen with one back-screen
+   colour: display on, every BG off, colour offset off, back-screen table at VDP2 VRAM 0.
+   The last colour on screen is the last checkpoint the program reached.  Needs sega_scl.h. */
+#ifdef BOOTPROBE
+#define BOOT_PROBE(c) do { POKE_W(SCL_VDP2_VRAM+0x180000,0x8000); POKE_W(SCL_VDP2_VRAM+0x180020,0); \
+    POKE_W(SCL_VDP2_VRAM+0x180110,0); POKE_W(SCL_VDP2_VRAM+0x1800ac,0); POKE_W(SCL_VDP2_VRAM+0x1800ae,0); \
+    POKE_W(SCL_VDP2_VRAM,(c)); } while (0)
+#else
+#define BOOT_PROBE(c) ((void)0)
+#endif
 #define POKE(adr,data) (*((volatile Uint32 *)(adr))=((Uint32)(data)))
 #define PEEK(adr) (*((volatile Uint32 *)(adr)))
 #define PEEK_W(adr) (*((volatile Uint16 *)(adr)))

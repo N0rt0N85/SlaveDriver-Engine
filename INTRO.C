@@ -394,6 +394,9 @@ static int newMenu(int hx,int hy,int lx,int ly)
 
 void playIntro(void)
 {int i;
+ /* GCC14 (BOOTPROBE=1): playIntro runs with the display off, so a hang in here shows as a
+    black screen.  These checkpoints paint it instead -- see the table in PORTING_NOTES. */
+ BOOT_PROBE(0x03e0);	/* green  = playIntro entered */
  displayEnable(0);
  mem_init();
  initSound();
@@ -407,7 +410,9 @@ void playIntro(void)
  i=initFonts(0,4);
  initPicSystem(i,((int []){40,0,0,0,0,70,-1}));
 #endif
+ BOOT_PROBE(0x7c00);	/* blue   = sound, VDP2, sprites, fonts and pics set up */
  stopCD();
+ BOOT_PROBE(0x03ff);	/* yellow = stopCD returned */
  {
 #ifndef JAPAN
   int fd=fs_open("+INTRO.PCS");
@@ -420,6 +425,7 @@ void playIntro(void)
   loadSound(fd);
   fs_close(fd);
  }
+ BOOT_PROBE(0x7fe0);	/* cyan   = INTRO.PCS loaded */
 #ifdef JAPAN
  loadJapanFontPics();
 #endif
@@ -433,6 +439,7 @@ void playIntro(void)
 
  for (i=0;i<512*1024;i+=4)
     POKE(SCL_VDP2_VRAM+i,0);
+ BOOT_PROBE(0x7c1f);	/* magenta = VDP2 VRAM cleared */
 
 #ifndef PAL
  loadVDPPic(0,1);
@@ -441,6 +448,7 @@ void playIntro(void)
  loadVDPPic(1,1);
  loadVDPPic(1,0);
 #endif
+ BOOT_PROBE(0x01ff);	/* orange = title picture loaded */
  {int y,m,d,h,min;
   getDateTime(&y,&m,&d,&h,&min);
   if (m==12 && d==10 && y>16)
@@ -450,8 +458,10 @@ void playIntro(void)
  }
  SCL_SetColMixRate(SCL_NBG0,31);
  SCL_SET_N0CCEN(0);
+ BOOT_PROBE(0x7c0f);	/* purple = clock read (getDateTime returned) */
  if (enable_music)
     playCDTrack(titleMusic,1);
+ BOOT_PROBE(0x7fff);	/* white  = music started; the title screen comes up next */
 
  Scl_s_reg.dispenbl|=0xf00;
  if (SclProcess==0)

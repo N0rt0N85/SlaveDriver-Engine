@@ -28,16 +28,9 @@
 #include "initmain.h"
 #include "local.h"
 
-/* GCC14: boot probe (make BOOTPROBE=1): paints the screen with one back-screen colour after
-   each step of main() to show how far INIT gets.  magenta = main(), red = fadeSegaLogo,
-   green = megaInit, blue = fs_init, yellow = mem_init, white = PER_GET_SYS answered. */
-#ifdef BOOTPROBE
-#define BOOT_PROBE(c) do { POKE_W(SCL_VDP2_VRAM+0x180000,0x8000); POKE_W(SCL_VDP2_VRAM+0x180020,0); \
-    POKE_W(SCL_VDP2_VRAM+0x180110,0); POKE_W(SCL_VDP2_VRAM+0x1800ac,0); POKE_W(SCL_VDP2_VRAM+0x1800ae,0); \
-    POKE_W(SCL_VDP2_VRAM,(c)); } while (0)
-#else
-#define BOOT_PROBE(c) ((void)0)
-#endif
+/* GCC14: the BOOT_PROBE colours of main() are magenta = main(), red = fadeSegaLogo,
+   green = megaInit, blue = fs_init, yellow = mem_init, white = PER_GET_SYS answered;
+   the macro itself lives in util.h.  playIntro() carries its own set. */
 #ifdef JAPAN
 #include "pic.h"
 #endif
@@ -247,6 +240,7 @@ void playIntro(void)
  fadeDown();
  displayEnable(0);
  playMovie("OPEN.MOV",1);
+ BOOT_PROBE(0x3def);	/* GCC14: grey = the intro movie returned */
  skipIntro:
 }
 
@@ -615,6 +609,7 @@ void main(void)
      SCL_SetMosaic(SCL_NBG0|SCL_NBG1,1,1);
     }
 
+ BOOT_PROBE(0x001f);	/* GCC14: red = about to enter playIntro */
  playIntro();
 
  displayEnable(0);

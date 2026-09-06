@@ -146,6 +146,26 @@ Tools this port adds for that hunt:
 * `make iso-ipjump` → `slavedriver-ipjump.iso`: the SaturnRingLib IP with its boot program replaced
   by the retail-style stub (`tools/mk_ip_jump.py`, header 0xE0 = 0xE8C).
 
+`playIntro()` (INTRO.C) carries the same probes, because it runs with the display off from its
+first line to `displayEnable(1)`: a hang anywhere in it looks like a black screen where the title
+should be. Under `BOOTPROBE=1` the last colour on screen is the last checkpoint reached:
+
+| Colour | Reached |
+|--------|---------|
+| grey | the intro movie returned (INITMAIN.C) |
+| red | about to call `playIntro` |
+| green | `playIntro` entered |
+| blue | sound, VDP2, sprites, fonts and the pic system are set up |
+| yellow | `stopCD()` returned |
+| cyan | `INTRO.PCS` loaded (pic set, pics, two sounds) |
+| magenta | the 512 KB VDP2 VRAM clear finished |
+| orange | the title picture is in VRAM (`loadVDPPic`) |
+| purple | `getDateTime()` returned (SMPC clock) |
+| white | CD music started; the title screen is one call away |
+
+A probe paints the back screen directly, so the game's next VDP2 register copy can overwrite it;
+the colour is reliable exactly where it matters, when the program stops.
+
 Results (emulator): discs built from the **retail** `0`/`MAIN.BIN` on our own ISO recipe boot, which
 clears the recipe, the IP and the emulator. Our INIT (with either IP) went
 magenta→red→green→blue→**yellow** then froze, PC 0x060040DC-E2 = the
