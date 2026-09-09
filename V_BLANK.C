@@ -156,12 +156,41 @@ volatile unsigned short bootStage=0;
 #if PROBEDIAG
 static volatile unsigned short dispLostAt=0;
 #endif
+#if PROBEDIAG==3
+/* Read TVMD and SBL's copy of it at the moment the title screen is reached, in a build that
+   forces nothing during the boot -- so the failure happens for real -- and paint the verdict:
+   green = the display bit was set in the register, red = it was not; fast throb = the copy
+   had it set, slow = the copy did not.  A screen that stays black means the title screen code
+   was never reached at all. */
+static volatile unsigned short seenStage=0,reported=0,tvmdAtTitle=0,shadowAtTitle=0;
+#endif
 
 /* GCC14: the boot/hang probe, see util.h.  Called from the checkpoint itself (it has to work
    before SetVblank) and from every vblank-out, which is the last VDP2 write of the field --
    SCL_ScrollShow runs at vblank-in. */
 void bootProbePaint(void)
 {unsigned short c;
+#if PROBEDIAG==3
+ if (bootStage)
+    seenStage=1;
+ if (seenStage && !bootStage)
+    {if (!reported)
+	{tvmdAtTitle=PEEK_W(SCL_VDP2_VRAM+0x180000);
+	 shadowAtTitle=Scl_s_reg.tvmode;
+	 reported=1;
+	}
+     c=(tvmdAtTitle & 0x8000)? 0x03e0: 0x001f;
+     if (vtimer & ((shadowAtTitle & 0x8000)? 8: 32))
+	c=(c>>1)&0x3def;
+     POKE_W(SCL_VDP2_VRAM+0x180000,0x8000);
+     POKE_W(SCL_VDP2_VRAM+0x180020,0);
+     POKE_W(SCL_VDP2_VRAM+0x180110,0);
+     POKE_W(SCL_VDP2_VRAM+0x1800ac,0);
+     POKE_W(SCL_VDP2_VRAM+0x1800ae,0);
+     POKE_W(SCL_VDP2_VRAM,c);
+     return;
+    }
+#endif
 #if PROBEDIAG
  {unsigned short cur=PEEK_W(SCL_VDP2_VRAM+0x180000);
   if (!dispLostAt && bootStage && (Scl_s_reg.tvmode & 0x8000) && !(cur & 0x8000))
