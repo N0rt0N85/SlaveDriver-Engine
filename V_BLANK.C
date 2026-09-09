@@ -136,13 +136,43 @@ void initInput(void)
 #ifndef PROBETVMD
 #define PROBETVMD 0
 #endif
+/* PROBEDIAG=1: instead of only forcing the display bit back on, watch for the moment the
+   hardware loses it while SBL's own register copy still says the display is on -- that is,
+   somebody writing TVMD behind SCL_CopyReg's back.  The checkpoint current at that moment is
+   remembered and painted over the whole screen once the title screen is reached, so one boot
+   names the phase.  If nothing is ever painted, the hardware never disagreed with the copy
+   and the fault is in the copy itself, not in a stray write. */
+#ifndef PROBEDIAG
+#define PROBEDIAG 0
+#endif
 volatile unsigned short bootStage=0;
+#if PROBEDIAG
+static volatile unsigned short dispLostAt=0;
+#endif
 
 /* GCC14: the boot/hang probe, see util.h.  Called from the checkpoint itself (it has to work
    before SetVblank) and from every vblank-out, which is the last VDP2 write of the field --
    SCL_ScrollShow runs at vblank-in. */
 void bootProbePaint(void)
 {unsigned short c;
+#if PROBEDIAG
+ {unsigned short cur=PEEK_W(SCL_VDP2_VRAM+0x180000);
+  if (!dispLostAt && bootStage && (Scl_s_reg.tvmode & 0x8000) && !(cur & 0x8000))
+     dispLostAt=bootStage;
+ }
+ if (!bootStage && dispLostAt)
+    {c=dispLostAt & 0x7fff;
+     if (vtimer & ((dispLostAt & 0x8000)? 8: 32))
+	c=(c>>1)&0x3def;
+     POKE_W(SCL_VDP2_VRAM+0x180000,0x8000);
+     POKE_W(SCL_VDP2_VRAM+0x180020,0);
+     POKE_W(SCL_VDP2_VRAM+0x180110,0);
+     POKE_W(SCL_VDP2_VRAM+0x1800ac,0);
+     POKE_W(SCL_VDP2_VRAM+0x1800ae,0);
+     POKE_W(SCL_VDP2_VRAM,c);
+     return;
+    }
+#endif
  if (!bootStage)
     return;
  c=bootStage & 0x7fff;
