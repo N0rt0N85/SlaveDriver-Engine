@@ -130,6 +130,12 @@ void initInput(void)
 #ifndef PROBESET
 #define PROBESET 31
 #endif
+/* PROBETVMD selects what the TVMD write puts in the register, to tell apart the display
+   bit from the screen mode: 0 = 0x8000 (display on, 320x224), 1 = the mode the game itself
+   asked for with the display bit forced on, 2 = 0x8010 (display on, 320x240). */
+#ifndef PROBETVMD
+#define PROBETVMD 0
+#endif
 volatile unsigned short bootStage=0;
 
 /* GCC14: the boot/hang probe, see util.h.  Called from the checkpoint itself (it has to work
@@ -145,7 +151,9 @@ void bootProbePaint(void)
  /* PROBESET selects which of these writes happen, to find out which one a boot depends on;
     the default writes them all.  Constant mask, so the disabled ones fold away. */
  if (PROBESET & 1)
-    POKE_W(SCL_VDP2_VRAM+0x180000,0x8000);	/* display on                */
+    POKE_W(SCL_VDP2_VRAM+0x180000,		/* display on                */
+	   (PROBETVMD==1)? (Scl_s_reg.tvmode|0x8000):
+	   (PROBETVMD==2)? 0x8010: 0x8000);
  if (PROBESET & 2)
     POKE_W(SCL_VDP2_VRAM+0x180020,0);	/* every background off      */
  if (PROBESET & 4)
