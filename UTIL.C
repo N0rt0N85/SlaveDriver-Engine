@@ -459,8 +459,20 @@ void *waitSystemData(Uint8 *padWork)
  int frames=0;
  PER_LInit(PER_KD_SYS,6,PER_SIZE_DGT,padWork,0);
  while (!(sys_data=PER_GET_SYS()))
-    {while (!(PEEK_W(SCL_VDP2_VRAM+0x180004) & 8)) ;   /* wait for vblank */
-     while ((PEEK_W(SCL_VDP2_VRAM+0x180004) & 8)) ;
+    {/* GCC14: pace one frame per attempt -- but only the vblank flag can do that while the
+	display is ON.  With TVMD's DISP bit clear the whole display interval is blanking
+	(VDP2 manual ST-058-R2, "it is in the blank condition during the display interval
+	when this bit is 0"), so TVSTAT's VBLANK bit stays 1 and the second loop never ends.
+	MAIN.BIN reaches here with the display off, INIT.BIN having disabled it before link:
+	pace on a plain count in that case. */
+     if (PEEK_W(SCL_VDP2_VRAM+0x180000) & 0x8000)
+	{while (!(PEEK_W(SCL_VDP2_VRAM+0x180004) & 8)) ;   /* wait for vblank */
+	 while ((PEEK_W(SCL_VDP2_VRAM+0x180004) & 8)) ;
+	}
+     else
+	{volatile int d;
+	 for (d=0;d<20000;d++) ;
+	}
      if ((++frames & 3)==0)
 	{
 #ifdef BOOTPROBE
