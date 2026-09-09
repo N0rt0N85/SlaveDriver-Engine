@@ -126,10 +126,35 @@ void initInput(void)
  set_imask(o);
 }
 
+#ifdef BOOTPROBE
+volatile unsigned short bootStage=0;
+
+/* GCC14: the boot/hang probe, see util.h.  Called from the checkpoint itself (it has to work
+   before SetVblank) and from every vblank-out, which is the last VDP2 write of the field --
+   SCL_ScrollShow runs at vblank-in. */
+void bootProbePaint(void)
+{unsigned short c;
+ if (!bootStage)
+    return;
+ c=bootStage & 0x7fff;
+ if (vtimer & ((bootStage & 0x8000)? 8: 32))
+    c=(c>>1)&0x3def;			/* half brightness: throb, MAIN.BIN faster than INIT.BIN */
+ POKE_W(SCL_VDP2_VRAM+0x180000,0x8000);	/* display on                  */
+ POKE_W(SCL_VDP2_VRAM+0x180020,0);	/* every background off        */
+ POKE_W(SCL_VDP2_VRAM+0x180110,0);	/* no colour offset            */
+ POKE_W(SCL_VDP2_VRAM+0x1800ac,0);	/* back screen table address   */
+ POKE_W(SCL_VDP2_VRAM+0x1800ae,0);	/*    ... at VDP2 VRAM 0       */
+ POKE_W(SCL_VDP2_VRAM,c);
+}
+#endif
+
 void UsrVblankEnd(void)
 {SCL_VblankEnd();
  vtimer++;
  processInput();
+#ifdef BOOTPROBE
+ bootProbePaint();
+#endif
 }
 
 

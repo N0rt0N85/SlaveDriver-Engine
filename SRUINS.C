@@ -2350,6 +2350,7 @@ static void fadeSegaLogo(void)
 void main(void)
 {char *levelFile;
  int level;
+ BOOT_PROBE2(0x7c1f);	/* GCC14: magenta = MAIN.BIN reached, see docs/PORTING_NOTES.md */
  enable_stereo=1;
  enable_music=1;
  abcResetEnable=1;
@@ -2446,6 +2447,7 @@ void main(void)
 #endif
 
  bup_initialProc();
+ BOOT_PROBE2(0x001f);	/* GCC14: red = backup RAM read, about to enter the title screen */
 
  intro:
 #ifndef TESTCODE

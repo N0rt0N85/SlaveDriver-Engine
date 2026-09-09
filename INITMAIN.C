@@ -28,9 +28,13 @@
 #include "initmain.h"
 #include "local.h"
 
-/* GCC14: the BOOT_PROBE colours of main() are magenta = main(), red = fadeSegaLogo,
-   green = megaInit, blue = fs_init, yellow = mem_init, white = PER_GET_SYS answered;
-   the macro itself lives in util.h.  playIntro() carries its own set. */
+/* GCC14: BOOT_PROBE checkpoints for INIT.BIN (slow throb; MAIN.BIN uses BOOT_PROBE2 and the
+   same colours at a fast throb).  magenta = main(), red = fadeSegaLogo, green = megaInit,
+   blue = fs_init, yellow = mem_init, white = PER_GET_SYS answered, cyan = VDP2/sprites/fonts
+   and the vblank interrupt up, grey = the logos and OPEN.MOV returned, orange = about to load
+   MAIN.BIN off the CD.  The macro lives in util.h; the table is in docs/PORTING_NOTES.md.
+   Note this file has its OWN playIntro() (logos + movie); the title screen is the playIntro()
+   of INTRO.C, which is a different function in a different program. */
 #ifdef JAPAN
 #include "pic.h"
 #endif
@@ -609,12 +613,13 @@ void main(void)
      SCL_SetMosaic(SCL_NBG0|SCL_NBG1,1,1);
     }
 
- BOOT_PROBE(0x001f);	/* GCC14: red = about to enter playIntro */
+ BOOT_PROBE(0x7fe0);	/* GCC14: cyan = VDP2, sprites, fonts and the vblank interrupt up */
  playIntro();
 
  displayEnable(0);
  SCL_DisplayFrame();
 
  POKE(0x02ffffc,0);
+ BOOT_PROBE(0x01ff);	/* GCC14: orange = about to load MAIN.BIN off the CD */
  link("+MAIN.BIN");
 }

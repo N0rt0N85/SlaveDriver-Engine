@@ -146,25 +146,39 @@ Tools this port adds for that hunt:
 * `make iso-ipjump` → `slavedriver-ipjump.iso`: the SaturnRingLib IP with its boot program replaced
   by the retail-style stub (`tools/mk_ip_jump.py`, header 0xE0 = 0xE8C).
 
-`playIntro()` (INTRO.C) carries the same probes, because it runs with the display off from its
-first line to `displayEnable(1)`: a hang anywhere in it looks like a black screen where the title
-should be. Under `BOOTPROBE=1` the last colour on screen is the last checkpoint reached:
+The checkpoints continue all the way to the title screen, because everything from the Playmates
+logo to the title runs with the display disabled: a hang anywhere in there is an ordinary black
+screen and says nothing about where it stopped.
 
-| Colour | Reached |
-|--------|---------|
-| grey | the intro movie returned (INITMAIN.C) |
-| red | about to call `playIntro` |
-| green | `playIntro` entered |
-| blue | sound, VDP2, sprites, fonts and the pic system are set up |
-| yellow | `stopCD()` returned |
-| cyan | `INTRO.PCS` loaded (pic set, pics, two sounds) |
-| magenta | the 512 KB VDP2 VRAM clear finished |
-| orange | the title picture is in VRAM (`loadVDPPic`) |
-| purple | `getDateTime()` returned (SMPC clock) |
-| white | CD music started; the title screen is one call away |
+Two things are worth knowing before reading the table. **There are two different `playIntro()`
+functions**: the one in INITMAIN.C (INIT.BIN) plays the logos and `OPEN.MOV`, the one in INTRO.C
+(MAIN.BIN) is the title screen. They are separate functions in separate programs, and INIT loads
+MAIN off the CD between them (`link("+MAIN.BIN")`). And **a probe cannot just poke the registers
+once**: `displayEnable(0)` writes SBL's own copy of the VDP2 registers, `SCL_ScrollShow()` restores
+that copy at every vblank-in, so a colour painted from the main path is erased within a frame.
+`bootProbePaint` (V_BLANK.C) therefore repaints from vblank-out, the last VDP2 write of the field,
+which also means the colour survives after the main path has stopped.
 
-A probe paints the back screen directly, so the game's next VDP2 register copy can overwrite it;
-the colour is reliable exactly where it matters, when the program stops.
+The colour **throbs** between full and half brightness while the vblank interrupt still runs.
+A **slow** throb (about one second) is INIT.BIN, a **fast** one (about a quarter second) is
+MAIN.BIN, which is how the two programs share one set of colours. A colour that sits perfectly
+steady means the interrupt stopped too — the CPU itself is down, not just the main path.
+
+| Colour | INIT.BIN — slow throb | MAIN.BIN — fast throb |
+|--------|------------------------|------------------------|
+| magenta | `main` entered | MAIN.BIN reached (its first instruction ran) |
+| red | `fadeSegaLogo` returned | backup RAM read, about to enter the title screen |
+| green | `megaInit` returned | title screen entered |
+| blue | `fs_init` returned | sound, VDP2, sprites, fonts and the pic system up |
+| yellow | `mem_init` returned | `stopCD()` returned |
+| white | `PER_GET_SYS` answered | the 512 KB VDP2 VRAM clear finished |
+| cyan | VDP2, sprites, fonts and the vblank interrupt up | `INTRO.PCS` loaded (pic set, pics, two sounds) |
+| orange | about to load MAIN.BIN off the CD | the title picture is in VRAM (`loadVDPPic`) |
+| grey | the logos and `OPEN.MOV` returned | `getDateTime()` returned (SMPC clock) |
+| purple | — | CD music started; the title screen is one call away |
+
+The probe switches itself off (`BOOT_PROBE2(0)`) once the title screen has the display back, so on
+a `BOOTPROBE=1` disc reaching the title screen looks exactly like a normal boot.
 
 Results (emulator): discs built from the **retail** `0`/`MAIN.BIN` on our own ISO recipe boot, which
 clears the recipe, the IP and the emulator. Our INIT (with either IP) went

@@ -168,15 +168,24 @@ void resetDisable(void);
 #define POKE_B(adr,data) (*((volatile Uint8 *)(adr))=((Uint8)(data)))
 #define POKE_W(adr,data) (*((volatile Uint16 *)(adr))=((Uint16)(data)))
 
-/* GCC14: boot/hang probe (make BOOTPROBE=1).  Paints the whole screen with one back-screen
-   colour: display on, every BG off, colour offset off, back-screen table at VDP2 VRAM 0.
-   The last colour on screen is the last checkpoint the program reached.  Needs sega_scl.h. */
+/* GCC14: boot/hang probe (make BOOTPROBE=1).  A checkpoint latches a colour that fills the
+   screen through the back screen: display on, every background off, colour offset off, back
+   screen table at VDP2 VRAM 0.  The paint has to be REPEATED from vblank-out (bootProbePaint,
+   v_blank.c): the game holds the display disabled across the whole logo and title sequence,
+   and SCL_ScrollShow restores its own copy of the VDP2 registers at every vblank-in, so a
+   colour poked once from the main path is gone within a frame.  Painted from vblank-out it
+   wins the field, and keeps winning after the main path has stopped.  The colour throbs
+   while the vblank interrupt still runs; steady means the CPU itself stopped.  BOOT_PROBE
+   marks INIT.BIN (slow throb) and BOOT_PROBE2 marks MAIN.BIN (fast throb), so the two
+   programs can reuse one set of colours.  0 turns the probe off.  Needs sega_scl.h. */
 #ifdef BOOTPROBE
-#define BOOT_PROBE(c) do { POKE_W(SCL_VDP2_VRAM+0x180000,0x8000); POKE_W(SCL_VDP2_VRAM+0x180020,0); \
-    POKE_W(SCL_VDP2_VRAM+0x180110,0); POKE_W(SCL_VDP2_VRAM+0x1800ac,0); POKE_W(SCL_VDP2_VRAM+0x1800ae,0); \
-    POKE_W(SCL_VDP2_VRAM,(c)); } while (0)
+extern volatile unsigned short bootStage;
+void bootProbePaint(void);
+#define BOOT_PROBE(c)  do { bootStage=(c); bootProbePaint(); } while (0)
+#define BOOT_PROBE2(c) do { bootStage=(c)? 0x8000|(c): 0; bootProbePaint(); } while (0)
 #else
 #define BOOT_PROBE(c) ((void)0)
+#define BOOT_PROBE2(c) ((void)0)
 #endif
 #define POKE(adr,data) (*((volatile Uint32 *)(adr))=((Uint32)(data)))
 #define PEEK(adr) (*((volatile Uint32 *)(adr)))
