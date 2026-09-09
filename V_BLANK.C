@@ -145,6 +145,13 @@ void initInput(void)
 #ifndef PROBEDIAG
 #define PROBEDIAG 0
 #endif
+/* PROBEWHEN restricts the TVMD write to one of the two programs, to find out which one loses
+   the display bit: 0 = always, 1 = only while a MAIN.BIN checkpoint is current, 2 = only
+   while an INIT.BIN one is.  A boot that survives with just one of them says the other
+   program is not at fault. */
+#ifndef PROBEWHEN
+#define PROBEWHEN 0
+#endif
 volatile unsigned short bootStage=0;
 #if PROBEDIAG
 static volatile unsigned short dispLostAt=0;
@@ -180,7 +187,10 @@ void bootProbePaint(void)
     c=(c>>1)&0x3def;			/* half brightness: throb, MAIN.BIN faster than INIT.BIN */
  /* PROBESET selects which of these writes happen, to find out which one a boot depends on;
     the default writes them all.  Constant mask, so the disabled ones fold away. */
- if (PROBESET & 1)
+ if ((PROBESET & 1) &&
+     (PROBEWHEN==0 ||
+      (PROBEWHEN==1 && (bootStage & 0x8000)) ||
+      (PROBEWHEN==2 && !(bootStage & 0x8000))))
     POKE_W(SCL_VDP2_VRAM+0x180000,		/* display on                */
 	   (PROBETVMD==1)? (Scl_s_reg.tvmode|0x8000):
 	   (PROBETVMD==2)? 0x8010: 0x8000);
