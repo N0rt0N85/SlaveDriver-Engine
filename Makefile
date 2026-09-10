@@ -71,10 +71,6 @@ ifeq ($(PAL),1)
   BUILD   := $(BUILD)/pal
   DEFINES += -DPAL
 endif
-# EXTRA_DEFINES: extra -D flags for one-off diagnostic builds (e.g. -DPROBESET=1 to find out
-# which of the boot probe's VDP2 writes a boot depends on).  Not part of any tree name, so
-# delete the object directory when changing it.
-DEFINES += $(EXTRA_DEFINES)
 OBJDIR   := $(BUILD)/obj
 
 # ---------------------------------------------------------------------------------------------

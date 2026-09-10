@@ -127,112 +127,24 @@ void initInput(void)
 }
 
 #ifdef BOOTPROBE
-#ifndef PROBESET
-#define PROBESET 31
-#endif
-/* PROBETVMD selects what the TVMD write puts in the register, to tell apart the display
-   bit from the screen mode: 0 = 0x8000 (display on, 320x224), 1 = the mode the game itself
-   asked for with the display bit forced on, 2 = 0x8010 (display on, 320x240). */
-#ifndef PROBETVMD
-#define PROBETVMD 0
-#endif
-/* PROBEDIAG=1: instead of only forcing the display bit back on, watch for the moment the
-   hardware loses it while SBL's own register copy still says the display is on -- that is,
-   somebody writing TVMD behind SCL_CopyReg's back.  The checkpoint current at that moment is
-   remembered and painted over the whole screen once the title screen is reached, so one boot
-   names the phase.  If nothing is ever painted, the hardware never disagreed with the copy
-   and the fault is in the copy itself, not in a stray write. */
-#ifndef PROBEDIAG
-#define PROBEDIAG 0
-#endif
-/* PROBEWHEN restricts the TVMD write to one of the two programs, to find out which one loses
-   the display bit: 0 = always, 1 = only while a MAIN.BIN checkpoint is current, 2 = only
-   while an INIT.BIN one is.  A boot that survives with just one of them says the other
-   program is not at fault. */
-#ifndef PROBEWHEN
-#define PROBEWHEN 0
-#endif
 volatile unsigned short bootStage=0;
-#if PROBEDIAG
-static volatile unsigned short dispLostAt=0;
-#endif
-#if PROBEDIAG==3
-/* Read TVMD and SBL's copy of it at the moment the title screen is reached, in a build that
-   forces nothing during the boot -- so the failure happens for real -- and paint the verdict:
-   green = the display bit was set in the register, red = it was not; fast throb = the copy
-   had it set, slow = the copy did not.  A screen that stays black means the title screen code
-   was never reached at all. */
-static volatile unsigned short seenStage=0,reported=0,tvmdAtTitle=0,shadowAtTitle=0;
-#endif
 
 /* GCC14: the boot/hang probe, see util.h.  Called from the checkpoint itself (it has to work
    before SetVblank) and from every vblank-out, which is the last VDP2 write of the field --
    SCL_ScrollShow runs at vblank-in. */
 void bootProbePaint(void)
 {unsigned short c;
-#if PROBEDIAG==3
- if (bootStage)
-    seenStage=1;
- if (seenStage && !bootStage)
-    {if (!reported)
-	{tvmdAtTitle=PEEK_W(SCL_VDP2_VRAM+0x180000);
-	 shadowAtTitle=Scl_s_reg.tvmode;
-	 reported=1;
-	}
-     c=(tvmdAtTitle & 0x8000)? 0x03e0: 0x001f;
-     if (vtimer & ((shadowAtTitle & 0x8000)? 8: 32))
-	c=(c>>1)&0x3def;
-     POKE_W(SCL_VDP2_VRAM+0x180000,0x8000);
-     POKE_W(SCL_VDP2_VRAM+0x180020,0);
-     POKE_W(SCL_VDP2_VRAM+0x180110,0);
-     POKE_W(SCL_VDP2_VRAM+0x1800ac,0);
-     POKE_W(SCL_VDP2_VRAM+0x1800ae,0);
-     POKE_W(SCL_VDP2_VRAM,c);
-     return;
-    }
-#endif
-#if PROBEDIAG
- {unsigned short cur=PEEK_W(SCL_VDP2_VRAM+0x180000);
-  if (!dispLostAt && bootStage && (Scl_s_reg.tvmode & 0x8000) && !(cur & 0x8000))
-     dispLostAt=bootStage;
- }
- if (!bootStage && dispLostAt)
-    {c=dispLostAt & 0x7fff;
-     if (vtimer & ((dispLostAt & 0x8000)? 8: 32))
-	c=(c>>1)&0x3def;
-     POKE_W(SCL_VDP2_VRAM+0x180000,0x8000);
-     POKE_W(SCL_VDP2_VRAM+0x180020,0);
-     POKE_W(SCL_VDP2_VRAM+0x180110,0);
-     POKE_W(SCL_VDP2_VRAM+0x1800ac,0);
-     POKE_W(SCL_VDP2_VRAM+0x1800ae,0);
-     POKE_W(SCL_VDP2_VRAM,c);
-     return;
-    }
-#endif
  if (!bootStage)
     return;
  c=bootStage & 0x7fff;
  if (vtimer & ((bootStage & 0x8000)? 8: 32))
     c=(c>>1)&0x3def;			/* half brightness: throb, MAIN.BIN faster than INIT.BIN */
- /* PROBESET selects which of these writes happen, to find out which one a boot depends on;
-    the default writes them all.  Constant mask, so the disabled ones fold away. */
- if ((PROBESET & 1) &&
-     (PROBEWHEN==0 ||
-      (PROBEWHEN==1 && (bootStage & 0x8000)) ||
-      (PROBEWHEN==2 && !(bootStage & 0x8000))))
-    POKE_W(SCL_VDP2_VRAM+0x180000,		/* display on                */
-	   (PROBETVMD==1)? (Scl_s_reg.tvmode|0x8000):
-	   (PROBETVMD==2)? 0x8010: 0x8000);
- if (PROBESET & 2)
-    POKE_W(SCL_VDP2_VRAM+0x180020,0);	/* every background off      */
- if (PROBESET & 4)
-    POKE_W(SCL_VDP2_VRAM+0x180110,0);	/* no colour offset          */
- if (PROBESET & 8)
-    {POKE_W(SCL_VDP2_VRAM+0x1800ac,0);	/* back screen table address */
-     POKE_W(SCL_VDP2_VRAM+0x1800ae,0);	/*    ... at VDP2 VRAM 0     */
-    }
- if (PROBESET & 16)
-    POKE_W(SCL_VDP2_VRAM,c);
+ POKE_W(SCL_VDP2_VRAM+0x180000,0x8000);	/* display on                  */
+ POKE_W(SCL_VDP2_VRAM+0x180020,0);	/* every background off        */
+ POKE_W(SCL_VDP2_VRAM+0x180110,0);	/* no colour offset            */
+ POKE_W(SCL_VDP2_VRAM+0x1800ac,0);	/* back screen table address   */
+ POKE_W(SCL_VDP2_VRAM+0x1800ae,0);	/*    ... at VDP2 VRAM 0       */
+ POKE_W(SCL_VDP2_VRAM,c);
 }
 #endif
 
