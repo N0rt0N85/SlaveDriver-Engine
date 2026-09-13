@@ -984,7 +984,7 @@ void movePlayer(int inputEnd,int nmFrames)
 	     redrawBowlDots();
 	    }
 
-	 if (pushed&IMASK(ACTION_WEPDN))
+	 if (CFG_WEPDN && (pushed&IMASK(ACTION_WEPDN)))
 	    {weaponDown(WEAPONINV(currentState.inventory));
 	     redrawBowlDots();
 	    }
@@ -1036,7 +1036,7 @@ void movePlayer(int inputEnd,int nmFrames)
      {int flags=camera->flags;
       if (currentState.gameFlags & GAMEFLAG_DOLLPOWERMODE)
 	 camera->flags|=SPRITEFLAG_UNDERWATER;
-      moveCamera();
+      CFG_FRAME(input,pushed); moveCamera();
       if (currentState.gameFlags & GAMEFLAG_DOLLPOWERMODE)
 	 camera->flags=flags;
      }
@@ -2080,6 +2080,24 @@ int runLevel(char *filename,int levelNm)
       else
 	 mipChord=0;
      }
+#ifdef STATUSTEXT
+     {/* hold L+R+Y -- or A+B+C, for pads whose triggers report only analog values --
+	 to show the per-frame profile tree (PROFILE.C) */
+      static char profChord=0;
+      if (((((~lastInputSample)&(PER_DGT_TL|PER_DGT_TR|PER_DGT_Y)))==
+	   (PER_DGT_TL|PER_DGT_TR|PER_DGT_Y)) ||
+	  ((((~lastInputSample)&(PER_DGT_A|PER_DGT_B|PER_DGT_C)))==
+	   (PER_DGT_A|PER_DGT_B|PER_DGT_C)))
+	 {if (!profChord)
+	     {profileShow=!profileShow;
+	      changeMessage(profileShow? "PROFILE ON": "PROFILE OFF");
+	      profChord=1;
+	     }
+	 }
+      else
+	 profChord=0;
+     }
+#endif
      /* ok */
      if (framesElapsed>8)
 	framesElapsed=8;
@@ -2212,7 +2230,8 @@ int runLevel(char *filename,int levelNm)
 	}
 #endif
 
-     drawStringf(-158,-70,1,"polys:%d",nmPolys+nmSlavePolys);
+     drawStringf(-158,-70,1,"polys:%d cx:%d cy:%d",nmPolys+nmSlavePolys,
+		 vdp1TakeMaxX(),vdp1TakeMaxY());
 
      drawStringf(-158,-50,1,"time:%d %d:%d",
 		 (lastCalc+lastLastCalc)>>1,lastDraw,
@@ -2220,6 +2239,9 @@ int runLevel(char *filename,int levelNm)
 
      drawStringf(-158,-40,1,"mem:%dk+%dk=%dk",mem_coreleft(0)>>10,
 		 mem_coreleft(1)>>10,(mem_coreleft(0)+mem_coreleft(1))>>10);
+
+     if (profileShow)
+	drawProfileData(-158,-28);
 
 #endif
 

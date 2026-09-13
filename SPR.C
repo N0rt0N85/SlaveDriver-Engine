@@ -243,6 +243,36 @@ void EZ_specialDistSpr(struct slaveDrawResult *sdr,int charNm)
  }
  setGourPara(cmd,&sdr->gtable);
 }
+/* Comme EZ_specialDistSpr2, mais ne lit que les lignes [v0,v0+vh) du motif.  Fenetrer en V est
+   la SEULE coupe de source legale : CMDSRCA est une adresse et CMDSIZE une taille, il n'existe
+   aucun registre de pas, donc sauter des lignes entieres reste contigu alors qu'un
+   sous-rectangle en U cisaille en diagonale (HW_VDP1.md:160 ; mesure Mimas 2026-08-24 sur les
+   quads de sol).  COLOR_5 = 16 bpp, donc une ligne fait largeur*2 octets = (xysize>>8)*2
+   unites de 8 -- entier exact pour nos tuiles de 64 (16 unites par ligne). */
+void EZ_specialDistSpr2V(short charNm,int t0,int t1,XyInt *xy,
+			 struct gourTable *gTable)
+{struct cmdTable *cmd;
+ int h,v0,vh;
+ validPtr(xy);
+ h=chars[charNm].xysize&0xff;
+ v0=(t0*h)>>10;            /* t0,t1 : fractions de la hauteur du motif, en 1/1024 */
+ vh=((t1*h)>>10)-v0;
+ if (vh<1) vh=1;
+ if (v0+vh>h) vh=h-v0;
+ cmd=getCmdTable();
+ cmd->control=((ZOOM_NOPOINT|DIR_NOREV|FUNC_DISTORSP)&~CTRL_DIR);
+ cmd->charAddr=chars[charNm].addr+v0*((chars[charNm].xysize>>8)*2);
+ cmd->charSize=(chars[charNm].xysize&0x3f00)|(vh&0xff);
+ setDrawPara(cmd,UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|DRAW_GOURAU,0);
+ {int i;
+  short *from=(short *)xy,
+        *to=(short *)&cmd->ax;
+  for (i=8;i;i--)
+     *(to++)=*(from++);
+ }
+ setGourPara(cmd,gTable);
+}
+
 void EZ_specialDistSpr2(short charNm,XyInt *xy,struct gourTable *gTable)
 {struct cmdTable *cmd;
  validPtr(xy);
@@ -425,6 +455,19 @@ void EZ_clearCommand(void)
 {struct cmdTable *last=((struct cmdTable *)(VRAM_ADDR+commandStart[bank]));
  last->control|=SKIP_ASSIGN;
  last->link=32>>3;
+}
+
+/* Commands still free in this bank's list.  Overflowing it is not benign: flushCmdBuffer()
+   clamps, the surplus commands are dropped, and a list left without its end marker makes the
+   VDP1 run into whatever follows in VRAM -- SPR_WaitDrawEnd() then never returns. */
+int EZ_getCmdRoom(void)
+{
+#if BUFFERWRITES
+ int room=commandAreaSize-totCommand-cmdBufferUsed;
+ return room<0? 0: room;
+#else
+ return 0x7fffffff;
+#endif
 }
 
 int EZ_getNextCmdNm(void)

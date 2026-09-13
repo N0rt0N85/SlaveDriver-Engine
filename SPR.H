@@ -126,6 +126,10 @@ void EZ_executeCommand(void);
 void EZ_clearCommand(void);
 
 int EZ_getNextCmdNm(void);
+int EZ_getCmdRoom(void);
+void EZ_specialDistSpr2(short charNm,XyInt *xy,struct gourTable *gTable);
+void EZ_specialDistSpr2V(short charNm,int t0,int t1,XyInt *xy,
+			 struct gourTable *gTable);
 void EZ_linkCommand(int cmd,int mode,int to);
 
 void EZ_clearScreen(void);

@@ -637,7 +637,7 @@ static void sbuildLightList(sWallType *wall)
     }
 }
 
-#define NEARCLIP F(32)
+#define NEARCLIP F(GP_NEAR_CLIP) /* MUST stay under the player radius: SPRITE.C:141 parks the eye exactly there */
 #define SECTORBNDRYNEARCLIP F(-1)
 #define FARCLIP F(1024)
 #define FARCLIP2 10
@@ -1105,7 +1105,7 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 		 poly[1].x=pts[0][2].x; poly[1].y=pts[0][2].y;
 		 poly[2].x=pts[2][2].x; poly[2].y=pts[2][2].y;
 		 poly[3].x=pts[2][0].x; poly[3].y=pts[2][0].y;
-		 if (clip || !clip_visible(poly,s))
+		 if (clip || !clip_visible(probeVDP1(poly),s))
 		    continue;
 		 MIPMID(pts[0][1],pts[0][0],pts[0][2]);
 		 MIPMID(pts[1][0],pts[0][0],pts[2][0]);
@@ -1131,7 +1131,7 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 			gtable.entry[(int)*ppattern]=pts[dh+1][dw].light;
 			poly[(int)*ppattern].x=pts[dh+1][dw].x;
 			poly[(int)*ppattern].y=pts[dh+1][dw].y;
-			EZ_specialDistSpr2(mapPic(level_texture[t+1]),poly,&gtable);
+			EZ_distSprVClip(mapPic(level_texture[t+1]),poly,&gtable);
 			nmPolys++;
 		       }
 		 continue;
@@ -1163,7 +1163,7 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 	 poly[(int)*ppattern].x=vCalc[row2+w].x;
 	 poly[(int)*ppattern].y=vCalc[row2+w].y;
 
-	 if (clip || !clip_visible(poly,s))
+	 if (clip || !clip_visible(probeVDP1(poly),s))
 	    {tex++;
 	     continue;
 	    }
@@ -1175,7 +1175,7 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 		    DRAW_GOURAU,
 		    0,mapPic(level_texture[tex]),poly,&gtable);
 #endif
-	 EZ_specialDistSpr2(mapPic(level_texture[tex]
+	 EZ_distSprVClip(mapPic(level_texture[tex]
 #if MIPMAP
 				   +tileBias
 #endif
@@ -1229,7 +1229,7 @@ void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 	 poly[i].x=vCalc[v].x;
 	 poly[i].y=vCalc[v].y;
 	}
-     if (clip || !clip_visible(poly,s))
+     if (clip || !clip_visible(probeVDP1(poly),s))
 	continue;
 
      assert(getPicClass(level_face[f].tile)==TILE16BPP);
@@ -1238,7 +1238,7 @@ void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 		UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|DRAW_GOURAU,
 		0,mapPic(level_face[f].tile),poly,&gtable);
 #endif
-     EZ_specialDistSpr2(mapPic(level_face[f].tile),poly,&gtable);
+     EZ_distSprVClip(mapPic(level_face[f].tile),poly,&gtable);
      nmPolys++;
     }
 }
@@ -1316,7 +1316,7 @@ void drawWaterSurface(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 	 continue;
 	}
 
-     if (clip || !clip_visible(poly,s))
+     if (clip || !clip_visible(probeVDP1(poly),s))
 	continue;
 
      assert(getPicClass(level_face[f].tile)==TILE16BPP);
@@ -1461,7 +1461,7 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 		 poly[1].x=pts[0][2].x; poly[1].y=pts[0][2].y;
 		 poly[2].x=pts[2][2].x; poly[2].y=pts[2][2].y;
 		 poly[3].x=pts[2][0].x; poly[3].y=pts[2][0].y;
-		 if (clip || !clip_visible(poly,s))
+		 if (clip || !clip_visible(probeVDP1(poly),s))
 		    continue;
 		 MIPMID(pts[0][1],pts[0][0],pts[0][2]);
 		 MIPMID(pts[1][0],pts[0][0],pts[2][0]);
@@ -1523,7 +1523,7 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 	 poly[(int)*ppattern].x=slave_vCalc[row2+w].x;
 	 poly[(int)*ppattern].y=slave_vCalc[row2+w].y;
 
-	 if (clip || !clip_visible(poly,s))
+	 if (clip || !clip_visible(probeVDP1(poly),s))
 	    {tex++;
 	     continue;
 	    }
@@ -1572,7 +1572,7 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 	 poly[i].x=slave_vCalc[v].x;
 	 poly[i].y=slave_vCalc[v].y;
 	}
-     if (clip || !clip_visible(poly,s))
+     if (clip || !clip_visible(probeVDP1(poly),s))
 	continue;
 
      cacheThruResult[nmSlavePolys].gtable=gtable;
@@ -1651,7 +1651,7 @@ void drawSector(int sectorNm,MthMatrix *view,int slave)
      for (i=0;i<4;i++)
 	project_point(clipped+i,poly+i);
 
-     if (!clip_visible(poly,sectorDraw+sectorNm))
+     if (!clip_visible(probeVDP1(poly),sectorDraw+sectorNm))
 	continue;
 
 #if WATER
@@ -1806,7 +1806,7 @@ void findDoorways(int sectorNm,MthMatrix *view)
 		project_point(clipped+i,poly+i);
 
 	     polyGood=1;
-	     if (!clip_visible(poly,
+	     if (!clip_visible(probeVDP1(poly),
 			       sectorDraw+camera->s/*so cache will be good */))
 		continue;
 	    }

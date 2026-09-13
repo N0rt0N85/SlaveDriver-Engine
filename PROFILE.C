@@ -2,6 +2,8 @@
 
 #include "util.h"
 #include "string.h"
+#include "print.h"
+#include "spr.h"
 
 #define FRT 0xfffffe10
 #define TCR 6
@@ -33,7 +35,7 @@ unsigned short getTimer(void)
 
 typedef struct _node
 {char *id;
- unsigned int totalTime,lastReportedTime;
+ unsigned int totalTime,lastReportedTime,lastShownTime;
  struct _node *child[MAXNMCHILDREN];
  struct _node *parent;
  int nmChildren;
@@ -57,6 +59,7 @@ void initProfiler(void)
      nodes[i].totalTime=0;
      nodes[i].parent=NULL;
      nodes[i].lastReportedTime=0;
+     nodes[i].lastShownTime=0;
     }
 
  nmNodes=1;
@@ -129,6 +132,54 @@ static void printTree(ProfileNode *tree,int level,
     printTree(tree->child[i],level+1,sum,sum-tree->lastReportedTime);
 
  tree->lastReportedTime=sum;
+}
+
+/* On-screen profile.  debugPrint() is a no-op macro unless the build talks to a Psy-Q
+   host (UTIL.H), so dumpProfileData() writes to nothing on a console; this draws the same
+   tree with the game's own font, one line per node, as the milliseconds spent in that node
+   since the previous frame.
+
+   The FRT counts cycles/32, so 28.636 MHz gives 894875 ticks/s: a tick is 1/895 ms and
+   tenths of a millisecond are ticks*10/895 == ticks*2/179. */
+#define PROF_TENTHS(t) (((t)*2)/179)
+#define MAXPROFLINES 14
+
+/* drawString() costs one VDP1 command per character, so the overlay has to live inside
+   whatever the frame left free -- see EZ_getCmdRoom().  PROF_RESERVE keeps a margin for
+   everything drawn after this point. */
+#define PROF_RESERVE 128
+
+int profileShow=0;
+static int profLine,profRoom;
+static char profBuff[64];
+
+static void drawTree(ProfileNode *tree,int level,int x,int y)
+{int i;
+ unsigned int now,delta;
+ if (profLine>=MAXPROFLINES)
+    return;
+ now=sumChildren(tree);
+ delta=now-tree->lastShownTime;
+ tree->lastShownTime=now;
+ sprintf(profBuff,"%s %d.%d",tree->id,
+	 (int)(PROF_TENTHS(delta)/10),(int)(PROF_TENTHS(delta)%10));
+ {int len=strlen(profBuff);
+  if (len>profRoom)
+     {profLine=MAXPROFLINES; /* out of command list: stop, keep the lines already drawn */
+      return;
+     }
+  profRoom-=len;
+ }
+ drawString(x+6*level,y+10*profLine,1,(unsigned char *)profBuff);
+ profLine++;
+ for (i=0;i<tree->nmChildren;i++)
+    drawTree(tree->child[i],level+1,x,y);
+}
+
+void drawProfileData(int x,int y)
+{profLine=0;
+ profRoom=EZ_getCmdRoom()-PROF_RESERVE;
+ drawTree(nodes,0,x,y);
 }
 
 void dumpProfileData(void)
