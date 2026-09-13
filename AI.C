@@ -43,9 +43,9 @@ PlayerObject *constructPlayer(int sector,int suckParams)
  assert(sizeof(*this)<sizeof(Object));
  moveObject((Object *)this,objectIdleList);
  dPrint("player in sector %d\n",sector);
- this->sprite=newSprite(sector,F(47),0.90*65536.0,GRAVITY,
+ this->sprite=newSprite(sector,PLAYER_RADIUS,0.90*65536.0,GRAVITY,
 			-1,SPRITEFLAG_BSHORT,
-			(Object *)this);
+			(Object *)this); CFG_PLAYER_INIT(this->sprite);
  if (suckParams)
     {suckSpriteParams(this->sprite);
      this->sprite->angle=normalizeAngle(this->sprite->angle-F(90));
@@ -5866,7 +5866,7 @@ Object *constructTeleportReturn(void)
      pos.x=F(level_sector[playerSec].center[0]);
      pos.y=F(level_sector[playerSec].center[1]);
      pos.z=F(level_sector[playerSec].center[2]);
-     pos.y+=camera->radius-findFloorDistance(playerSec,&pos);
+     pos.y+=SPR_FOOT(camera)-findFloorDistance(playerSec,&pos);
      moveSpriteTo(camera,playerSec,&pos);
      /* point player @ place where artifact will appear */
      camera->angle=getAngle(pos.x-F(level_sector[artifactPlace].center[0]),

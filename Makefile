@@ -5,6 +5,7 @@
 #   make            -> build/INIT.BIN build/MAIN.BIN build/KEYGEN.BIN (+ .elf/.map)   [debug, like the CPEs]
 #   make NDEBUG=1   -> the same under build/ndebug/ (asserts off); the two trees never mix
 #   make PAL=1       -> build/pal/: the European (Exhumed) configuration, for EU game data
+#   make PARAMS=params/duke.cfg -> build/duke/: build with that preset instead of gameparams.cfg
 #   make BOOTPROBE=1 iso iso-ipjump -> build/probe/: INIT paints a colour per boot step (INITMAIN.C
 #                      BOOT_PROBE) + two discs: SRL IP (SGL sysinit first) / jump-only IP (retail style)
 #   make BOOTPROBE=1 iso-retailbins -> the RETAIL 0 + MAIN.BIN (refs/extract/PS) on our disc recipe, both IPs
@@ -71,7 +72,23 @@ ifeq ($(PAL),1)
   BUILD   := $(BUILD)/pal
   DEFINES += -DPAL
 endif
+# Game parameters.  gameparams.cfg is ALWAYS the file that is read; params/*.cfg are presets
+# that are never read on their own -- copy one over gameparams.cfg, or select it for a single
+# build with PARAMS=params/duke.cfg, which then gets its own tree (like the switches above) so
+# objects built with different parameters can never mix.  tools/gameparams.py turns the file
+# into $(BUILD)/gameparams.h and SPRITE.H includes it; the shipped defaults are PowerSlave's
+# own numbers, so an untouched gameparams.cfg rebuilds the original binaries byte for byte.
+PARAMS   ?= gameparams.cfg
+ifneq ($(PARAMS),gameparams.cfg)
+  BUILD  := $(BUILD)/$(notdir $(basename $(PARAMS)))
+endif
 OBJDIR   := $(BUILD)/obj
+GAMEPARAMS_H := $(BUILD)/gameparams.h
+PYTHON   ?= python
+# PLAYER_MODEL decides whether the cylinder player model is compiled in at all.
+ifeq ($(shell $(PYTHON) tools/gameparams.py --get PLAYER_MODEL $(PARAMS)),cylinder)
+  PLAYER_C := PLRCYL
+endif
 
 # ---------------------------------------------------------------------------------------------
 # Flags (baseline from docs/PORTING_NOTES.md)
@@ -90,7 +107,7 @@ OBJDIR   := $(BUILD)/obj
 #   -fwrapv                 wrapping signed arithmetic
 #   -fno-aggressive-loop-optimizations   no UB-derived trip counts on the 1-element COMMON arrays
 # ---------------------------------------------------------------------------------------------
-INCLUDES := -Isdk/sbl6/include -Ishim -I.
+INCLUDES := -Isdk/sbl6/include -Ishim -I. -I$(BUILD)
 CFLAGS   := -x c -m2 -O2 -std=gnu89 -fgnu89-inline -fcommon -fno-builtin -Wall -g $(DEFINES) $(INCLUDES) -MMD -MP \
             -fno-delete-null-pointer-checks -fno-toplevel-reorder -fno-strict-aliasing -fwrapv -fno-aggressive-loop-optimizations
 ASFLAGS  := -m2 -g $(DEFINES) $(INCLUDES)
@@ -144,7 +161,7 @@ LIBS     := -Wl,-b,coff-sh $(LIBDIR)/SEGA_SAT.A -Wl,-b,elf32-sh
 COMMON4      := LEVEL MEGAINIT SCL_FUNC SCL_VBLV V_BLANK
 INIT_C       := DMA FILE INITMAIN LOCAL MOV PICSET PRINT SOUND SPR UTIL $(COMMON4)
 MAIN_C       := AI AI2 AICOMMON ART BIGMAP BUP DMA FILE HITSCAN INTRO LOCAL MAP MENU OBJECT PIC \
-                PICSET PLAX PRINT PROFILE ROUTE SEQUENCE SOUND SPR SPRITE SRUINS UTIL WEAPON $(COMMON4) WALLS
+                PICSET PLAX PRINT PROFILE ROUTE SEQUENCE SOUND SPR SPRITE SRUINS UTIL WEAPON $(COMMON4) WALLS $(PLAYER_C)
 KEYGEN_C     := DMA FILE KEYGEN LOCAL MOV PICSET PRINT SOUND SPR UTIL LEVEL SCL_FUNC SCL_VBLV V_BLANK
 
 # crt0 first (its .text.crt0 section is placed first by saturn.ld anyway, but keep the order
@@ -153,12 +170,13 @@ CRT0_OBJ     := $(OBJDIR)/crt0.o
 MEMCPY_OBJ   := $(OBJDIR)/MEMCPY.o
 LINK_OBJ     := $(OBJDIR)/link_gnu.o
 WALLASM_OBJ  := $(OBJDIR)/wallasm_gnu.o
+UBC_OBJ      := $(OBJDIR)/ubc_gnu.o   # UBC trap entry; V_BLANK.C is in all three programs
 SNSTUBS_OBJ  := $(OBJDIR)/sn_stubs.o
 SYSCALLS_OBJ := $(OBJDIR)/syscalls.o   # GCC14: _sbrk trap so newlib can never allocate over the game's mem_malloc(1) area (starts at `end`)
 
-INIT_OBJS    := $(CRT0_OBJ) $(addprefix $(OBJDIR)/,$(addsuffix .o,$(INIT_C)))   $(MEMCPY_OBJ) $(LINK_OBJ) $(SNSTUBS_OBJ) $(SYSCALLS_OBJ)
-MAIN_OBJS    := $(CRT0_OBJ) $(addprefix $(OBJDIR)/,$(addsuffix .o,$(MAIN_C)))   $(MEMCPY_OBJ) $(WALLASM_OBJ) $(LINK_OBJ) $(SNSTUBS_OBJ) $(SYSCALLS_OBJ)
-KEYGEN_OBJS  := $(CRT0_OBJ) $(addprefix $(OBJDIR)/,$(addsuffix .o,$(KEYGEN_C))) $(MEMCPY_OBJ) $(LINK_OBJ) $(SNSTUBS_OBJ) $(SYSCALLS_OBJ)
+INIT_OBJS    := $(CRT0_OBJ) $(addprefix $(OBJDIR)/,$(addsuffix .o,$(INIT_C)))   $(MEMCPY_OBJ) $(LINK_OBJ) $(SNSTUBS_OBJ) $(SYSCALLS_OBJ) $(UBC_OBJ)
+MAIN_OBJS    := $(CRT0_OBJ) $(addprefix $(OBJDIR)/,$(addsuffix .o,$(MAIN_C)))   $(MEMCPY_OBJ) $(WALLASM_OBJ) $(LINK_OBJ) $(SNSTUBS_OBJ) $(SYSCALLS_OBJ) $(UBC_OBJ)
+KEYGEN_OBJS  := $(CRT0_OBJ) $(addprefix $(OBJDIR)/,$(addsuffix .o,$(KEYGEN_C))) $(MEMCPY_OBJ) $(LINK_OBJ) $(SNSTUBS_OBJ) $(SYSCALLS_OBJ) $(UBC_OBJ)
 
 ALL_OBJS     := $(sort $(INIT_OBJS) $(MAIN_OBJS) $(KEYGEN_OBJS))
 PROGRAMS     := INIT MAIN KEYGEN
@@ -185,6 +203,14 @@ objs: $(ALL_OBJS)
 $(OBJDIR):
 	mkdir -p $(OBJDIR)
 
+# --- game parameters: gameparams.cfg -> gameparams.h --------------------------------------
+# Every object depends on it, so editing the .cfg rebuilds everything it could have changed.
+$(GAMEPARAMS_H): $(PARAMS) tools/gameparams.py
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/gameparams.py $(PARAMS) $@
+
+$(ALL_OBJS): $(GAMEPARAMS_H)
+
 # --- C: every root *.C, compiled as C ---------------------------------------------------------
 $(OBJDIR)/%.o: %.C | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -202,6 +228,8 @@ $(CRT0_OBJ): crt0.s | $(OBJDIR)
 $(LINK_OBJ): link_gnu.s | $(OBJDIR)
 	$(AS) $(ASFLAGS) -c $< -o $@
 $(WALLASM_OBJ): wallasm_gnu.s | $(OBJDIR)
+	$(AS) $(ASFLAGS) -c $< -o $@
+$(UBC_OBJ): ubc_gnu.S | $(OBJDIR)
 	$(AS) $(ASFLAGS) -c $< -o $@
 $(MEMCPY_OBJ): MEMCPY.S | $(OBJDIR)
 	$(AS) $(ASFLAGS) -c $< -o $@
@@ -302,7 +330,7 @@ clean:
 	rm -rf build
 
 help:
-	@sed -n '2,13p' Makefile
+	@sed -n '2,14p' Makefile
 
 # auto dependencies (-MMD)
 -include $(ALL_OBJS:.o=.d)

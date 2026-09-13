@@ -130,7 +130,7 @@ int bumpWall(sWallType *wall,Sprite *o,int sector)
  planeDist=
     (f(o->pos.x-wallP.x))*wall->normal[0]+
     (f(o->pos.y-wallP.y))*wall->normal[1]+
-    (f(o->pos.z-wallP.z))*wall->normal[2];
+    (f(o->pos.z-wallP.z))*wall->normal[2]-SPR_SUPPORT(o,wall);
 #else
  planeDist=
     MTH_Mul(o->pos.x-wallP.x,wall->normal[0])+
@@ -197,13 +197,13 @@ int bumpWall(sWallType *wall,Sprite *o,int sector)
 	       (level_vertex[wall->v[2]].y-level_vertex[wall->v[3]].y)*
 		  (crossCoord/wall->pixelLength);
            }
-     if (o->pos.y>wallTop)
-        {yDist=wallTop-o->pos.y;
+     if (SPR_YLO(o)>wallTop)
+        {yDist=SPR_YOUT(o,wallTop-o->pos.y);
 	 edge=1;
 	}
      else
-        {if (o->pos.y<wallBottom)
-            {yDist=wallBottom-o->pos.y;
+        {if (SPR_YHI(o)<wallBottom)
+            {yDist=SPR_YOUT(o,wallBottom-o->pos.y);
 	     edge=1;
 	    }
 	else
@@ -496,7 +496,7 @@ void collideSpriteSprite(Sprite *mobile,Sprite *stat)
  dp.x=mobile->pos.x-stat->pos.x;
  if (abs(dp.x)>mobile->radius+stat->radius)
     return;
- dp.y=mobile->pos.y-stat->pos.y;
+ dp.y=SPR_DY(mobile,stat);
  if (abs(dp.y)>mobile->radius+stat->radius)
     return;
  dp.z=mobile->pos.z-stat->pos.z;
@@ -594,7 +594,7 @@ int collideSprite(Sprite *o)
      STEPHEIGHT=F(1);
     }
  else
-    STEPHEIGHT=F(32);
+    STEPHEIGHT=SPR_STEP(o);
 
  behindWall=NULL;
  /* bump the walls in our sector to prevent spurious sector transitions */
@@ -639,9 +639,9 @@ int collideSprite(Sprite *o)
     bumpWalls(sectorPenetrate[i],o);
 
  if (floorValid)
-    {int floorDistance=o->radius+bestFloorHeight-o->pos.y;
+    {int floorDistance=SPR_FOOT(o)+bestFloorHeight-o->pos.y;
      if (o==camera)
-	floorDistance+=F(8);
+	floorDistance+=SPR_HOVER(o);
      if (floorDistance>0 ||
 	 /* if we were on the floor last round, and our yvel is <=0 and
 	    the best floor is the same as the one we were on last round
@@ -700,12 +700,12 @@ int collideSprite(Sprite *o)
  else
     o->floorSector=-1;
 
- if (ceilValid && o->pos.y>bestCeilingHeight-o->radius)
+ if (ceilValid && o->pos.y>bestCeilingHeight-SPR_HEAD(o))
     {if (floorCollideNm!=-1)
 	/* we're being squished between ceiling and floor */
-	o->pos.y=(bestCeilingHeight+bestFloorHeight)>>1;
+	o->pos.y=SPR_SQUISH(o,bestCeilingHeight,bestFloorHeight);
      else
-	o->pos.y=bestCeilingHeight-o->radius;
+	o->pos.y=bestCeilingHeight-SPR_HEAD(o);
      ceilCollideNm=bestCeil-level_wall;
      if (o->vel.y>0)
 	o->vel.y=0;

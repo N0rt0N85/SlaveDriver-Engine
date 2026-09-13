@@ -175,7 +175,7 @@ void userBreakBlam(void)
 {int dummy[1];
  __asm__ volatile ("sts pr,%0\n" /* GCC14: GNU as rejects "sts.l pr,Rn"; PR->register is "sts" */
 		   : "=r" (dummy[0])); /* GCC14: plain lvalue as output operand */
- errorQ[errorQSize]=dummy[8]; /* GCC14: the exception PC; GCC 14's prologue pushes 28 bytes
+ errorQ[errorQSize]=ubcFaultPC; /* captured by ubcTrap before any prologue (was dummy[8]; GCC 14's prologue pushes 28 bytes
     of registers before dummy, so the hardware-pushed PC sits at @(32,r15) = dummy[8] */
  prQ[errorQSize]=dummy[0];
  errorQSize=(errorQSize+1)&0xf;
@@ -252,7 +252,7 @@ void SetVblank(void)
 /* asm("trapa #34");*/
  POKE_W(0xffffff48,0); /* break bus cycle register */
 /* INT_SetScuFunc(12,userBreakBlam); */
- POKE(0x06000000+0x30,userBreakBlam);
+ POKE(0x06000000+0x30,ubcTrap); /* ubcTrap captures the PC, then chains to userBreakBlam */
 #if 1
  POKE(0xffffff40,0x00000000); /* break address */
  POKE(0xffffff44,0x00000fff); /* break address mask */

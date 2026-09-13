@@ -102,4 +102,52 @@ void spriteRandomizeFrame(Sprite *o);
 
 void suckSpriteParams(Sprite *s);
 
+/* Build-time game parameters: gameparams.cfg -> $(BUILD)/gameparams.h (see the Makefile).
+   Every hook below is a macro written ON the line it replaces in the .C files.  That is not
+   cosmetic: assert() bakes __LINE__ into the binary (UTIL.H:82), so adding or removing a line
+   -- even inside a #ifdef that is switched off -- would change every assert that follows.
+   With the shipped defaults these all expand to the engine's original expressions, and the
+   build is byte for byte the one you get without any of this. */
+#include "gameparams.h"
+
+#ifdef GP_PLAYER_MODEL_CYLINDER
+#include "plrcyl.h"
+#else
+#define SPR_FOOT(o)        ((o)->radius)             /* centre -> floor contact (SPRITE.C:642)  */
+#define SPR_HOVER(o)       F(GP_PLAYER_EYE_HOVER)    /* camera hover (SPRITE.C:644)             */
+#define SPR_HEAD(o)        ((o)->radius)             /* centre -> ceiling (SPRITE.C:703,708)    */
+#define SPR_SQUISH(o,c,fl) (((c)+(fl))>>1)           /* squeezed (SPRITE.C:706)                 */
+#define SPR_STEP(o)        F(GP_PLAYER_STEP)         /* STEPHEIGHT (SPRITE.C:597)               */
+#define SPR_YLO(o)         ((o)->pos.y)              /* body interval vs wall edges (SPRITE.C:200,205) */
+#define SPR_YHI(o)         ((o)->pos.y)
+#define SPR_YOUT(o,d)      (d)
+#define SPR_SUPPORT(o,w)   0                         /* steep-slope plane offset (SPRITE.C:133) */
+#define SPR_DY(m,s)        ((m)->pos.y-(s)->pos.y)   /* sprite/sprite (SPRITE.C:499)            */
+#define CFG_PLAYER_INIT(s)                           /* AI.C:46                                 */
+#define CFG_POSTURE(in,p)
+#endif
+#define PLAYER_RADIUS      F(GP_PLAYER_RADIUS)       /* AI.C:46                                 */
+
+#ifdef GP_CROUCH_BUTTON_WEPDN
+#define CFG_WEPDN          0                         /* that slot crouches now (SRUINS.C:987)   */
+#define WEP_NEXT(m,d)      cylWeaponNext((m),(d))    /* so one button cycles (WEAPON.C:977)     */
+#else
+#define CFG_WEPDN          1
+#define WEP_NEXT(m,d)      bitScanForward((m),(d))
+#endif
+
+/* L and R are strafe and run (V_BLANK.H:53-54) and get held together constantly in normal
+   play, so "lr" fires by accident; "lr_x" adds a third button and is the safe one.
+   Either way the toggle flips the engine's own cheatsEnabled (BUP.C:78-85). */
+#ifdef GP_DEBUG_TOGGLE_LR_X
+#define CFG_DEBUG(in,p)    if(!((in)&(PER_DGT_TL|PER_DGT_TR))&&((p)&PER_DGT_X)) cheatsEnabled=!cheatsEnabled;
+#endif
+#ifdef GP_DEBUG_TOGGLE_LR
+#define CFG_DEBUG(in,p)    if(!((in)&PER_DGT_TR)&&((p)&PER_DGT_TL)) cheatsEnabled=!cheatsEnabled;
+#endif
+#ifndef CFG_DEBUG
+#define CFG_DEBUG(in,p)
+#endif
+#define CFG_FRAME(in,p)    do{CFG_DEBUG(in,p) CFG_POSTURE(in,p);}while(0)
+
 #endif

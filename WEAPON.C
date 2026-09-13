@@ -974,7 +974,7 @@ void weaponUp(int weaponMask)
 {int newD;
  if (level_sector[camera->s].flags & SECFLAG_WATER)
     weaponMask&=UNDERWATERWEAPONS;
- newD=bitScanForward(weaponMask,currentState.desiredWeapon);
+ newD=WEP_NEXT(weaponMask,currentState.desiredWeapon);
  if (newD!=-1)
    {currentState.desiredWeapon=newD;
     weaponSwitchTimer=0;

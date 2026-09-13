@@ -32,7 +32,7 @@ void movePlayerToSector(int playerSec)
  pos.x=F(level_sector[playerSec].center[0]);
  pos.y=F(level_sector[playerSec].center[1]);
  pos.z=F(level_sector[playerSec].center[2]);
- pos.y+=camera->radius-findFloorDistance(playerSec,&pos);
+ pos.y+=SPR_FOOT(camera)-findFloorDistance(playerSec,&pos);
  moveSpriteTo(camera,playerSec,&pos);
 }
 

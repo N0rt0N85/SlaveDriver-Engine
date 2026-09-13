@@ -64,4 +64,9 @@ extern int prQ[];
 #endif
 
 
+/* UBC watchpoint on the low 4 KB: ubcTrap captures the faulting PC before any
+   prologue, userBreakBlam logs it into errorQ[]/prQ[] (see wallasm_gnu.s). */
+extern int ubcFaultPC;
+void ubcTrap(void);
+
 #endif
