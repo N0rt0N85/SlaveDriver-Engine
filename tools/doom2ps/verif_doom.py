@@ -5,7 +5,12 @@ Il relit le FICHIER (pas les intermediaires) et rejoue les tests que le moteur f
 a la ligne pres. Le convertisseur passe toujours ses propres criteres du premier coup ; ce sont
 ceux-la qui trouvent les defauts (lecon E3/E6 du convertisseur Duke).
 
-Usage : python tools\\doom2ps\\verif_doom.py [--lev F] [--geom J]
+Usage : python tools\\doom2ps\\verif_doom.py [--lev cd_doom/E1M1.LEV] [--geom J] [--tiles J] [--wad W]
+        [--map E1M1] [--ids build/doom/doom_ids.json] [--static cd_doom/STATIC.DAT] [--skill 3]
+Tests 1-16 : geometrie, objets, push blocks, interrupteur ; 17-21 (contrat « Verifications PC ») :
+tuiles (prefixe 0x32, G + tileBase <= 255, MAXNMPICS), sequences atteignables (formule seq() avec la
+garde -2), sons (carte, DMX len - 32, 80 / 512 Ko), barils (avertissement), tailles et memoire
+residente contre le pool reel (LWRAM 1 Mo + 0x06100000 - _end de build/doom/MAIN.map).
 """
 from __future__ import annotations
 
@@ -32,12 +37,20 @@ def put(name, ok, detail=""):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--lev", default=os.path.join(ROOT, "cd", "TOMB.LEV"))
+    ap.add_argument("--lev", default=os.path.join(ROOT, "cd_doom", "E1M1.LEV"),
+                    help="le .LEV a relire (defaut : le disque Doom produit par make_e1m1.py)")
     ap.add_argument("--geom", default=os.path.join(ROOT, "build", "doom2ps",
                                                    "e1m1_geom3d.json"))
     ap.add_argument("--wad", default=os.path.join(os.path.dirname(ROOT), "Mimas", "cd", "data",
                                                   "DOOM1.WAD"))
     ap.add_argument("--map", default="E1M1")
+    ap.add_argument("--tiles", default=os.path.join(ROOT, "build", "doom2ps", "e1m1_tiles.json"),
+                    help="sortie de doomtiles.py pour la MEME geometrie (test 13)")
+    ap.add_argument("--ids", default=os.path.join(ROOT, "build", "doom", "doom_ids.json"),
+                    help="doom_ids.json (tests 17-21 : sequences, sons, barils)")
+    ap.add_argument("--static", default=os.path.join(ROOT, "cd_doom", "STATIC.DAT"),
+                    help="STATIC.DAT du meme disque : tileBase (bloc 4) et sons statiques (bloc 3)")
+    ap.add_argument("--skill", type=int, default=3)
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -196,11 +209,29 @@ def main(argv=None):
     put("reservation esclave <= 1250", max((cells or [0]) + (faces or [0])) <= 1250,
         f"max {max((cells or [0]) + (faces or [0]))}")
 
-    # 9. le depart du joueur
+    # 9. OBJETS (SPEC_CONVERTER 7 : remplace « un seul objet »). Le joueur en tete (OBJECT.C:200-206
+    #    le cherche, assemble.py:204 le met premier), puis les mobjs (6 shorts) et les speciaux
+    #    (portes 3, ascenseurs 4, sector-switch 2, interrupteur 5, sortie 1, degats 2). Rejoue :
+    #    `assert(firstParam == objectPPos)` (OBJECT.C:211) = les params attendus par type se
+    #    cumulent exactement sur nmObjectParams ; pointInSectorP (SPRITE.C:940-960) sur (x, y, z)
+    #    de chaque objet positionne ; `y == floorLevel` (MESURE retail : ecart 0).
     obj = L["objects"]
-    put("un seul objet, OT_PLAYER", len(obj) == 1 and obj[0]["type"] == 13, str(obj[:2]))
     import struct
+    sys.path.insert(0, HERE)
+    import doom_specials as sp
+    import things2objects as t2o
     p = L["objectParams"]
+    put("joueur OT_PLAYER en tete", bool(obj) and obj[0]["type"] == 13, str(obj[:1]))
+    nmobj = sum(1 for o in obj if o["type"] not in (48, 49, 61, 91, 176, 177, 178, 179, 180)
+                and not (168 <= o["type"] <= 171)) - 1
+    put("firstParam cumules == nmObjectParams", sp.expected_param_bytes(obj) == len(p)
+        and all(obj[i + 1]["firstParam"] > obj[i]["firstParam"] for i in range(len(obj) - 1)),
+        f"{len(obj)} objets (1 joueur + {nmobj} mobjs + {len(obj) - 1 - nmobj} speciaux), "
+        f"{sp.expected_param_bytes(obj)} o attendus, {len(p)} o")
+    chk = t2o.check_objects(obj, p, S, W, V)
+    put("objets dans leur secteur (pointInSectorP)", not chk["hors_secteur"],
+        f"{chk['n']} positionnes, {len(chk['hors_secteur'])} hors secteur {chk['hors_secteur'][:3]}")
+    put("y des objets == floorLevel", not chk["y_faux"], str(chk["y_faux"][:3]))
     sect, px, py, pz, ang = struct.unpack(">5h", bytes(p[:10]))
     s = S[sect]
     print(f"       depart : secteur {sect}, ({px}, {py}, {pz}), angle {ang}")
@@ -238,6 +269,8 @@ def main(argv=None):
     #       - flags du joueur = BSHORT|BBLOCKED = 0x1100 (AI.C:47 + SPRITE.C:92), en dur.
     #     Plus la marche de `bumpFloor` : STEPHEIGHT = PLAYER_STEP (24 dans params/doom.cfg),
     #     ce qui rend le graphe ORIENTE -- on descend d'une corniche sans pouvoir y remonter.
+    #     Un portail DOORWALL (0x20) est une PORTE : son SHORTOPENING est recalcule a chaque pas par
+    #     `setDoorBlockBits` (AI.C:4294-4309), et le joueur l'ouvre en pressant. On le traverse.
     PLAYER_FLAGS = 0x1100
     STEPHEIGHT = 24
     adj = [[] for _ in S]
@@ -246,7 +279,7 @@ def main(argv=None):
             w = W[wi]
             if w["nextSector"] == -1:
                 break
-            if (w["flags"] & PLAYER_FLAGS) & 0x1f00:
+            if (w["flags"] & PLAYER_FLAGS) & 0x1f00 and not (w["flags"] & 0x20):
                 continue
             n = w["nextSector"]
             if 0 <= n < len(S) and S[n]["floorLevel"] - s_["floorLevel"] <= STEPHEIGHT:
@@ -279,7 +312,7 @@ def main(argv=None):
             ys = [V[i]["y"] for i in w["v"]]
             h = max(ys) - min(ys)
             d = S[n]["floorLevel"] - s_["floorLevel"]
-            if (w["flags"] & PLAYER_FLAGS) & 0x1f00:
+            if (w["flags"] & PLAYER_FLAGS) & 0x1f00 and not (w["flags"] & 0x20):
                 raisons[f"ouverture de {h} (< {56})"] += 1
             elif d > STEPHEIGHT:
                 raisons[f"marche de {d} (> {STEPHEIGHT})"] += 1
@@ -387,20 +420,24 @@ def main(argv=None):
     #     ete echantillonnee. Sans cela la texture est etiree ou repetee -- MESURE avant correctif :
     #     hauteurs de cellule de 2 a 336 u pour une tuile calee sur la hauteur de la texture, et
     #     332 murs sous 64 u ou la texture entiere s'ecrasait (les contremarches).
+    #     Murs MOBILES (--mobile) : un mur qui GRANDIT a l'execution (rail de porte, flanc
+    #     d'ascenseur) fait 1 u ferme et sa tuile est faite pour l'etat ouvert : exempte.
     try:
         import json as _json
-        det = _json.load(open(os.path.join(ROOT, "build", "doom2ps",
-                                           "e1m1_tiles.json"), encoding="utf-8"))["detail"]
+        det = _json.load(open(a.tiles, encoding="utf-8"))["detail"]
     except Exception as e:
         put("echelle verticale des murs", True, f"non teste ({e})")
         det = None
     if det is not None:
         base = min((tex[i] for i in range(1, len(tex), 2)), default=0)
+        pbwalls = set(L["PBWall"])
         faux, vus = [], 0
         for si, s_ in enumerate(S):
             for wi in range(s_["firstWall"], s_["lastWall"] + 1):
                 w = W[wi]
                 if w["normal"][1] != 0 or (w["flags"] & 0x02) or not (w["flags"] & 0x01):
+                    continue
+                if wi in pbwalls and max(V[i]["y"] for i in w["v"]) - min(V[i]["y"] for i in w["v"]) <= 1:
                     continue
                 loc = tex[w["textures"] + 1] - base
                 if not (0 <= loc < len(det)):
@@ -441,8 +478,281 @@ def main(argv=None):
         f"{len(mal)}/{carres} carres mal orientes, ex. {mal[:3]}" if mal
         else f"{carres} carres alignes, tous orientes")
 
+    # 15. PUSH BLOCKS (SPEC_CONVERTER 7, --mobile). Rejoue les asserts de registerPBObject
+    #     (OBJECT.C:141-152 : PBWall dans [0, nmWalls)), d'updatePushBlockPositions (SPRITE.C:863 :
+    #     vStart + vNm <= nmVerticies), la fente fermee de chaque DOORWALL (setDoorBlockBits mesure
+    #     v[1].y - v[2].y, AI.C:4302) et la course des objets contre la REGLE DE DOOM recalculee
+    #     depuis le WAD (doom_specials.mobile_bounds : porte = plus bas plafond voisin - 4 - sol,
+    #     36 = plus HAUT sol voisin + 8).
+    PB, PBV, PBW = L["pushBlocks"], L["PBVert"], L["PBWall"]
+    if PB:
+        bad = [w for w in PBW if not (0 <= w < len(W))]
+        put("PBWall dans [0, nmWalls)", not bad, f"{len(PBW)} murs, {len(PB)} push blocks")
+        bad = [r for r in PBV if r["vStart"] + r["vNm"] > len(V) or r["vNm"] <= 0]
+        put("PBVert.vStart + vNm <= nmVerticies", not bad, f"{len(PBV)} runs, "
+            f"{sum(r['vNm'] for r in PBV)} sommets")
+        bad = [i for i, b in enumerate(PB)
+               if not (0 <= b["startWall"] <= b["endWall"] < len(PBW)
+                       and 0 <= b["startVertex"] <= b["endVertex"] < len(PBV)
+                       and 0 <= b["enclosingSector"] < len(S)
+                       and (b["floorSector"] == -1 or 0 <= b["floorSector"] < len(S))
+                       and b["dx"] == b["dy"] == b["dz"] == 0)]
+        put("plages des push blocks", not bad, str(bad[:3]))
+        dws = [wi for wi in PBW if W[wi]["flags"] & 0x20]
+        bad = [wi for wi in dws if V[W[wi]["v"][1]]["y"] - V[W[wi]["v"][2]]["y"] != sp.DOOR_SLIT
+               or not (W[wi]["flags"] & 0x1000)]
+        put("chaque DOORWALL ferme = fente 1 u + SHORTOPENING", not bad,
+            f"{len(dws)} DOORWALL" + (f", fautifs {bad[:3]}" if bad else ""))
+        # objets contre PB : chaque porte / ascenseur pointe un pb existant, un pb par objet
+        doors = [struct.unpack(">3h", bytes(p[o["firstParam"]:o["firstParam"] + 6]))
+                 for o in obj if o["type"] == 48]
+        lifts = [(o["type"], struct.unpack(">4h", bytes(p[o["firstParam"]:o["firstParam"] + 8])))
+                 for o in obj if o["type"] in (49, 61)]
+        pbs = [d[0] for d in doors] + [l_[1][0] for l_ in lifts]
+        put("un push block par porte / ascenseur", sorted(pbs) == list(range(len(PB))),
+            f"{len(doors)} portes, {len(lifts)} ascenseurs/sols, {len(PB)} push blocks")
+        put("floorSector : -1 porte, feuille ascenseur",
+            all(PB[d[0]]["floorSector"] == -1 for d in doors)
+            and all(PB[l_[1][0]]["floorSector"] >= 0 for l_ in lifts))
+        if M is not None:
+            spx = sp.specials_of(M)
+            # fermee a sol + fente, door_func monte de doorHeight : fente + doorHeight = regle Doom
+            want_d = sorted(d["upper"] - d["lower"] - sp.DOOR_SLIT for d in spx.doors)
+            want_l = sorted((l_["lower"], l_["upper"]) for l_ in spx.lifts + spx.floors)
+            put("fente + doorHeight == regle Doom (min plafond voisin - 4 - sol)",
+                sorted(d[2] for d in doors) == want_d, f"{sorted(d[2] for d in doors)} vs {want_d}")
+            sec = [struct.unpack(">h", bytes(p[o["firstParam"]:o["firstParam"] + 2]))[0]
+                   for o in obj if o["type"] == sp.OT_DOOM_SECRETWALL]
+            nsl = sum(1 for ld in M["linedefs"] if (ld.flags & sp.ML_SECRET) and ld.special in sp.DOOR_MANUAL)
+            put("OT_DOOM_SECRETWALL : murs DOORWALL des portes ML_SECRET",
+                (len(sec) > 0) == (nsl > 0) and all(0 <= w < len(W) and (W[w]["flags"] & 0x20) for w in sec),
+                f"{len(sec)} murs pour {nsl} ligne(s) de porte ML_SECRET : {sec}")
+            put("course ascenseur / sol == regle Doom (36 : plus haut sol voisin + 8)",
+                sorted((l_[1][1], l_[1][2]) for l_ in lifts) == want_l,
+                f"{sorted((l_[1][1], l_[1][2]) for l_ in lifts)} vs {want_l}")
+    else:
+        put("push blocks", True, "aucun (geometrie statique)")
+
+    # 16. INTERRUPTEURS : rejoue constructSwitch (AI2.C:582-632) -- sequenceMap[type] >= 0,
+    #     4 sequences, tuile OFF (chunk de la 1re frame) presente EXACTEMENT une fois dans les murs
+    #     de sectorNm (le moteur asserte `tilePos`, et la premiere occurrence est celle animee).
+    sws = [(o["type"], struct.unpack(">5h", bytes(p[o["firstParam"]:o["firstParam"] + 10])))
+           for o in obj if 168 <= o["type"] <= 171]
+    if sws:
+        r3 = lev.Reader(a.lev)
+        lev.parse_sky(r3)
+        lev.parse_level_block(r3)
+        lev.parse_sounds(r3)
+        lev.parse_tiles(r3)
+        Q = lev.parse_sequences(r3)
+        # decodage du bloc (SEQUENCE.C:29-72 ; lev.parse_sequences ne garde que les comptes)
+        b = r3.b
+        q = Q["off"] + 4 + 12
+        ns, nf, nc = Q["nmSequences"], Q["nmFrames"], Q["nmChunks"]
+        frames = [dict(chunkIndex=struct.unpack_from(">h", b, q + 8 * i)[0]) for i in range(nf)]
+        q += 8 * nf
+        chunks = [dict(tile=struct.unpack_from(">h", b, q + 8 * i + 4)[0]) for i in range(nc)]
+        q += 8 * nc
+        seqs = list(struct.unpack_from(">%dh" % ns, b, q))
+        q += 2 * ns
+        smap = list(struct.unpack_from(">%dh" % lev.OT_NMTYPES, b, q))
+        bad = []
+        for t, (sn, ch, ox, oy, oz) in sws:
+            base = smap[t]
+            if base < 0 or base + 4 >= len(seqs):
+                bad.append((t, "sequenceMap", base))
+                continue
+            off = chunks[frames[seqs[base]]["chunkIndex"]]["tile"]
+            s_ = S[sn]
+            cnt = 0
+            for wi in range(s_["firstWall"], s_["lastWall"] + 1):
+                w = W[wi]
+                if w["flags"] & 0x01:
+                    n_ = w["tileLength"] * w["tileHeight"]
+                    cnt += sum(1 for c in range(n_) if tex[w["textures"] + 2 * c + 1] == off)
+                elif w["firstFace"] >= 0:
+                    cnt += sum(1 for f in F[w["firstFace"]:w["lastFace"] + 1] if f["tile"] == off)
+            if cnt != 1:
+                bad.append((t, "tuile OFF", off, "occurrences", cnt))
+        put("interrupteurs : sequence et tuile OFF unique dans la feuille", not bad,
+            f"{len(sws)} interrupteurs, canaux {[s_[1][1] for s_ in sws]}" if not bad else str(bad))
+    dmg = [struct.unpack(">2h", bytes(p[o["firstParam"]:o["firstParam"] + 4]))
+           for o in obj if o["type"] == 179]
+    if dmg:
+        put("OT_DOOM_DAMAGE : feuilles dans les bornes, hp > 0",
+            all(0 <= d[0] < len(S) and d[1] > 0 for d in dmg), f"{len(dmg)} feuilles")
+
+    # 17-21. CONTRAT « Verifications PC » (DOOM_ABI, SPEC_CONVERTER 7) : tuiles, sequences
+    #        atteignables, sons, barils, tailles. Tout est relu dans le FICHIER par lev_io (le
+    #        lecteur verifie), croise avec doom_ids.json, le WAD et STATIC.DAT.
+    tail_checks(a, L, S, W, V, F, tex, obj, p, M)
+
     print(f"\n  {len(OK)} OK, {len(FAIL)} echec(s)" + (f" : {FAIL}" if FAIL else ""))
     return 1 if FAIL else 0
+
+
+def tail_checks(a, L, S, W, V, F, tex, obj, p, M):
+    import struct
+    import re
+    sys.path.insert(0, HERE)
+    sys.path.insert(0, os.path.join(ROOT, "tools", "duke2ps"))
+    import lev_io
+    import wad2snd
+    import wad2sprites
+    import verif_static
+    ids = None
+    if a.ids and os.path.exists(a.ids):
+        ids = json.load(open(a.ids, encoding="utf-8"))
+    else:
+        print(f"  (doom_ids.json absent : {a.ids} -- tests 18-20 non joues)")
+    static = None
+    if a.static and os.path.exists(a.static):
+        static = verif_static.static_summary(open(a.static, "rb").read())
+    else:
+        print(f"  (STATIC.DAT absent : {a.static} -- tileBase suppose 95, sons statiques non comptes)")
+    tile_base = static["tileBase"] if static else 95
+    model, lay = lev_io.read_model(a.lev)
+    tiles = model["tiles"]
+    sq = model["sequences"]
+    snd = model["sounds"]
+
+    # 17. TUILES : la geometrie est un PREFIXE 0x32 (LEVEL.C:69-72 : `level_texture[i] += tileBase`,
+    #     `level_face[i].tile += tileBase` sur des u8), les chunks 0x6A viennent apres ;
+    #     G + tileBase <= 255 ; nmWeaponTiles + nmTiles < MAXNMPICS 800 (PIC.C:32, addPic :408) ;
+    #     aucun pixel 0 (transparent, PIC.C:500-531) ni 255 (force 0xffff PIC.C:631) en geometrie.
+    used = {tex[i] for i in range(1, len(tex), 2)} | {f["tile"] for f in F}
+    G = 0
+    while G < len(tiles) and tiles[G]["flags"] == 0x32:
+        G += 1                                   # la tuile ON d'un interrupteur est 0x32 sans cellule
+    after = [t["flags"] for t in tiles[G:]]
+    put("tuiles : geometrie = prefixe 0x32, chunks 0x6A ensuite",
+        all(k == 0x6A for k in after) and G > 0 and (not used or max(used) < G),
+        f"{G} x 0x32 (cellules/faces < {(max(used) + 1) if used else 0}) puis {len(after)} x 0x6A")
+    put(f"tuiles : geometrie {G} + tileBase {tile_base} <= 255", G + tile_base <= 255,
+        f"= {G + tile_base}, marge {255 - G - tile_base}")
+    put("tuiles : nmWeaponTiles + nmTiles < 800 (MAXNMPICS)", tile_base + len(tiles) < 800,
+        f"{tile_base} + {len(tiles)} = {tile_base + len(tiles)}")
+    n0 = sum(t["pixels"].count(0) for t in tiles[:G])
+    n255 = sum(t["pixels"].count(255) for t in tiles[:G])
+    put("tuiles : aucun pixel 0 / 255 en geometrie", n0 == 0 and n255 == 0, f"0 x{n0}, 255 x{n255}")
+    pal = model["palettes"]
+    put("palette 0 = objet, entree 0 = 0x0000, objectPalette = 0",
+        pal["objectPalette"] == 0 and pal["palettes"] and pal["palettes"][0][0] == 0
+        and all(t["palNm"] == 0 for t in tiles), f"{len(pal['palettes'])} palette(s)")
+
+    # 18. SEQUENCES ATTEIGNABLES : pour chaque (MT present ou spawnable, etat atteignable, vue 0..7),
+    #     la formule du contrat (garde -2 AVANT le bit 0x8000) doit tomber sur une sequence NON VIDE
+    #     (WALLS.C:2777-2779 lit sequence[s] et frame+1 sans test : une sequence vide dessine la
+    #     suivante) dont chaque chunk pointe une tuile 0x6A existante ; [172..203] < 0 (markAnimTiles).
+    if ids is not None and M is not None:
+        Wd = wadmod_of(a)
+        present = wad2snd.present_mobj_types(Wd, ids, a.map, a.skill)
+        spawn = wad2snd.spawnable_mobj_types(ids, present)
+        ss = wad2sprites.SpriteSet(tiles, sq["frames"], sq["chunks"], sq["sequence"],
+                                   sq["sequenceMap"], None, None, None)
+        tested, problems = wad2sprites.check_reachable(ss, ids, present)
+        put("sequences atteignables non vides, chunks -> tuiles 0x6A", not problems,
+            f"{tested} (MT, etat, vue) testes" + (f", defauts {problems[:3]}" if problems else ""))
+        put("sequenceMap[172..203] < 0 (markAnimTiles)",
+            all(sq["sequenceMap"][i] < 0 for i in range(172, 204)))
+        put("sequenceMap[163..171] : -2 sauf les OT_SW poses",
+            all(sq["sequenceMap"][i] == -2 for i in range(163, 172) if not (168 <= i <= 171)))
+        fam = sum(1 for i in range(138) if sq["sequenceMap"][i] != -2)
+        print(f"       {fam} familles de sprites cartographiees, {len(sq['sequence']) - 1} sequences, "
+              f"{len(sq['frames']) - 1} frames, {len(sq['chunks'])} chunks")
+
+        # 19. SONS : carte 227 indexee par sfxenum_t ; chaque son d'un MT present hors statiques est
+        #     present (>= 0) ; rate 0x7000, size pair et == len - 32 arrondi (DMX) ; n < 80 avec les
+        #     20 statiques ; soundTop = PCM statiques + dynamiques < 512 Ko (SOUND.C:218-219).
+        want = [n for n in wad2snd.sound_names_for(ids, spawn) if Wd.has(wad2snd.lump_name(n))]
+        num = ids["sfxname_to_num"]
+        missing = [n for n in want if snd["map"][num[n]] < 0]
+        put("sons : tout son d'un MT present (hors statiques) est dans la carte", not missing,
+            f"{len(want)} attendus" + (f", absents {missing}" if missing else ""))
+        inv = {v: k for k, v in enumerate(snd["map"]) if v >= 0}
+        bad = []
+        for i, s_ in enumerate(snd["sounds"]):
+            sfx = inv.get(i)
+            nm = ids["sfx_names"][sfx] if sfx is not None else None
+            ok_ = (s_["rate"] == 0x7000 and s_["bps"] == 8 and s_["loopStart"] == -1
+                   and not (len(s_["pcm"]) & 1))
+            if nm and Wd.has(wad2snd.lump_name(nm)):
+                ln = struct.unpack("<HHI", Wd.lump(wad2snd.lump_name(nm))[:8])[2]
+                ok_ = ok_ and len(s_["pcm"]) == (ln - 32 + 1) // 2 * 2
+            if not ok_:
+                bad.append((i, nm))
+        put("sons : rate 0x7000, bps 8, loop -1, size pair == len - 32", not bad, str(bad[:3]))
+        put("sons : map[sfx] dans [0, n) pour toute entree >= 0",
+            all(v < len(snd["sounds"]) for v in snd["map"] if v >= 0))
+        nst = static["static_sounds"] if static else 20
+        top = sum(len(s_["pcm"]) for s_ in snd["sounds"]) + (static["static_pcm"] if static else 0)
+        put("sons : n dynamiques + statiques < 80, soundTop < 512 Ko",
+            len(snd["sounds"]) + nst < 80 and top < 512 * 1024,
+            f"{len(snd['sounds'])} + {nst} = {len(snd['sounds']) + nst} ; PCM {top} o"
+            + ("" if static else " (statiques non comptes)"))
+
+        # 20. BARILS (SPEC_RUNTIME 2 : sphere de rayon height/2 = 21 u) : un baril a moins de
+        #     21 + 16 u d'un mur PLEIN de sa feuille n'est plus contournable -> avertissement.
+        mt_bar = ids["mt_names"].index("MT_BARREL") if "MT_BARREL" in ids["mt_names"] else -1
+        ot_bar = ids["mt_to_ot"][mt_bar] if mt_bar >= 0 else -1
+        close = []
+        nbar = 0
+        for o in obj:
+            if o["type"] != ot_bar:
+                continue
+            nbar += 1
+            s_, x, y, z = struct.unpack(">4h", bytes(p[o["firstParam"]:o["firstParam"] + 8]))
+            sec = S[s_]
+            for wi in range(sec["firstWall"], sec["lastWall"] + 1):
+                w = W[wi]
+                if w["normal"][1] != 0 or w["nextSector"] != -1:
+                    continue
+                ax, az = V[w["v"][0]]["x"], V[w["v"][0]]["z"]
+                bx, bz = V[w["v"][1]]["x"], V[w["v"][1]]["z"]
+                ex, ez = bx - ax, bz - az
+                L2 = ex * ex + ez * ez
+                t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((x - ax) * ex + (z - az) * ez) / L2))
+                d = math.hypot(x - (ax + t * ex), z - (az + t * ez))
+                if d < 21 + 16:
+                    close.append((s_, wi, round(d, 1)))
+                    break
+        if close:
+            print(f"  [AVERT] barils : {len(close)}/{nbar} a moins de 37 u d'un mur plein de leur "
+                  f"feuille (non contournables), ex. {close[:4]}")
+        else:
+            put("barils a >= 37 u des murs pleins", True, f"{nbar} barils")
+
+    # 21. TAILLES : bloc niveau < 900 000 (LEVEL.C:41), sequences < 1 Mo (SEQUENCE.C:30) ; somme
+    #     RESIDENTE niveau + palettes + tuiles (4 096 par 0x32, RLE par 0x6A : PIC.C:513, :575)
+    #     + sequences + STATIC (tuiles d'armes + wseq, deja en memoire) <= pool reel = LWRAM 1 Mo
+    #     + (0x06100000 - _end de build/doom/MAIN.map) (UTIL.C:352-359). Les sons vont a la SCSP.
+    lvl = lay["level"]["size"]
+    psz = lay["tiles"]["palette_size"]
+    tsz = sum(((4096 if "pixels" in t else len(t["rle"])) + 3) & ~3 for t in tiles)   # align 4 (UTIL.C:370)
+    ssz = lay["sequences"]["size"]
+    put("bloc niveau < 900 000, sequences < 1 Mo", 0 < lvl < 900000 and 0 < ssz < 1024 * 1024,
+        f"niveau {lvl}, sequences {ssz}")
+    high, src = 435176, "defaut"
+    mp = os.path.join(ROOT, "build", "doom", "MAIN.map")
+    if os.path.exists(mp):
+        m = re.search(r"^\s*0x([0-9a-fA-F]+)\s+_end\s*=", open(mp, encoding="latin-1").read(), re.M)
+        if m:
+            high = 0x06100000 - int(m.group(1), 16)
+            src = "MAIN.map _end=0x%08x" % int(m.group(1), 16)
+    pool = 1024 * 1024 + high
+    st_res = (static["weapon_tiles_bytes"] + static["wseq_bytes"]) if static else 0
+    res = ((lvl + 3) & ~3) + ((psz + 3) & ~3) + tsz + ((ssz + 3) & ~3) + st_res
+    put("memoire residente <= pool (LWRAM 1 Mo + haut de HWRAM)", res <= pool,
+        f"niveau {lvl} + palettes {psz} + tuiles {tsz} + sequences {ssz} + STATIC {st_res} = {res} ; "
+        f"pool {pool} ({src}) ; marge {pool - res}")
+
+
+def wadmod_of(a):
+    sys.path.insert(0, HERE)
+    import wad as wadmod
+    if not hasattr(wadmod_of, "cache"):
+        wadmod_of.cache = wadmod.Wad(a.wad)
+    return wadmod_of.cache
 
 
 if __name__ == "__main__":

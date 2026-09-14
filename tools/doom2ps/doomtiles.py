@@ -43,8 +43,15 @@ class TileMaker:
         self.w = wad
         self.pal = wad.playpal(0)
         # entree de substitution pour l'indice 0 : la plus proche du noir parmi 1..255
-        self.sub0 = min(range(1, 256),
+        self.sub0 = min(range(1, 255),
                         key=lambda i: sum(c * c for c in self.pal[i]))
+        # entree 255 : `loadPalletes` force `objectPal[255] = 0xffff` EN MEMOIRE (PIC.C:631) avant
+        # que load16BPPTile ne convertisse les indices (PIC.C:517-527) -- la palette 0 est aussi la
+        # palette objet (make_e1m1 : objectPalette = 0), donc un pixel 255 de geometrie deviendrait
+        # blanc. On le deplace vers l'entree 1..254 la plus proche, comme rle8.object_palette.
+        r, g, b = self.pal[255]
+        self.sub255 = min(range(1, 255), key=lambda i: (self.pal[i][0] - r) ** 2
+                          + (self.pal[i][1] - g) ** 2 + (self.pal[i][2] - b) ** 2)
         self.flats = wad.flats()
         self.texdefs = wad.textures()
         self.pnames = wad.pnames()
@@ -53,12 +60,17 @@ class TileMaker:
 
     def palette(self):
         out = [0x0000]                                  # 0 = transparence (PIC.C:500-531)
-        for i in range(1, 256):
+        for i in range(1, 255):
             out.append(bgr555(self.pal[i]))
+        out.append(0xFFFF)                              # 255 : ce que PIC.C:631 y met de toute facon
         return out
 
     def fix(self, v):
-        return self.sub0 if v == 0 else v
+        if v == 0:
+            return self.sub0
+        if v == 255:
+            return self.sub255
+        return v
 
     def patch(self, idx):
         nm = self.pnames[idx]
@@ -183,7 +195,7 @@ def main(argv=None):
     os.replace(tmp, a.out)
 
     print(f"E4 : {len(tiles)} tuiles 64x64 ({len(tiles) * 4096:,} o), "
-          f"indice 0 -> {tm.sub0} (RGB {tm.pal[tm.sub0]})")
+          f"indice 0 -> {tm.sub0} (RGB {tm.pal[tm.sub0]}), 255 -> {tm.sub255}")
     print(f"  {exact}/{len(detail)} a l'echelle exacte (cellule = taille de la texture)")
     for d in detail:
         if d["kind"] == "tex" and (d["cu"] != d["w"] or d["cv"] != d["h"]):

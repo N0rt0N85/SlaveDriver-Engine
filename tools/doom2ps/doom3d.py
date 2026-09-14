@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools", "duke2ps"))
 
 import wad as wadmod                                   # noqa: E402
 import adjacency                                       # noqa: E402
+import doom_specials as sp                             # noqa: E402
 from geom3d import (Emitter, TILESIZE, CAP_CELLS, plane_of, area2,     # noqa: E402
                     CELL_MIN_U, CELL_MAX_U, CELL_MIN_V, CELL_MAX_V, SECTOR_LIGHT,
                     CELL_HARD_MAX)
@@ -64,6 +65,66 @@ WORLD_LIMIT = 16000         # assert(camera->pos.x < F(16000)) WALLS.C:1605-1606
 # quand `opening < hauteur de MT_PLAYER`, soit 56. Elle est aussi tres au-dessus des 2 x 16 = 32
 # de la sphere de `params/doom.cfg`, donc ce qui est autorise passe physiquement.
 PLAYER_FIT_HEIGHT = 56.0
+
+# ----------------------------------------------------------------------------------------
+# geometrie MOBILE (--mobile) : portes fermees + course, push blocks (SPEC_CONVERTER 5.1)
+# ----------------------------------------------------------------------------------------
+# Fente d'une ouverture fermee : plafond de porte = sol + 1, portail d'ascenseur ferme = 1 u sous
+# le sol. `Emitter.add_wall` rejette un quad sans plan (geom3d.py:400-404, `quads_degeneres`), donc
+# une ouverture de hauteur 0 n'aurait AUCUN mur a faire bouger. 1 u < 56 : SHORTOPENING bloque le
+# joueur tant que c'est ferme (E8), et `setDoorBlockBits` recalcule a chaque pas de porte (AI.C:4294).
+DOOR_SLIT = sp.DOOR_SLIT
+WALLFLAG_DOORWALL = 0x20
+WALLFLAG_SHORTOPENING = 0x1000
+PBVERT_MAX = 255            # sPBVertex.vNm est un unsigned char (SLEVEL.H:109-113)
+
+
+class MobileTag:
+    """Un secteur Doom qui bouge : la liste ORDONNEE des murs .LEV qui le composent (PBWall) et
+    l'ensemble des sommets a la hauteur mobile (PBVert). Les sommets sont notes PAR ROLE au moment
+    de l'emission (haut d'un mur de porte, bas d'un mur d'ascenseur, sol/plafond entier), jamais
+    en cherchant une coordonnee apres coup : le plafond ferme d'une porte et son sol sont a 1 u.
+    Seul `dy` est applique par le moteur (SPRITE.C:852-890)."""
+
+    def __init__(self, sector, kind, lower, upper):
+        self.sector = sector            # secteur Doom
+        self.kind = kind                # 'door' | 'lift' | 'floor_*'
+        self.lower, self.upper = lower, upper
+        # OBJETS mur (dicts de l'Emitter), pas des index : `emit_leaf` reordonne les murs d'une
+        # feuille apres emission (portails en tete), donc un index note pendant l'emission est
+        # perime. Les index sont resolus par `wall_indices` une fois le niveau construit.
+        self.walls = []                 # dicts de murs, dans l'ordre d'emission, sans doublon
+        self._wset = set()
+        self.verts = set()              # index de sommets .LEV (jamais reordonnes)
+        self.leaves = []                # secteurs .LEV (feuilles) du secteur Doom
+        self.leaf_area = {}             # secteur .LEV -> aire (choix de enclosingSector/floorSector)
+        self.doorwalls = 0
+
+    @property
+    def throw(self):
+        return self.upper - self.lower
+
+    def add_wall(self, w):
+        if id(w) not in self._wset:
+            self._wset.add(id(w))
+            self.walls.append(w)
+
+    def wall_indices(self, em):
+        pos = {id(w): i for i, w in enumerate(em.walls)}
+        return [pos[id(w)] for w in self.walls]
+
+
+def close_doors(M, specials, slit=DOOR_SLIT):
+    """Ferme les portes (plafond = sol + fente) : l'etat FICHIER d'une porte est ferme, le moteur
+    la monte de `doorHeight` a l'execution. Une porte deja ouverte dans le WAD est laissee."""
+    sects = M["sectors"]
+    n = 0
+    for d in specials.doors:
+        s = sects[d["sector"]]
+        if s.ceilh <= s.floorh:
+            sects[d["sector"]] = s._replace(ceilh=s.floorh + slit)
+            n += 1
+    return n
 
 
 # ----------------------------------------------------------------------------------------
@@ -193,7 +254,9 @@ def light_of(level):
 
 
 class DoomConverter:
-    def __init__(self, M, sizes, cap_cells=CAP_CELLS):
+    def __init__(self, M, sizes, cap_cells=CAP_CELLS, mobile=None, switch_lines=None):
+        """`mobile` : {secteur Doom: MobileTag} (--mobile) ; `switch_lines` : {linedef: dict(channel,
+        special)} des interrupteurs S dont il faut isoler la tuile (doom_specials.specials_of)."""
         self.M = M
         self.bsp = Bsp(M)
         self.em = Emitter()
@@ -202,6 +265,14 @@ class DoomConverter:
         self.pic = {}                         # ("tex"|"flat", nom) -> picnum
         self.picnames = []
         self.stats = Counter()
+        self.mobile = mobile or {}
+        self.switch_lines = switch_lines or {}
+        # murs DOORWALL portes par une ligne ML_SECRET (0x20) : les DICTS, pas les index -- la
+        # feuille est reordonnee apres emission (portails en tete, :523), cf. MobileTag (:94)
+        self.secret_walls = []
+        self._secret_ids = set()
+        self.switch_hits = defaultdict(list)  # linedef -> [dict(leaf, walls, name, bot, top, P, Q)]
+        self.switches = []                    # finalize_mobile : objets OT_SW1..4 a emettre
         # Polygones ETIQUETES + frontieres exactes : voir tools/doom2ps/adjacency.py. La
         # reciprocite des portails y est vraie par construction, ce qui supprime l'echantillonnage
         # de voisinage de la 1re version (58 portails a sens unique, 31 trous, MESURE sur E1M1).
@@ -308,15 +379,19 @@ class DoomConverter:
         return sec.ceilpic == SKYFLAT
 
     def emit_wall(self, P, Q, bot, top, *, next_sector, tex, picnum, light, invisible,
-                  centre=None):
+                  centre=None, mob=None, open_height=None):
+        """Emet un mur vertical. `mob` = [(MobileTag, 'top'|'bottom')] : les sommets de cette
+        arete rejoignent le push block ; `open_height` : la tuile des cellules est refaite pour
+        cette hauteur (etat OUVERT d'un mur qui grandit : rails de porte, contremarche d'ascenseur).
+        Retourne la liste des index de murs emis (un mur trop grand est decoupe)."""
         if top - bot <= 0:
-            return
+            return []
         quad = [(P[0], top, P[1]), (Q[0], top, Q[1]),
                 (Q[0], bot, Q[1]), (P[0], bot, P[1])]
         pl = plane_of(quad)
         if pl is None:
             self.stats["quads_degeneres"] += 1
-            return
+            return []
         # NORMALE VERS L'INTERIEUR. drawSector cull un mur quand (camera - v[0]) . normal < 0
         # (WALLS.C:1618-1622) : un quad monte dans le mauvais sens est invisible depuis son
         # propre secteur. Le sens depend du parcours P->Q et de la main du repere, donc on ne
@@ -329,9 +404,68 @@ class DoomConverter:
             if n[0] * (centre[0] - qx) + n[2] * (centre[1] - qz) < 0:
                 quad = [quad[1], quad[0], quad[3], quad[2]]
                 self.stats["quads_retournes"] += 1
-        self.em.add_wall(quad, next_sector=next_sector, picnum=picnum,
-                         invisible=invisible, blocked=(next_sector < 0), light=light,
-                         cap_cells=self.cap, stats=self.stats, tex=tex)
+        idx = self.em.add_wall(quad, next_sector=next_sector, picnum=picnum,
+                               invisible=invisible, blocked=(next_sector < 0), light=light,
+                               cap_cells=self.cap, stats=self.stats, tex=tex)
+        if open_height and not invisible:
+            self._rekey_height(idx, open_height)
+        for (tag, role) in (mob or ()):
+            self._tag_walls(idx, tag, role, top if role == "top" else bot)
+        return idx
+
+    # -- mobile ----------------------------------------------------------------------------
+    def _tag_walls(self, idx, tag, role, yv):
+        """Note les murs `idx` dans le push block `tag` et leurs sommets de l'arete `role`
+        (y == yv, la hauteur de CETTE arete : haut ou bas du quad emis, jamais une recherche
+        globale). Un portail d'une porte recoit DOORWALL (relu par setDoorBlockBits AI.C:4294-4309)
+        et SHORTOPENING (fente 1 u < 56)."""
+        V, W = self.em.vertices, self.em.walls
+        for wi in idx:
+            w = W[wi]
+            tag.add_wall(w)
+            vs = list(w["v"])
+            if w["firstVertex"] != 65535:
+                vs += range(w["firstVertex"], w["lastVertex"] + 1)
+            tag.verts.update(vi for vi in vs if V[vi]["y"] == yv)
+            if tag.kind == "door" and w["nextSector"] >= 0 and not (w["flags"] & WALLFLAG_DOORWALL):
+                w["flags"] |= WALLFLAG_DOORWALL | WALLFLAG_SHORTOPENING
+                tag.doorwalls += 1
+                self.stats["doorwalls"] += 1
+        self.stats["murs_mobiles"] += len(idx)
+
+    def _tag_flat(self, idx, tag):
+        """Sol ou plafond entier d'un secteur mobile : tous ses sommets bougent."""
+        V, W = self.em.vertices, self.em.walls
+        for wi in idx:
+            w = W[wi]
+            tag.add_wall(w)
+            tag.verts.update(w["v"])
+            if w["firstVertex"] != 65535:
+                tag.verts.update(range(w["firstVertex"], w["lastVertex"] + 1))
+        self.stats["plats_mobiles"] += len(idx)
+
+    def _rekey_height(self, idx, open_h):
+        """Refait la cle de tuile des cellules pour la hauteur `open_h` (E4.1c : la tuile est
+        faite POUR la cellule ; ici la cellule du fichier fait 1 u et celle qu'on voit fait
+        `open_h`). Les cles orphelines sont retirees par `compact_tiles`."""
+        em = self.em
+        for wi in idx:
+            w = em.walls[wi]
+            if not (w["flags"] & 0x01):
+                continue
+            n = w["tileLength"] * w["tileHeight"]
+            for c in range(n):
+                t = em.texture[w["textures"] + 2 * c + 1]
+                key = tuple(em.tiles[t])
+                if len(key) >= 7:
+                    key = key[:5] + (round(float(open_h), 2), key[6])
+                    em.texture[w["textures"] + 2 * c + 1] = em.tile(key)
+        self.stats["cellules_rekeyees_ouvert"] += 1
+
+    def _note_switch(self, sg, leaf, idx, name, bot, top, P, Q):
+        if sg.line in self.switch_lines and sg.side == 0 and idx:
+            self.switch_hits[sg.line].append(dict(leaf=leaf, walls=[self.em.walls[i] for i in idx],
+                                                  name=name, bot=bot, top=top, P=P, Q=Q))
 
     def _dans_la_carte(self, li):
         ring = self.polys[li]
@@ -368,16 +502,22 @@ class DoomConverter:
         pxz = list(poly)
         if area2(pxz) < 0:
             pxz = pxz[::-1]
+        ms = self.mobile.get(self.leaf_sector[leaf])
         ftex, fpic = self.flat_tex(sec.floorpic)
-        self.em.add_flat(pxz, lambda x, z: fh, is_floor=True, picnum=fpic,
-                         parallax=False, light=light, stats=self.stats, tex=ftex)
+        fidx = self.em.add_flat(pxz, lambda x, z: fh, is_floor=True, picnum=fpic,
+                                parallax=False, light=light, stats=self.stats, tex=ftex)
         if self.sky(sec):
-            self.em.add_flat(pxz, lambda x, z: ch, is_floor=False, picnum=0,
-                             parallax=True, light=light, stats=self.stats, tex=None)
+            cidx = self.em.add_flat(pxz, lambda x, z: ch, is_floor=False, picnum=0,
+                                    parallax=True, light=light, stats=self.stats, tex=None)
         else:
             ctex, cpic = self.flat_tex(sec.ceilpic)
-            self.em.add_flat(pxz, lambda x, z: ch, is_floor=False, picnum=cpic,
-                             parallax=False, light=light, stats=self.stats, tex=ctex)
+            cidx = self.em.add_flat(pxz, lambda x, z: ch, is_floor=False, picnum=cpic,
+                                    parallax=False, light=light, stats=self.stats, tex=ctex)
+        if ms is not None:
+            # porte : le plafond monte ; ascenseur / sol : le sol descend
+            self._tag_flat(cidx if ms.kind == "door" else fidx, ms)
+            ms.leaves.append(self.remap[leaf])
+            ms.leaf_area[self.remap[leaf]] = abs(area2(pxz)) / 2.0
 
         # PORTAILS EN TETE : findDoorways fait `if (nextSector == -1) return;` (WALLS.C:1740-1743).
         # 0 des 8 211 secteurs retail ne viole la regle ; 361 de nos 440 la violaient au 2e disque
@@ -414,15 +554,35 @@ class DoomConverter:
         sg = self.seg_on_edge(leaf, tag, ta, tb)
         nbi = self.remap.get(nb, -1) if nb is not None and nb >= 0 else -1
 
+        # ROLES MOBILES (--mobile). `ms` = ce secteur bouge, `mn` = le voisin bouge. Porte : tout
+        # ce dont le HAUT est le plafond de la porte monte (murs de la porte, portails, et le bas
+        # des linteaux du voisin) ; ascenseur / sol : tout ce dont le BAS est le sol de
+        # l'ascenseur descend (murs de l'ascenseur, portails, et le haut des contremarches du
+        # voisin). Les linteaux ne suivent JAMAIS un sol : le linteau [plafond voisin, plafond]
+        # est fixe dans Doom quelle que soit la position de la plate-forme.
+        ms = self.mobile.get(self.leaf_sector[leaf])
+        mn = (self.mobile.get(self.leaf_sector[nb])
+              if (nb is not None and nb >= 0 and nb in self.remap) else None)
+        if mn is ms:
+            mn = None
+
+        def own(bot_, top_):
+            if ms is None:
+                return []
+            if ms.kind == "door":
+                return [(ms, "top")] if top_ == ch else []
+            return [(ms, "bottom")] if bot_ == fh else []
+
         if sg is None:
             # arete de partition pure : portail plein, invisible
             if nbi < 0:
                 self.stats["bords_de_carte"] += 1
                 self.emit_wall(P, Q, fh, ch, next_sector=-1, tex=None,
-                               picnum=self.picnum("tex", "-"), light=light, invisible=True, centre=cen)
+                               picnum=self.picnum("tex", "-"), light=light, invisible=True,
+                               centre=cen, mob=own(fh, ch))
             else:
                 self.emit_wall(P, Q, fh, ch, next_sector=nbi, tex=None, picnum=0,
-                               light=light, invisible=True, centre=cen)
+                               light=light, invisible=True, centre=cen, mob=own(fh, ch))
                 self.stats["portails_chord"] += 1
             return
 
@@ -447,8 +607,12 @@ class DoomConverter:
             # une face : `mid` = plafond (defaut) ou sol + h (DONTPEGBOTTOM)
             v = ((h - (ch - fh)) % h if pegbot else 0) + yoff
             tex, pic = self.wall_tex(name, ch - fh, v)
-            self.emit_wall(P, Q, fh, ch, next_sector=-1, tex=tex, picnum=pic,
-                           light=light, invisible=False, centre=cen)
+            # rail de porte (DOORTRAK) : 1 u ferme, doorHeight + 1 ouvert -> tuile pour l'ouvert
+            oh = (ms.throw + (ch - fh)) if (ms is not None and ms.kind == "door") else None
+            idx = self.emit_wall(P, Q, fh, ch, next_sector=-1, tex=tex, picnum=pic,
+                                 light=light, invisible=False, centre=cen, mob=own(fh, ch),
+                                 open_height=oh)
+            self._note_switch(sg, leaf, idx, name, fh, ch, P, Q)
             self.stats["murs_pleins"] += 1
             return
 
@@ -462,6 +626,9 @@ class DoomConverter:
         nfh, nch = nsec.floorh, nsec.ceilh
         bot, top = max(fh, nfh), min(ch, nch)
 
+        mn_lift = mn is not None and mn.kind != "door"
+        mn_door = mn is not None and mn.kind == "door"
+
         if nfh > fh:                                   # marche montante : contremarche
             name = side.lower if side and side.lower != "-" else "BROWN1"
             h = self.tex_h(name)
@@ -469,9 +636,23 @@ class DoomConverter:
             # bas : `mid` = sol du voisin (defaut) ou plafond de devant (DONTPEGBOTTOM)
             v = ((ch - hb) % h if pegbot else 0) + yoff
             tex, pic = self.wall_tex(name, hb - fh, v)
-            self.emit_wall(P, Q, fh, hb, next_sector=-1, tex=tex, picnum=pic,
-                           light=light, invisible=False, centre=cen)
+            mob = own(fh, hb) + ([(mn, "top")] if (mn_lift and hb == nfh) else [])
+            idx = self.emit_wall(P, Q, fh, hb, next_sector=-1, tex=tex, picnum=pic,
+                                 light=light, invisible=False, centre=cen, mob=mob)
+            self._note_switch(sg, leaf, idx, name, fh, hb, P, Q)
             self.stats["contremarches"] += 1
+        elif mn_lift and nfh == fh:
+            # ascenseur voisin au MEME niveau : contremarche de hauteur 0. Fente de 1 u SOUS le sol
+            # (cachee par le sol tant que la plate-forme est en haut) dont le BAS suit l'ascenseur :
+            # en bas, c'est le flanc de la cage, texture `lower` du sidedef, faite pour la course.
+            name = side.lower if side and side.lower != "-" else "BROWN1"
+            h = self.tex_h(name)
+            v = ((ch - fh) % h if pegbot else 0) + yoff
+            tex, pic = self.wall_tex(name, DOOR_SLIT, v)
+            self.emit_wall(P, Q, fh - DOOR_SLIT, fh, next_sector=-1, tex=tex, picnum=pic,
+                           light=light, invisible=False, centre=cen, mob=[(mn, "bottom")],
+                           open_height=mn.throw + DOOR_SLIT)
+            self.stats["contremarches_fente"] += 1
         if nch < ch:                                   # linteau
             if self.sky(sec) and self.sky(nsec):
                 pass                                   # deux ciels : rien (Doom ne dessine rien)
@@ -482,14 +663,39 @@ class DoomConverter:
                 # haut : `mid` = plafond de devant (DONTPEGTOP) ou plafond du voisin + h (defaut)
                 v = (0 if pegtop else (h - (ch - hb)) % h) + yoff
                 tex, pic = self.wall_tex(name, ch - hb, v)
-                self.emit_wall(P, Q, hb, ch, next_sector=-1, tex=tex, picnum=pic,
-                               light=light, invisible=False, centre=cen)
+                mob = ([(ms, "top")] if (ms is not None and ms.kind == "door") else []) + (
+                    [(mn, "bottom")] if (mn_door and hb == nch) else [])
+                idx = self.emit_wall(P, Q, hb, ch, next_sector=-1, tex=tex, picnum=pic,
+                                     light=light, invisible=False, centre=cen, mob=mob)
+                self._note_switch(sg, leaf, idx, name, hb, ch, P, Q)
                 self.stats["linteaux"] += 1
 
         if top > bot and nbi >= 0:
-            self.emit_wall(P, Q, bot, top, next_sector=nbi, tex=None, picnum=0,
-                           light=light, invisible=True, centre=cen)
+            mob = own(bot, top)
+            if mn_door and top == nch:
+                mob.append((mn, "top"))
+            if mn_lift and bot == nfh:
+                mob.append((mn, "bottom"))
+            idx = self.emit_wall(P, Q, bot, top, next_sector=nbi, tex=None, picnum=0,
+                                 light=light, invisible=True, centre=cen, mob=mob)
+            if ld.flags & 0x0020:                      # ML_SECRET : un monstre ne l'ouvre pas
+                for wi in idx:
+                    w = self.em.walls[wi]
+                    if (w["flags"] & WALLFLAG_DOORWALL) and id(w) not in self._secret_ids:
+                        self._secret_ids.add(id(w))
+                        self.secret_walls.append(w)
             self.stats["portails_ligne"] += 1
+        elif top <= bot and nbi >= 0 and (
+                (ms is not None and ms.kind != "door" and bot == fh)
+                or (mn_lift and bot == nfh)):
+            # ouverture fermee par le SOL de l'ascenseur (plafond du voisin bas = sol de la
+            # plate-forme, ex. E1M1 58|70) : portail-fente 1 u sous le sol, dont le bas descend
+            # avec l'ascenseur. Le linteau au-dessus est deja emis et reste fixe.
+            mob = ([(ms, "bottom")] if (ms is not None and ms.kind != "door" and bot == fh)
+                   else []) + ([(mn, "bottom")] if (mn_lift and bot == nfh) else [])
+            self.emit_wall(P, Q, bot - DOOR_SLIT, bot, next_sector=nbi, tex=None, picnum=0,
+                           light=light, invisible=True, centre=cen, mob=mob)
+            self.stats["portails_fente"] += 1
         elif top <= bot:
             # ouverture fermee (porte baissee, mur plein a deux faces) : bouchon plein
             name = side.middle if side and side.middle != "-" else (
@@ -497,8 +703,9 @@ class DoomConverter:
             h = self.tex_h(name)
             v = ((h - (ch - fh)) % h if pegbot else 0) + yoff
             tex, pic = self.wall_tex(name, ch - fh, v)
-            self.emit_wall(P, Q, fh, ch, next_sector=-1, tex=tex, picnum=pic,
-                           light=light, invisible=False, centre=cen)
+            idx = self.emit_wall(P, Q, fh, ch, next_sector=-1, tex=tex, picnum=pic,
+                                 light=light, invisible=False, centre=cen, mob=own(fh, ch))
+            self._note_switch(sg, leaf, idx, name, fh, ch, P, Q)
             self.stats["ouvertures_fermees"] += 1
 
     def post_flags(self):
@@ -521,7 +728,130 @@ class DoomConverter:
         for li in self.keep:
             self.emit_leaf(li)
         self.post_flags()
+        if self.mobile or self.switch_lines:
+            self.finalize_mobile()
         return self.em
+
+    # -- mobile : interrupteurs et compaction des tuiles -----------------------------------
+    def finalize_mobile(self):
+        """Interrupteurs S : la tuile OFF doit etre UNIQUE dans la feuille (`constructSwitch`
+        cherche `level_texture[t] == ourTile` dans les murs de `sectorNm`, AI2.C:606-632) et la
+        tuile ON existe pour l'animation. On donne au mur de l'interrupteur une cle de tuile
+        DEDIEE (cle E4.1c + marqueur 'sw') et on fabrique la cle ON (SW2xxx) de la meme cellule ;
+        doomtiles.py lit `key[0], key[5], key[6]` et ignore le reste. Un type OT_SW1..4 par paire
+        (OFF, ON) : `level_sequenceMap[type]` est la seule sequence d'un type (AI2.C:598)."""
+        em = self.em
+        pos = {id(w): i for i, w in enumerate(em.walls)}
+        pairs = {}
+        for line, hits in sorted(self.switch_hits.items()):
+            info = self.switch_lines[line]
+            cand = [h for h in hits if h["name"].startswith(("SW1", "SW2"))] or hits
+            done_leaf = set()
+            for h in cand:
+                if h["leaf"] in done_leaf:
+                    continue
+                done_leaf.add(h["leaf"])
+                w = h["walls"][0]
+                wi = pos[id(w)]
+                if not (w["flags"] & 0x01):
+                    self.stats["interrupteur_sur_mur_a_faces"] += 1
+                    continue
+                n = w["tileLength"] * w["tileHeight"]
+                if n > 1 or len(h["walls"]) > 1:
+                    self.stats["interrupteur_multi_cellules"] += 1
+                t = em.texture[w["textures"] + 1]
+                key = tuple(em.tiles[t])
+                off_name = self.picnames[key[0]][1]
+                on_name = ("SW2" + off_name[3:]) if off_name.startswith("SW1") else (
+                    ("SW1" + off_name[3:]) if off_name.startswith("SW2") else off_name)
+                p_on = self.picnum("tex", on_name)
+                off_key = key + ("sw",)
+                on_key = (p_on,) + key[1:] + ("sw",)
+                t_off = em.tile(off_key)
+                t_on = em.tile(on_key)
+                for c in range(n):
+                    em.texture[w["textures"] + 2 * c + 1] = t_off
+                pair = (t_off, t_on)
+                if pair not in pairs:
+                    if len(pairs) >= 4:
+                        raise SystemExit("plus de 4 paires de tuiles d'interrupteur : "
+                                         "OT_SW1..OT_SW4 seulement (SLEVEL.H)")
+                    pairs[pair] = sp.OT_SW1 + len(pairs)
+                # orifice : milieu du mur, a hauteur d'oeil (le press mesure < 40 u depuis le
+                # POINT D'IMPACT du rayon, SRUINS.C:843-853 ; l'oeil est a sol + 41)
+                P, Q = h["P"], h["Q"]
+                oy = h["bot"] + sp.PLAYER_EYE
+                oy = max(h["bot"], min(h["top"], oy))
+                self.switches.append(dict(
+                    line=line, channel=info["channel"], special=info["special"],
+                    leaf=h["leaf"], leaf_sector=self.remap[h["leaf"]], wall=wi,
+                    tile_off=t_off, tile_on=t_on, type=pairs[pair],
+                    texture_off=off_name, texture_on=on_name,
+                    orifice=[int(round((P[0] + Q[0]) / 2.0)), int(oy),
+                             int(round((P[1] + Q[1]) / 2.0))]))
+                self.stats["interrupteurs"] += 1
+        for line in self.switch_lines:
+            if line not in self.switch_hits:
+                self.stats["interrupteur_sans_mur"] += 1
+        # la tuile ON n'est referencee que par les chunks de la sequence d'interrupteur : a garder
+        remap = self.compact_tiles(extra={s["tile_on"] for s in self.switches}
+                                   | {s["tile_off"] for s in self.switches})
+        for s in self.switches:
+            s["tile_off"] = remap[s["tile_off"]]
+            s["tile_on"] = remap[s["tile_on"]]
+
+    def compact_tiles(self, extra=()):
+        """Retire les cles de tuile qu'aucune cellule ni face ne reference plus (rekey des murs
+        mobiles, interrupteurs) : la geometrie doit tenir en <= 255 - tileBase tuiles u8.
+        `extra` = index a garder quoi qu'il arrive (tuile ON des interrupteurs)."""
+        em = self.em
+        used = {em.texture[i] for i in range(1, len(em.texture), 2)}
+        used |= {f["tile"] for f in em.faces}
+        used |= set(extra)
+        keep = [t for t in range(len(em.tiles)) if t in used]
+        remap = {t: k for k, t in enumerate(keep)}
+        if len(keep) != len(em.tiles):
+            self.stats["tuiles_orphelines_retirees"] += len(em.tiles) - len(keep)
+            em.tiles = [em.tiles[t] for t in keep]
+            em._tile_index = {tuple(k): i for i, k in enumerate(em.tiles)}
+            for i in range(1, len(em.texture), 2):
+                em.texture[i] = remap[em.texture[i]]
+            for f in em.faces:
+                f["tile"] = remap[f["tile"]]
+        return remap
+
+
+def push_blocks(conv, tags):
+    """sPBType / sPBVertex / PBWall (SLEVEL.H:97-113) pour chaque secteur mobile, dans l'ordre
+    des `tags`. -> (pushBlocks, PBVert, PBWall, pb_index {secteur Doom: pb}).
+    `enclosingSector` = la plus grande feuille (position du son, OBJECT.C:550-561) ;
+    `floorSector` = cette feuille pour un ascenseur / sol (les sprites qui s'y tiennent suivent,
+    SPRITE.C:873-887 -- une seule feuille par push block), -1 pour une porte ;
+    `dx = dy = dz = 0` ; les plages start..end sont INCLUSIVES."""
+    pbs, pbv, pbw, index = [], [], [], {}
+    for tag in tags:
+        if not tag.walls:
+            conv.stats["push_block_vide"] += 1
+            continue
+        w0 = len(pbw)
+        pbw.extend(tag.wall_indices(conv.em))
+        v0 = len(pbv)
+        run = []
+        for vi in sorted(tag.verts) + [None]:
+            if run and (vi is None or vi != run[-1] + 1 or len(run) >= PBVERT_MAX):
+                pbv.append(dict(vStart=run[0], vNm=len(run), flags=0))
+                run = []
+            if vi is not None:
+                run.append(vi)
+        if len(pbv) == v0:
+            conv.stats["push_block_sans_sommet"] += 1
+            continue
+        big = max(tag.leaves, key=lambda s: tag.leaf_area.get(s, 0)) if tag.leaves else 0
+        index[tag.sector] = len(pbs)
+        pbs.append(dict(enclosingSector=big, startWall=w0, endWall=len(pbw) - 1,
+                        startVertex=v0, endVertex=len(pbv) - 1,
+                        floorSector=(-1 if tag.kind == "door" else big), dx=0, dy=0, dz=0))
+    return pbs, pbv, pbw, index
 
 
 # ----------------------------------------------------------------------------------------
@@ -628,21 +958,43 @@ def main(argv=None):
     ap.add_argument("--map", default="E1M1")
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "doom2ps", "e1m1_geom3d.json"))
     ap.add_argument("--cap-cells", type=int, default=CAP_CELLS)
+    ap.add_argument("--mobile", action="store_true",
+                    help="portes FERMEES + course, push blocks, interrupteurs (SPEC_CONVERTER 5.1) ; "
+                         "la sortie gagne une cle `mobile`")
+    ap.add_argument("--static-doors", action="store_true",
+                    help="portes ouvertes en dur (open_doors, controle visuel) -- le defaut sans --mobile")
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
 
     W = wadmod.Wad(a.wad)
     M = wadmod.read_map(W, a.map)
-    nportes = open_doors(M)
     sizes = {nm: (t["width"], t["height"]) for nm, t in W.textures().items()}
     print(f"doom2ps E3 : {a.map} de {os.path.basename(a.wad)} -- "
           f"{len(M['sectors'])} secteurs Doom, {len(M['subsectors'])} feuilles BSP, "
           f"{len(M['segs'])} segs")
-    if nportes:
-        print(f"  {nportes} portes ouvertes (plafond = plus bas plafond voisin - 4, "
-              f"regle de EV_VerticalDoor)")
-
-    conv = DoomConverter(M, sizes, a.cap_cells)
+    specials = tags = None
+    if a.mobile and not a.static_doors:
+        specials = sp.specials_of(M)
+        nportes = close_doors(M, specials)
+        tags = {}
+        for d in specials.doors + specials.lifts + specials.floors:
+            tags[d["sector"]] = MobileTag(d["sector"], d["kind"], d["lower"], d["upper"])
+        print(f"  mobile : {len(specials.doors)} portes fermees (fente {DOOR_SLIT} u, {nportes} "
+              f"plafonds abaisses), {len(specials.lifts)} ascenseurs, {len(specials.floors)} sols, "
+              f"{len(specials.wswitch)} lignes W, {len(specials.sswitch)} lignes S, "
+              f"{len(specials.exits)} sorties, {len(specials.damage)} secteurs a degats"
+              + (f" ; ignores : {specials.ignored}" if specials.ignored else ""))
+        for d in specials.doors + specials.lifts + specials.floors:
+            print(f"    secteur {d['sector']:3d} {d['kind']:13s} course {d['lower']} .. {d['upper']}"
+                  f" ({d['upper'] - d['lower']} u)")
+        switch_lines = {s["line"]: s for s in specials.sswitch}
+        conv = DoomConverter(M, sizes, a.cap_cells, mobile=tags, switch_lines=switch_lines)
+    else:
+        nportes = open_doors(M)
+        if nportes:
+            print(f"  {nportes} portes ouvertes (plafond = plus bas plafond voisin - 4, "
+                  f"regle de EV_VerticalDoor)")
+        conv = DoomConverter(M, sizes, a.cap_cells)
     vides = len(M["subsectors"]) - len(conv.keep)
     if vides:
         print(f"  {vides} feuilles degenerees ecartees")
@@ -682,6 +1034,35 @@ def main(argv=None):
                picnames=conv.picnames,
                sectors=em.sectors, walls=em.walls, vertices=em.vertices, faces=em.faces,
                texture=em.texture, vertexLight=em.vertexLight)
+    if tags is not None:
+        order = [tags[s] for s in sorted(tags)]
+        pbs, pbv, pbw, pb_index = push_blocks(conv, order)
+        crit["push_blocks_complets"] = dict(
+            ok=len(pbs) == len(order), n=len(pbs), attendus=len(order),
+            sans_mur=[t.sector for t in order if not t.walls])
+        crit["interrupteurs_trouves"] = dict(
+            ok=conv.stats.get("interrupteur_sans_mur", 0) == 0,
+            n=len(conv.switches), lignes=[s["line"] for s in conv.switches])
+        out["mobile"] = dict(
+            door_slit=DOOR_SLIT,
+            specials={k: v for k, v in specials._asdict().items()},
+            tags=[dict(sector=t.sector, kind=t.kind, lower=t.lower, upper=t.upper,
+                       throw=t.throw, pb=pb_index.get(t.sector), leaves=t.leaves,
+                       walls=t.wall_indices(em), nverts=len(t.verts), doorwalls=t.doorwalls)
+                  for t in order],
+            pushBlocks=pbs, PBVert=pbv, PBWall=pbw,
+            pb_index={str(k): v for k, v in pb_index.items()},
+            switches=conv.switches,
+            secret_walls=sorted(i for i, w in enumerate(em.walls) if id(w) in conv._secret_ids),
+            damage_leaves=[dict(sector=d["sector"], hp=d["hp"],
+                                leaves=sp.leaves_of_sector(conv, d["sector"]))
+                           for d in specials.damage],
+            wswitch_leaves=[dict(line=w["line"], channel=w["channel"],
+                                 leaves=[conv.remap[l_] for l_ in sp.leaves_on_line(conv, w["line"])])
+                            for w in specials.wswitch])
+        print(f"  mobile : {len(pbs)} push blocks, {len(pbv)} runs de sommets "
+              f"({sum(t['vNm'] for t in pbv)} sommets), {len(pbw)} murs ; "
+              f"{len(conv.switches)} interrupteurs ; {len(em.tiles)} tuiles apres compaction")
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     tmp = a.out + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
