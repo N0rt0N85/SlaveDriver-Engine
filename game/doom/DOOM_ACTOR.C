@@ -181,6 +181,10 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
 	   {this->collide=doomMoveMissile(this);
 	    doomMissileHit(this,this->collide);
 	   }
+	else if (this->sprite->flags & SPRITEFLAG_IMMOBILE)
+	   this->collide=0;      /* pickups and solid decor never move: moveSprite would only run
+				    collideSprite for nothing, every tic, for each of them -- the
+				    movers find them, a pickup tests its own reach (doom_item_func) */
 	else
 	   this->collide=moveSprite(this->sprite);
 	if (this->tics>0)

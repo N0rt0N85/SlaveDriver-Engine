@@ -25,6 +25,7 @@
 #include "doom.h"
 
 DoomPlayer doomPlayer;
+int doomViewBob;                        /* P_CalcHeight's bob, added to the view (CFG_VIEW_BOB)    */
 
 /* --- constants ------------------------------------------------------------------------------ */
 #define DOOM_VEL_SCALE   38229          /* 35/60: camera->vel (u/frame) = mom (u/tic) * this     */
@@ -123,6 +124,7 @@ void doom_playerInit(void)
      doomPlayer.pspTics[i]=0;
     }
  doomPlayer.bob=0;
+ doomViewBob=0;
  doomPlayer.pspSx=F(1);
  doomPlayer.pspSy=F(32);              /* WEAPONTOP */
  doomPlayer.input=0xffff;             /* IMASK is active low: nothing pressed */
@@ -153,8 +155,6 @@ void doom_playerFrame(unsigned short input,unsigned short pushed)
 {assert(camera);
  doomPlayer.input=input;
  doomPlayer.pushed|=pushed;
- if (pushed & IMASK(ACTION_JUMP))
-    doom_weaponNext(-1);                        /* the free jump button: previous weapon */
  playerAngle.pitch=0;
  playerAngle.roll=0;
  /* P_ZMovement p_mobj.c:324: hit the floor faster than 8 u/tic => sfx_oof */
@@ -193,7 +193,10 @@ static void doomMoveTic(void)
  doomPlayer.momz=MTH_Mul(camera->vel.z,DOOM_VEL_INV);
  onground=(camera->floorSector!=-1);
 
- run=!(input & IMASK(ACTION_RUN));            /* SPEC_PLAYER 1.2: R = strafe right AND run */
+ /* run = the JUMP slot, held (C, doom_init: Mimas's KEY_RSHIFT button).  It used to be R, which
+    is also strafe right, so running straight ahead was impossible: Doom's walking speed and
+    turn rate only (8.3 u/tic, 3.5 degrees/tic). */
+ run=!(input & IMASK(ACTION_JUMP));
  turning=0;
  forward=0;
  side=0;
@@ -266,6 +269,13 @@ static void doomMoveTic(void)
 		 MTH_Mul(doomPlayer.momz,doomPlayer.momz))>>2;
  if (doomPlayer.bob>DOOM_MAXBOB)
     doomPlayer.bob=DOOM_MAXBOB;
+ /* P_CalcHeight: the view rides bob/2 * sin(FINEANGLES/20 * leveltime), a 20-tic period, up to
+    +-8 u; none airborne.  Without it walking reads as skating. */
+ if (onground)
+    doomViewBob=-MTH_Mul(doomPlayer.bob>>1,
+			 MTH_Sin(normalizeAngle(F((doomLevelTime*18)%360))));
+ else
+    doomViewBob=0;
 }
 
 /* P_DeathThink p_user.c:182-217: turn towards the killer 5 degrees per tic, fade the flash once
@@ -290,6 +300,7 @@ static void doomDeathTic(void)
     }
  else if (doomPlayer.damageCount)
     doomPlayer.damageCount--;
+ doomViewBob=0;
  /* the death hop (SRUINS.C:970-972) would slide forever with friction F(1) */
  camera->vel.x=MTH_Mul(camera->vel.x,DOOM_FRICTION);
  camera->vel.z=MTH_Mul(camera->vel.z,DOOM_FRICTION);

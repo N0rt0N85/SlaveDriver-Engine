@@ -417,8 +417,10 @@ class DoomConverter:
     def _tag_walls(self, idx, tag, role, yv):
         """Note les murs `idx` dans le push block `tag` et leurs sommets de l'arete `role`
         (y == yv, la hauteur de CETTE arete : haut ou bas du quad emis, jamais une recherche
-        globale). Un portail d'une porte recoit DOORWALL (relu par setDoorBlockBits AI.C:4294-4309)
-        et SHORTOPENING (fente 1 u < 56)."""
+        globale). `rigid` : TOUS les sommets, le mur glisse d'un bloc comme les faces de porte
+        retail (4 coins mobiles sur KILENTRY, KARNAK, CAVERN) -- sa texture suit, rien ne
+        s'ecrase. Un portail d'une porte recoit DOORWALL (relu par setDoorBlockBits
+        AI.C:4294-4309) et SHORTOPENING (fente 1 u < 56)."""
         V, W = self.em.vertices, self.em.walls
         for wi in idx:
             w = W[wi]
@@ -426,7 +428,10 @@ class DoomConverter:
             vs = list(w["v"])
             if w["firstVertex"] != 65535:
                 vs += range(w["firstVertex"], w["lastVertex"] + 1)
-            tag.verts.update(vi for vi in vs if V[vi]["y"] == yv)
+            if role == "rigid":
+                tag.verts.update(vs)
+            else:
+                tag.verts.update(vi for vi in vs if V[vi]["y"] == yv)
             if tag.kind == "door" and w["nextSector"] >= 0 and not (w["flags"] & WALLFLAG_DOORWALL):
                 w["flags"] |= WALLFLAG_DOORWALL | WALLFLAG_SHORTOPENING
                 tag.doorwalls += 1
@@ -565,6 +570,9 @@ class DoomConverter:
               if (nb is not None and nb >= 0 and nb in self.remap) else None)
         if mn is ms:
             mn = None
+        # deux feuilles du MEME secteur Doom : rien ne les separe quand il bouge
+        same = (nb is not None and nb >= 0 and nb in self.remap
+                and self.leaf_sector[nb] == self.leaf_sector[leaf])
 
         def own(bot_, top_):
             if ms is None:
@@ -604,14 +612,34 @@ class DoomConverter:
             name = side.middle if side else "-"
             name = name if name != "-" else "BROWN1"
             h = self.tex_h(name)
-            # une face : `mid` = plafond (defaut) ou sol + h (DONTPEGBOTTOM)
-            v = ((h - (ch - fh)) % h if pegbot else 0) + yoff
-            tex, pic = self.wall_tex(name, ch - fh, v)
-            # rail de porte (DOORTRAK) : 1 u ferme, doorHeight + 1 ouvert -> tuile pour l'ouvert
-            oh = (ms.throw + (ch - fh)) if (ms is not None and ms.kind == "door") else None
-            idx = self.emit_wall(P, Q, fh, ch, next_sector=-1, tex=tex, picnum=pic,
-                                 light=light, invisible=False, centre=cen, mob=own(fh, ch),
-                                 open_height=oh)
+            # Un mur mobile ne grandit JAMAIS : ses tuiles sont faites pour sa hauteur et un mur
+            # qui change de taille les ecrase. Sa texture suit le bord que Doom lui donne pour
+            # ancre : ancre au bord FIXE -> mur fixe a sa pleine course, le surplus cache par le
+            # sol ou le plafond de sa feuille (dessines apres les murs, WALLS.C:1610 + ordre
+            # d'emission) ; ancre au bord MOBILE -> dalle rigide qui glisse avec lui.
+            bot_, top_, mob = fh, ch, own(fh, ch)
+            if ms is not None and ms.kind == "door":
+                # rail de porte : DONTPEGBOTTOM (le cas DOORTRAK) = fixe a la hauteur ouverte ;
+                # sinon ancre au plafond mobile = dalle qui part sous le sol
+                if pegbot:
+                    bot_, top_, mob = fh, fh + ms.throw, None
+                else:
+                    bot_, top_, mob = ch - ms.throw, ch, [(ms, "rigid")]
+                self.stats["rails_porte"] += 1
+            elif ms is not None:
+                # mur d'ascenseur / de sol qui descend de ms.throw : ancre au plafond (defaut) =
+                # fixe jusqu'au bas de course ; DONTPEGBOTTOM = dalle qui descend avec le sol
+                if pegbot:
+                    bot_, top_, mob = fh, ch + ms.throw, [(ms, "rigid")]
+                else:
+                    bot_, top_, mob = fh - ms.throw, ch, None
+                self.stats["murs_cage_ascenseur"] += 1
+            # une face : `mid` = plafond (defaut) ou sol + h (DONTPEGBOTTOM) ; v = ligne au sommet
+            mid = (fh + h) if pegbot else ch
+            v = ((mid - top_) % h) + yoff
+            tex, pic = self.wall_tex(name, top_ - bot_, v)
+            idx = self.emit_wall(P, Q, bot_, top_, next_sector=-1, tex=tex, picnum=pic,
+                                 light=light, invisible=False, centre=cen, mob=mob)
             self._note_switch(sg, leaf, idx, name, fh, ch, P, Q)
             self.stats["murs_pleins"] += 1
             return
@@ -629,30 +657,38 @@ class DoomConverter:
         mn_lift = mn is not None and mn.kind != "door"
         mn_door = mn is not None and mn.kind == "door"
 
-        if nfh > fh:                                   # marche montante : contremarche
+        lift_self = ms is not None and ms.kind != "door" and not same
+        if lift_self and nfh > ms.lower:
+            # paroi de la cage vue DE l'ascenseur une fois descendu : fixe du bas de course au sol
+            # du voisin. Doom ancre cette texture `lower` au sol du voisin (defaut) ou a notre
+            # plafond (DONTPEGBOTTOM), deux bords fixes ; notre sol cache ce qui est dessous.
+            # Remplace la contremarche dont le bas suivait le sol (etiree en descendant) et la
+            # fente de 1 u du cote voisin (tournee vers le voisin, jamais vue de la cage).
+            name = side.lower if side and side.lower != "-" else "BROWN1"
+            h = self.tex_h(name)
+            hb = min(nfh, ch)
+            v = ((ch - hb) % h if pegbot else 0) + yoff
+            tex, pic = self.wall_tex(name, hb - ms.lower, v)
+            idx = self.emit_wall(P, Q, ms.lower, hb, next_sector=-1, tex=tex, picnum=pic,
+                                 light=light, invisible=False, centre=cen, mob=None)
+            self._note_switch(sg, leaf, idx, name, ms.lower, hb, P, Q)
+            self.stats["parois_cage"] += 1
+        elif nfh > fh:                                 # marche montante : contremarche
             name = side.lower if side and side.lower != "-" else "BROWN1"
             h = self.tex_h(name)
             hb = min(nfh, ch)
             # bas : `mid` = sol du voisin (defaut) ou plafond de devant (DONTPEGBOTTOM)
             v = ((ch - hb) % h if pegbot else 0) + yoff
             tex, pic = self.wall_tex(name, hb - fh, v)
-            mob = own(fh, hb) + ([(mn, "top")] if (mn_lift and hb == nfh) else [])
+            mob = own(fh, hb)
+            if mn_lift and hb == nfh:
+                # plate-forme voisine plus haute que nous : Doom ancre la texture a SON sol, qui
+                # descend -> dalle rigide, ce qui passe sous notre sol est cache par lui
+                mob.append((mn, "top") if ms is not None else (mn, "rigid"))
             idx = self.emit_wall(P, Q, fh, hb, next_sector=-1, tex=tex, picnum=pic,
                                  light=light, invisible=False, centre=cen, mob=mob)
             self._note_switch(sg, leaf, idx, name, fh, hb, P, Q)
             self.stats["contremarches"] += 1
-        elif mn_lift and nfh == fh:
-            # ascenseur voisin au MEME niveau : contremarche de hauteur 0. Fente de 1 u SOUS le sol
-            # (cachee par le sol tant que la plate-forme est en haut) dont le BAS suit l'ascenseur :
-            # en bas, c'est le flanc de la cage, texture `lower` du sidedef, faite pour la course.
-            name = side.lower if side and side.lower != "-" else "BROWN1"
-            h = self.tex_h(name)
-            v = ((ch - fh) % h if pegbot else 0) + yoff
-            tex, pic = self.wall_tex(name, DOOR_SLIT, v)
-            self.emit_wall(P, Q, fh - DOOR_SLIT, fh, next_sector=-1, tex=tex, picnum=pic,
-                           light=light, invisible=False, centre=cen, mob=[(mn, "bottom")],
-                           open_height=mn.throw + DOOR_SLIT)
-            self.stats["contremarches_fente"] += 1
         if nch < ch:                                   # linteau
             if self.sky(sec) and self.sky(nsec):
                 pass                                   # deux ciels : rien (Doom ne dessine rien)
@@ -660,21 +696,39 @@ class DoomConverter:
                 name = side.upper if side and side.upper != "-" else "BROWN1"
                 h = self.tex_h(name)
                 hb = max(nch, fh)
+                top_ = ch
+                if mn_door and hb == nch and ms is None and not self.sky(sec):
+                    # FACE DE PORTE : la recette retail, une dalle rigide qui monte avec la porte
+                    # (4 coins mobiles). Doom ancre ce `upper` au plafond de la porte (defaut), il
+                    # glisse avec elle : la dalle est allongee de la course pour que son haut, cache
+                    # par notre plafond, ne descende jamais sous lui une fois la porte ouverte.
+                    top_ = ch + mn.throw
+                    mob = [(mn, "rigid")]
+                    self.stats["faces_porte_rigides"] += 1
+                else:
+                    mob = ([(ms, "top")] if (ms is not None and ms.kind == "door") else []) + (
+                        [(mn, "bottom")] if (mn_door and hb == nch) else [])
+                    if mn_door and hb == nch:
+                        # sous un plafond de ciel rien ne cache le haut d'une dalle : ancien mode
+                        self.stats["faces_porte_non_rigides"] += 1
                 # haut : `mid` = plafond de devant (DONTPEGTOP) ou plafond du voisin + h (defaut)
-                v = (0 if pegtop else (h - (ch - hb)) % h) + yoff
-                tex, pic = self.wall_tex(name, ch - hb, v)
-                mob = ([(ms, "top")] if (ms is not None and ms.kind == "door") else []) + (
-                    [(mn, "bottom")] if (mn_door and hb == nch) else [])
-                idx = self.emit_wall(P, Q, hb, ch, next_sector=-1, tex=tex, picnum=pic,
+                mid = ch if pegtop else hb + h
+                v = ((mid - top_) % h) + yoff
+                tex, pic = self.wall_tex(name, top_ - hb, v)
+                idx = self.emit_wall(P, Q, hb, top_, next_sector=-1, tex=tex, picnum=pic,
                                      light=light, invisible=False, centre=cen, mob=mob)
-                self._note_switch(sg, leaf, idx, name, hb, ch, P, Q)
+                self._note_switch(sg, leaf, idx, name, hb, top_, P, Q)
                 self.stats["linteaux"] += 1
 
         if top > bot and nbi >= 0:
             mob = own(bot, top)
+            if lift_self and nfh >= fh:
+                # voisin au niveau de la plate-forme (ou plus haut) : le bas de l'ouverture est
+                # son sol, fixe ; la paroi de cage ci-dessus bouche ce qui passe dessous
+                mob = [m for m in mob if m[0] is not ms]
             if mn_door and top == nch:
                 mob.append((mn, "top"))
-            if mn_lift and bot == nfh:
+            if mn_lift and bot == nfh and nfh > fh:
                 mob.append((mn, "bottom"))
             idx = self.emit_wall(P, Q, bot, top, next_sector=nbi, tex=None, picnum=0,
                                  light=light, invisible=True, centre=cen, mob=mob)

@@ -169,6 +169,8 @@ void doom_weaponDraw(int nmFrames);                  /* the pinned psprite (adva
 void doom_useRefused(void);                          /* DOOM_PLAYER.C: sfx_noway                */
 #define CFG_DEATH_PITCH        0                                 /* SRUINS.C:895: dead view stays level (Doom has no pitch) */
 #define CFG_USE_REFUSED        else doom_useRefused();           /* SRUINS.C:853: use on a plain wall => sfx_noway (p_map.c PTR_UseTraverse) */
+extern int doomViewBob;                              /* DOOM_PLAYER.C: P_CalcHeight's bob       */
+#define CFG_VIEW_BOB           doomViewBob                       /* SRUINS.C:2117: the view rides the walk bob */
 #else
 #define CFG_TIC_ADD(v)       (v)
 #define CFG_TIC_UNIT         2
@@ -195,6 +197,7 @@ void doom_useRefused(void);                          /* DOOM_PLAYER.C: sfx_noway
 #define CFG_ENGINE_FIRE        1
 #define CFG_DEATH_PITCH        F(80)
 #define CFG_USE_REFUSED
+#define CFG_VIEW_BOB           0
 #endif
 
 /* HUD / screen frame (SPEC_PLAYER section 3, owner: DOOM_HUD.C).  Doom runs a 320x224 frame: 3D

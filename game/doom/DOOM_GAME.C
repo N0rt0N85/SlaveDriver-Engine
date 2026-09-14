@@ -55,6 +55,13 @@ void doom_init(void)
  assert(doomOtToMt[OT_DOOM_EXIT]==-1 && doomOtToMt[OT_DOOM_DAMAGE]==-1);
  assert(doomOtToMt[OT_DOOM_SECRETWALL]==-1);
  assert(doomMobjInfo[MT_TROOPSHOT].speed==10);
+ /* the pad as Mimas lays it out (dg_saturn.cxx pad_map: A fire, B use, C run held, L/R strafe)
+    so the two are played with the same hands.  controllerConfig maps an action slot to a button
+    (UTIL.C:515-518): the JUMP slot is Doom's run (doomMoveTic), PUSH is use -- B and C swapped,
+    the rest as PowerSlave (Z / Y next / previous weapon).  Once per boot: the options menu can
+    still change it afterwards. */
+ controllerConfig[ACTION_JUMP]=2;
+ controllerConfig[ACTION_PUSH]=1;
  doomInitDone=1;
 }
 
@@ -152,20 +159,31 @@ int game_placeObject(int ot)
  return 1;
 }
 
-/* Item collision (SPEC_RUNTIME section 6): the object is a DoomActor whose SIGNAL_MOVE is the
-   generic one (moveSprite of an IMMOBILE sprite = collision only, SPRITE.C:908-913, plus the
-   tic countdown of the animated pickups); the camera in the collision result and a live player
-   => doom_playerGetObject(mt, dropped) (SPEC_PLAYER 4.3, effects only); 1 => delayKill. */
+/* Pickup reach, Doom's own test (SPEC_PLAYER 4.3): P_TryMove -> PIT_CheckThing (p_map.c) -- only
+   a MOVING player touches, inside the box of thing radius + player radius, whatever the heights --
+   then P_TouchSpecialThing (p_inter.c): delta = special->z - toucher->z outside -8 .. 56 (player
+   height) is out of reach.  The engine's spheres could not say it: the camera ball is centred on
+   the eye (41 above the feet), a pickup's is 8 u at the floor, they never met -- nothing could be
+   picked up.  game_actor_func runs the animation tics (no collideSprite for an IMMOBILE sprite);
+   doom_playerGetObject(mt, dropped) does the effects; 1 => delayKill. */
 void doom_item_func(Object *_this,int message,int param1,int param2)
 {DoomActor *this=(DoomActor *)_this;
+ Sprite *s;
+ Fixed32 reach,delta;
  game_actor_func(_this,message,param1,param2);
- if (message!=SIGNAL_MOVE || this->type==OT_DEAD)
+ if (message!=SIGNAL_MOVE || this->type==OT_DEAD || !camera || currentState.health<=0)
     return;
- if ((this->collide & COLLIDE_SPRITE) && &sprites[this->collide&0xffff]==camera &&
-     currentState.health>0)
-    {if (doom_playerGetObject(this->mt,(this->mflags & DF_DROPPED)?1:0))
-	delayKill(_this);
-    }
+ if (!camera->vel.x && !camera->vel.z)
+    return;
+ s=this->sprite;
+ reach=F(doomMobjInfo[this->mt].radius+GP_PLAYER_RADIUS);
+ if (abs(s->pos.x-camera->pos.x)>=reach || abs(s->pos.z-camera->pos.z)>=reach)
+    return;
+ delta=(s->pos.y-s->radius)-(camera->pos.y-F(GP_PLAYER_RADIUS+GP_PLAYER_EYE_HOVER));
+ if (delta>F(56) || delta<F(-8))
+    return;
+ if (doom_playerGetObject(this->mt,(this->mflags & DF_DROPPED)?1:0))
+    delayKill(_this);
 }
 
 /* Exit switch (contract section 6 / 9): SIGNAL_SWITCH(channel) from the OT_SW1 press.

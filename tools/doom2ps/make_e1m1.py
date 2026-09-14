@@ -66,6 +66,7 @@ RETAIL_COPIES = ["INITLOAD.DAT", "INTRO.PCS"]                 # DOOM_ABI §9, ja
 TILE_GEOM = 0x32                                              # 64x64 | 16BPP | PALLETE
 SKY_W, SKY_H = 512, 256                                       # PLAX.C:91-93
 SKY_TABLE = 320                                               # PLAX.C:115
+SKY_HORIZON = 260                                             # xb de la ligne d'horizon (sky_block)
 
 
 def log(msg=""):
@@ -128,19 +129,32 @@ def build_objects(W, M, ids, G, *, skill, lift_contact):
 
 
 # ----------------------------------------------------------------------------- etape 5
-def sky_block(W, retail_path, lump="SKY1"):
-    """Ciel PLAX.C:84-115 : 256 u16 BGR555 (PLAYPAL), 512x256 indices (SKY1 256x128 repete x2 en
-    largeur et en hauteur), table de rotation K (320 ints) recopiee d'un .LEV retail -- elle est
-    identique sur les 24 niveaux du disque (mesure : meme sha1). L'indice 0 reste (RBG0 sans
-    transparence, PLAX.C:108)."""
+def sky_block(W, retail_path, lump="SKY1", horizon=SKY_HORIZON):
+    """Ciel PLAX.C:84-115 : 256 u16 BGR555 (PLAYPAL), 512x256 indices, table de rotation K (320 ints)
+    recopiee d'un .LEV retail -- identique sur les 24 niveaux du disque (meme sha1). L'indice 0 reste
+    (RBG0 sans transparence, PLAX.C:108).
+
+    Le bitmap est TRANSPOSE (matrice b = -1, d = 1, PLAX.C:138-141) : sa ligne yb (0..255) est la
+    position HORIZONTALE -- 256 texels pour 90 degres (PLAXPERSCREEN 128 pour 45, PLAX.C:24-28),
+    exactement les 1024 colonnes par tour du ciel de Doom -- et sa colonne xb (0..511) la HAUTEUR,
+    le haut vers les xb croissants (les plantes du ciel de COLONY y poussent ; les 24 ciels retail
+    sont tous ranges ainsi). L'ecrire a l'endroit donnait un ciel tourne de 90 degres et repete.
+    A tangage nul la ligne centrale d'ecran lit xb = Xp ; l'art retail remplit 128..376, les 240
+    lignes autour de 252 (ligne 120 de PowerSlave) ; notre cadre de 224 lignes a son horizon ligne
+    112, 8 texels plus haut (viewp.y = 20 de PLAX.C:48 est cale sur 240) -> la ligne 100 de SKY1
+    (skytexturemid de Doom, r_sky.c) tombe en xb `horizon` = 260 (estime, a confirmer a l'ecran).
+    Doom dessine son ciel en miroir (r_plane.c : colonne = (viewangle + xtoviewangle[x]) >> 22, qui
+    DECROIT vers la droite) -> colonne = -yb. Au-dela de la texture, la derniere ligne se repete."""
     tm = doomtiles.TileMaker(W)
     w, h, px = tm.texture(lump)
+    assert w == SKY_H, "SKY1 attendu 256 de large : un tour = 4 x 256 colonnes (PLAX.C:28)"
     bmp = bytearray(SKY_W * SKY_H)
-    for y in range(SKY_H):
-        row = (y % h) * w
-        orow = y * SKY_W
-        for x in range(SKY_W):
-            bmp[orow + x] = px[row + (x % w)]
+    for yb in range(SKY_H):
+        col = (-yb) % w
+        orow = yb * SKY_W
+        for xb in range(SKY_W):
+            r = min(max(100 - (xb - horizon), 0), h - 1)
+            bmp[orow + xb] = px[r * w + col]
     r = levmod.Reader(retail_path)
     s = levmod.parse_sky(r)
     assert (s["width"], s["height"]) == (SKY_W, SKY_H), "ciel retail attendu 512x256 (PLAX.C:91-93)"

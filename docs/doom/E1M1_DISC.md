@@ -42,9 +42,11 @@ python tools/doom2ps/make_e1m1.py && powershell -ExecutionPolicy Bypass -File bu
 
 ## Ce que tu vois → ce que ça veut dire
 
-Pad : A = tir ; C = utiliser (porte, interrupteur) ; Z = arme suivante ; B = arme précédente ; L = pas de côté
-à gauche ; R = pas de côté à droite + course ; croix = avancer ou tourner. L+R+X bascule le vol debug (A ou C pour
-descendre, l'automap affiche x/y/secteur). L+R+Y (ou A+B+C) bascule l'arbre de profil.
+Pad, disposé comme Mimas (`dg_saturn.cxx` pad_map) : A = tir ; B = utiliser (porte, interrupteur) ; C = courir
+(maintenu) ; L / R = pas de côté ; Z = arme suivante ; Y = arme précédente ; croix = avancer ou tourner. Le menu
+d'options de PowerSlave peut encore réaffecter (ses libellés restent ceux de PowerSlave : SAUT = courir, POUSSER =
+utiliser). L+R+X bascule le vol debug (A ou C pour descendre, l'automap affiche x/y/secteur). L+R+Y (ou A+B+C)
+bascule l'arbre de profil.
 
 | vu | sens / où regarder |
 |---|---|
@@ -72,6 +74,11 @@ descendre, l'automap affiche x/y/secteur). L+R+Y (ou A+B+C) bascule l'arbre de p
 | Teinte orange quand blessé + ramassage | **ne doit plus arriver** : le rouge a priorité sur le jaune (`doomFlashTic`) |
 | Aucun son | `doom_sfxIndex` renvoie < 0 (carte 227), ou STATIC bloc 3 mal lu. `extra:` ≠ 174 ⇒ les sons ne sont pas chargés |
 | Tir muet mais monstres audibles | index statique (PISTOL = 0) ou `ST_JOHN` |
+| Déplacement lent, on « patine » | **corrigé** : la course était sur R, qui fait aussi le pas de côté droit, donc jamais tout droit (vitesse de marche 8,3 u/tic). Elle est sur C maintenu, et la vue suit le balancement de Doom (`doomViewBob`, ±8 u, période 20 tics) |
+| Porte qui s'écrase au lieu de monter | **corrigé** : la face de porte est une dalle rigide (4 coins mobiles, la recette des portes retail), son haut caché par le plafond ; les rails DOORTRAK sont fixes à la hauteur ouverte |
+| Parois de l'ascenseur étirées en descendant | **corrigé** : parois de cage fixes du bas de course au sol voisin, cachées par le sol de la plate-forme tant qu'elle est en haut |
+| Un morceau de porte flotte au-dessus du plafond | le plafond ne recouvre pas le haut de la dalle : ordre des murs de la feuille (sol/plafond après les murs) ou face sous un ciel (`faces_porte_non_rigides`, 0 sur E1M1) |
+| Rien ne se ramasse (armes, bonus, munitions) | **corrigé** : les sphères ne se touchaient jamais (caméra centrée sur l'œil à 41 u, objet de 8 u au sol) ; test de Doom maintenant (boîte rayon + 16, hauteur −8..56, joueur en mouvement) |
 | Porte qui s'ouvre mais bloque le passage | `CFG_DOOR_FIT` ≠ 56 : SHORTOPENING 80 en vigueur |
 | Linteau de porte ouverte de 3 u au lieu de 4 | `doorHeight` non déduit de la fente : **corrigé** (67 + fente 1 = 68) |
 | Porte qui ne réagit pas au bouton C | `push()` rate le mur (portée < 120 u) ou le push block n'a pas de mur (`PBWall`) |
@@ -82,7 +89,9 @@ descendre, l'automap affiche x/y/secteur). L+R+Y (ou A+B+C) bascule l'arbre de p
 | Barre de statut absente ou décalée, vue de 200 lignes | cadre 224 non appliqué (CFG_TV_SIZE / CFG_SCL_LINES) ou chars 0-4 |
 | Visage STFKILL quand on tient le tir 2 s | **normal** (rampage, ST_RAMPAGEDELAY 70 tics) |
 | Chiffres HUD en carrés ou vides | polices Doom (masque 0x1E, chars dès 5) : ledger VRAM VDP1 (7 232 o libres calculés) |
-| Ciel décalé d'environ 8 lignes | PLAX.C:47 `viewp.y = 20` est calé sur 240 lignes (TODO) |
+| Ciel tourné de 90° et répété | **corrigé** : PowerSlave range son ciel transposé (horizontale = lignes du bitmap, 256 texels pour 90° comme Doom ; hauteur = colonnes, le haut vers la droite) |
+| Montagnes du ciel trop hautes ou trop basses | horizon estimé colonne 260 (`SKY_HORIZON`, make_e1m1.py) depuis le bandeau des ciels retail ; noter de combien de lignes, c'est un seul nombre |
+| Ciel en miroir par rapport à Mimas | Doom dessine son ciel en miroir, reproduit ici (colonne = −ligne) ; si Mimas ne le fait pas, inverser dans `sky_block` |
 | Arme qui déborde sur la barre | clip arme 192 (CFG_WCLIP_BOTTOM) |
 | Arme collée à gauche la moitié du temps en marchant | bob horizontal ≥ 180° : **corrigé** (`normalizeAngle`, DOOM_WEAPON.C) |
 | Menu en jeu (Start) sans texte | connu : les polices 2/3 sont STTNUM/STYSNUM en jeu (TODO) |

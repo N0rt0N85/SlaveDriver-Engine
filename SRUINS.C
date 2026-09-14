@@ -2114,7 +2114,7 @@ int runLevel(char *filename,int levelNm)
 	}
      MTH_MoveMatrix(&viewTransform,
 		    -camera->pos.x,
-		    -camera->pos.y+playerHeightOffset,
+		    -camera->pos.y+playerHeightOffset+CFG_VIEW_BOB,
 		    -camera->pos.z);
      /* ok */
      EZ_openCommand();
