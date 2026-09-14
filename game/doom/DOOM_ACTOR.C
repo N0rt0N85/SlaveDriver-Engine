@@ -185,6 +185,13 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
 	   this->collide=0;      /* pickups and solid decor never move: moveSprite would only run
 				    collideSprite for nothing, every tic, for each of them -- the
 				    movers find them, a pickup tests its own reach (doom_item_func) */
+	else if (!this->target && this->sprite->floorSector!=-1 && !this->sprite->vel.x &&
+		 !this->sprite->vel.y && !this->sprite->vel.z)
+	   this->collide=0;      /* asleep and at rest on its floor (A_Look monsters, barrels): the
+				    same collision again every tic was 7-8 ms a frame on E1M1
+				    (RUNOBJECTS > COLLIDESPRITE).  A lift carries it (floorSector,
+				    updatePushBlockPositions), damage thrust or A_Chase gives it a
+				    velocity; an awake one keeps colliding (a closing door meets it) */
 	else
 	   this->collide=moveSprite(this->sprite);
 	if (this->tics>0)

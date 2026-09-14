@@ -2193,29 +2193,29 @@ int runLevel(char *filename,int levelNm)
      drawWallsFinish();
      popProfile();
 
-     for (;mmcSave>CFG_TIC_UNIT-1;mmcSave-=CFG_TIC_UNIT)
+     CFG_PROF("Post"); for (;mmcSave>CFG_TIC_UNIT-1;mmcSave-=CFG_TIC_UNIT)
 	{advanceWallAnimations();
 	 stepWater();
 	}
      updatePushBlockPositions();
-     processDelayedMoves();
+     processDelayedMoves(); CFG_PROF_END();
 
      if (mapOn)
 	drawMap(camera->pos.x,camera->pos.z,camera->pos.y,playerAngle.yaw,
 		camera->s);
 
-     CFG_RUN_WEAPON(framesElapsed,invisibleCounter,weaponPowerUpCounter);
+     CFG_PROF("Weapon"); CFG_RUN_WEAPON(framesElapsed,invisibleCounter,weaponPowerUpCounter); CFG_PROF_END();
 
      MTH_PopMatrix(&viewTransform);
 
-     drawMessage(framesElapsed); CFG_DRAW_MESSAGE();
-     CFG_DRAW_STATBAR(framesElapsed);
+     CFG_PROF("HUD"); drawMessage(framesElapsed); CFG_DRAW_MESSAGE();
+     CFG_DRAW_STATBAR(framesElapsed); CFG_PROF_END();
 
      CFG_DRAW_AIRMETER(framesElapsed);
 
 
 #ifdef STATUSTEXT
-     drawStringf(-158,-60,1,"fps:%d %d",60/framesElapsed,60/(smoothVTime+1));
+     CFG_PROF("Overlay"); drawStringf(-158,-60,1,"fps:%d %d",60/framesElapsed,60/(smoothVTime+1));
 
      drawStringf(-158,-80,1,"sector:%d",camera->s);
 
@@ -2242,7 +2242,7 @@ int runLevel(char *filename,int levelNm)
 
      if (profileShow)
 	drawProfileData(-158,-28);
-
+     CFG_PROF_END();
 #endif
 
      lastLastCalc=lastCalc;

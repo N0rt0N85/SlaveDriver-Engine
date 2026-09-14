@@ -4,6 +4,11 @@ Deux disques, la même carte, les mêmes trois postes, les mêmes gestes. Tout s
 sur l'émulateur du propriétaire). Les chiffres vont dans le tableau du §3,
 le ressenti dans la liste du §4.
 
+**La référence de perf n'est pas Mimas** (la branche psw-world tourne à ~12 fps, MST ~80 ms sur ces
+trois postes) : c'est le **budget du moteur**, 33,3 ms par image pour 30 fps (plafond structurel), et
+sa loi de coût mesurée, 14,9 ms + 39,2 µs par cellule (build ASSERT+STATUSTEXT) — soit 470 cellules
+au plus à 30 fps. Mimas sert à comparer les **règles et la sensation**, pas les millisecondes.
+
 ## 1. Les deux overlays
 
 | | Mimas (`dg_saturn.cxx`, ligne 1) | Aguzzino (STATUSTEXT, `SRUINS.C:2218-2261`) |
@@ -37,9 +42,20 @@ de pistolet (relever la réaction).
 | P2 | | | | | | | |
 | P3 | | | | | | | |
 
-Lecture : à `polys` égal, Aguzzino doit coûter 1,6 à 2,5 fois moins que Mimas par commande
-(39 contre 64 µs mesurés) ; si `draw` dépasse `calc` sur un poste, le VDP1 est le pôle long (fill des
-sprites proches) et ce n'est plus une question de CPU.
+Lecture : comparer `calc` à la loi du moteur (14,9 ms + 39,2 µs × `polys`) — un écart au-dessus est
+du travail du runtime Doom, pas de la géométrie ; si `draw` dépasse `calc` sur un poste, le VDP1 est
+le pôle long (fill des sprites proches) et ce n'est plus une question de CPU.
+
+**Première mesure (14-09, build debug + overlay, avant l'allègement des acteurs au repos)** :
+
+| poste | polys | fps | calc (ms) | loi (ms) | écart | arbre L+R+Y |
+|---|---|---|---|---|---|---|
+| P1 | 321 | 30 | 24,7 | 27,5 | −2,8 | Walls 12,5 (FindDoorways 3,6) ; Motion 8,9 dont Run Objects > Collide Sprite 7,0 |
+| P2 | 371 | 20 | 34,1 | 29,4 | **+4,7** | Walls 16,3 (FindDoorways 4,7) ; Motion 10,6 dont Collide Sprite 7,9 |
+| P3 | 587 | 20 | 37,8 | 37,9 | 0 | Walls 20,7 (FindDoorways 5,7) ; Motion 10,0 dont Collide Sprite 7,3 |
+
+`b` (attente VDP1) = 9 lignes partout : le CPU est le pôle long. P2 rate 30 fps de 0,8 ms (le runtime),
+P3 de 4,5 ms (587 cellules > 470 : la géométrie). Mimas-psw au même endroit : 12,0 / 12,6 / 12,4 fps.
 
 ## 4. Ressenti, point par point (oui / non / différent)
 

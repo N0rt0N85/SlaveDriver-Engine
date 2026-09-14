@@ -46,7 +46,9 @@ Pad, disposé comme Mimas (`dg_saturn.cxx` pad_map) : A = tir ; B = utiliser (po
 (maintenu) ; L / R = pas de côté ; Z = arme suivante ; Y = arme précédente ; croix = avancer ou tourner. Le menu
 d'options de PowerSlave peut encore réaffecter (ses libellés restent ceux de PowerSlave : SAUT = courir, POUSSER =
 utiliser). L+R+X bascule le vol debug (A ou C pour descendre, l'automap affiche x/y/secteur). L+R+Y (ou A+B+C)
-bascule l'arbre de profil.
+bascule l'arbre de profil : 11 lignes à gauche puis une seconde colonne à droite (24 nœuds), avec les
+étapes d'après les murs — `Post` (animations, push blocks), `Weapon`, `HUD`, `Overlay` ; ce que `root`
+garde en propre est l'attente VDP1 / vblank.
 
 | vu | sens / où regarder |
 |---|---|

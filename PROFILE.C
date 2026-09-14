@@ -142,7 +142,18 @@ static void printTree(ProfileNode *tree,int level,
    The FRT counts cycles/32, so 28.636 MHz gives 894875 ticks/s: a tick is 1/895 ms and
    tenths of a millisecond are ticks*10/895 == ticks*2/179. */
 #define PROF_TENTHS(t) (((t)*2)/179)
+#include "gameparams.h"     /* here, below every assert: their __LINE__ stays the baseline's */
+#ifdef GP_GAME_DOOM
+/* the 224-line Doom frame: 11 lines on the left (84..184, above the status bar), then a
+   second column on the right under the vswaps/used lines -- 14 lines cut the tree before
+   anything that follows Run Objects */
+#define MAXPROFLINES 24
+#define PROF_COL1 11
+#define PROF_COL2_X 2
+#define PROF_COL2_Y (-58)
+#else
 #define MAXPROFLINES 14
+#endif
 
 /* drawString() costs one VDP1 command per character, so the overlay has to live inside
    whatever the frame left free -- see EZ_getCmdRoom().  PROF_RESERVE keeps a margin for
@@ -170,6 +181,12 @@ static void drawTree(ProfileNode *tree,int level,int x,int y)
      }
   profRoom-=len;
  }
+#ifdef GP_GAME_DOOM
+ if (profLine>=PROF_COL1)
+    drawString(PROF_COL2_X+6*level,PROF_COL2_Y+10*(profLine-PROF_COL1),1,
+	       (unsigned char *)profBuff);
+ else
+#endif
  drawString(x+6*level,y+10*profLine,1,(unsigned char *)profBuff);
  profLine++;
  for (i=0;i<tree->nmChildren;i++)

@@ -171,6 +171,8 @@ void doom_useRefused(void);                          /* DOOM_PLAYER.C: sfx_noway
 #define CFG_USE_REFUSED        else doom_useRefused();           /* SRUINS.C:853: use on a plain wall => sfx_noway (p_map.c PTR_UseTraverse) */
 extern int doomViewBob;                              /* DOOM_PLAYER.C: P_CalcHeight's bob       */
 #define CFG_VIEW_BOB           doomViewBob                       /* SRUINS.C:2117: the view rides the walk bob */
+#define CFG_PROF(id)           pushProfile(id)                   /* SRUINS.C:2196-2245: the frame after the walls, in the L+R+Y tree */
+#define CFG_PROF_END()         popProfile()
 #else
 #define CFG_TIC_ADD(v)       (v)
 #define CFG_TIC_UNIT         2
@@ -198,6 +200,8 @@ extern int doomViewBob;                              /* DOOM_PLAYER.C: P_CalcHei
 #define CFG_DEATH_PITCH        F(80)
 #define CFG_USE_REFUSED
 #define CFG_VIEW_BOB           0
+#define CFG_PROF(id)
+#define CFG_PROF_END()
 #endif
 
 /* HUD / screen frame (SPEC_PLAYER section 3, owner: DOOM_HUD.C).  Doom runs a 320x224 frame: 3D
