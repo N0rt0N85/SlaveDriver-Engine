@@ -51,7 +51,8 @@ que les mises en idle sont différées (`delay_moveObject`, appliquées après `
 et posés sur les valeurs croissantes **[14..47] ∪ [64..90] ∪ [92..162] ∪ [172..226]** (187 valeurs ≥ 136) — d'où
 MT 1..34 → 14..47 (POSS 14, SPOS 15, … TROOP = MT 11 → 24), MT 35..61 → 64..90, MT 62..132 → 92..162,
 MT 133..136 → 172..175. Objets Doom non-mobj : `OT_DOOM_EXIT` 176, `OT_DOOM_SECRETEXIT` 177,
-`OT_DOOM_LIGHT` 178, **`OT_DOOM_DAMAGE` 179** (secteur à dégâts, §6). Réservés au moteur (réutilisés tels
+`OT_DOOM_LIGHT` 178, **`OT_DOOM_DAMAGE` 179** (secteur à dégâts, §6), **`OT_DOOM_SECRETWALL` 180** (1 short = mur
+DOORWALL d'une ligne ML_SECRET, que les monstres ne pressent pas ; fix 2026-09-14, E1M1 : ligne 247 → 2 murs). Réservés au moteur (réutilisés tels
 quels) : 13 joueur, 48 `OT_NORMALDOOR`, 49 / 61-63 ascenseurs, 57-58 portes bloquées, 59-60,
 91 `OT_SECTORSWITCH`, 163-171 téléporteurs et `OT_SW1..4`.
 
@@ -103,8 +104,9 @@ d'origine) — `spriteAdvanceFrame` n'est pas appelé.
 **Découpe d'un patch** `(w, h, leftoffset lo, topoffset to)` : pixel `(i,j)` → offset monde
 `(i − lo, j − to)`, y écran croissant vers le bas, pieds à `y = 0` (Doom : `to = h` pour un thing posé) ;
 chunks `c = 0..ceil(w/64)−1`, `r = 0..ceil(h/64)−1` à `chunkx = −lo + 64c`, `chunky = −to + 64r`, image
-calée en haut-gauche du chunk, reste = index 0. Vue miroir : même tuile, flag 1, `chunkx' = −chunkx − 64`
-(STATIC.C:512-515 fait le même calcul avec `width − (subx+64)`). Tuiles : 64×64, flags **0x6A** =
+calée en haut-gauche du chunk, reste = index 0. Vue miroir : même tuile, flag 1, **`chunkx' = −chunkx − 64 + (w − 2·lo)`**
+(fix 2026-09-14 : Doom garde `leftoffset` pour la vue retournée, r_things.c R_ProjectSprite ; la convention PowerSlave
+`−chunkx − 64` de STATIC.C:512-515 suppose des offsets centrés et décalait chaque vue miroir de `w − 2·lo` px, jusqu'à 19). Tuiles : 64×64, flags **0x6A** =
 `64x64|8BPP|PALLETE|RLE` (SLEVEL.H:192-198 ; PIC.C:688-690), palette objet = PLAYPAL[0] en BGR555 ; index 0 =
 transparent, 255 forcé 0xffff (PIC.C:631) ⇒ remapper 0 et 255 vers la couleur non nulle la plus
 proche (`doomtiles.py:17-20`).
@@ -258,7 +260,7 @@ bloquées **même ouvertes** tant que le seuil vaut 80. Contrat : `80` → **`GP
 
 | objet | OT | params (shorts, dans l'ordre `suckShort`) | source | E1M1 |
 |---|---|---|---|---|
-| porte manuelle | `OT_NORMALDOOR` 48 | `pb`, `channel = −1`, `doorHeight` | OBJECT.C:269-272 ; `constructDoor` AI.C:4384-4398 (`door_func` :4313-4382) | 4 ; `doorHeight` = min plafond voisin − 4 − sol = 68 ; 2 u/trame, attente 128 trames (AI.C:4312, 4358) ≈ Doom 2 u/tic, 150 tics |
+| porte manuelle | `OT_NORMALDOOR` 48 | `pb`, `channel = −1`, `doorHeight` | OBJECT.C:269-272 ; `constructDoor` AI.C:4384-4398 (`door_func` :4313-4382) | 4 ; `doorHeight` = min plafond voisin − 4 − sol − fente (1 u) = **67** (fix 2026-09-14 : le fichier ferme à sol + 1, `door_func` monte de `doorHeight` ⇒ plafond ouvert à sol + 68, règle Doom) ; 2 u/trame, attente 128 trames (AI.C:4312, 4358) ≈ Doom 2 u/tic, 150 tics |
 | ascenseur WR (88) | `OT_NORMALELEVATOR` 49 | `pb`, `lower`, `upper`, `channel = tag` | OBJECT.C:255-262 ; AI.C:4686-4699 | secteur 70 : `lower` = plus bas sol voisin (−48), `upper` = sol (104), throw = 152 ; 5 u/trame (AI.C:4659). **Réarmement** : `sswitch_func` passe ON au 1er `SIGNAL_ENTER` et ne repasse OFF que sur `SIGNAL_SWITCHRESET(channel)` (AI2.C:648-661), que seul `door_func` émet (AI.C:4375-4376) ⇒ sans retouche, **un seul cycle**. Décision : `elevator_func` émet `signalAllObjects(SIGNAL_SWITCHRESET, channel, 0)` au retour en haut (`direction==1 && offset>=0`, AI.C:4660-4663) si `channel != −1` — 1 ligne sous `GP_GAME_DOOM` (SPEC_RUNTIME §9). Repli : `--lift-contact` (SPEC_CONVERTER E7) = `channel = −1`, déclenchement au contact/press (AI.C:4593-4624), sans sector-switch |
 | sol W1 (36) | `OT_STUCKDOWNELEVATOR` 61 | idem, `channel = 1` | AI.C:4649-4653 (`offset <= −throw` → `moveTo(−throw)` ; STUCKDOWN → idle : un aller, reste en bas) | secteur 59 : type 36 = **turboLower, destination = plus HAUT sol voisin + 8** (p_spec.c:655 → `EV_DoFloor(turboLower)` ; p_floor.c:298-305) : sol 96, voisins −48/−48 → `lower = −40`, `upper = 96`, **throw 136** (`throw = upper − lower`, AI.C:4696) |
 | déclencheur de ligne W | `OT_SECTORSWITCH` 91 | **`sectorNm`, `channel = tag` — 2 shorts exactement** (`constructSectorSwitch` AI2.C:665-676 ; `case OT_SECTORSWITCH: constructSectorSwitch(); break;` OBJECT.C:213-215 — `constructForceField(suckShort())` est le `case OT_FORCEFIELD` :249-250, sans rapport) | AI2.C:648-653 (`SIGNAL_ENTER` → `SIGNAL_SWITCH`) | 2 (tags 1, 2) : secteur d'entrée = côté traversé (une par feuille bordant la ligne) |
