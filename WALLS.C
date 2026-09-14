@@ -2418,7 +2418,7 @@ void drawWalls(MthMatrix *view)
     slaveSize=updateListSize-1;
  slaveDrawStart=slaveSize;
  /* start slave */
- *(Uint16 volatile *)0x21000000=0xffff;
+ *(Uint16 volatile *)0x21000000=0xffff; CFG_PROF("Master Draw");
  for (i=updateListSize-1;i>slaveDrawStart;i--)
     {parms[0].x=updateList[i]->xmin+160;parms[0].y=updateList[i]->ymin+CFG_YCENTER;
      parms[1].x=updateList[i]->xmax+160;parms[1].y=updateList[i]->ymax+CFG_YCENTER;
@@ -2441,23 +2441,23 @@ void drawWalls(MthMatrix *view)
      else
 	updateList[i]->spriteCommandStart=0;
     }
- EZ_linkCommand(lastWallCmd,JUMP_ASSIGN,EZ_getNextCmdNm());
+ EZ_linkCommand(lastWallCmd,JUMP_ASSIGN,EZ_getNextCmdNm()); CFG_PROF_END();
 }
 
 
 void drawWallsFinish(void)
 {int i;
  /* wait for slave to finish */
- i=0;
+ i=0; CFG_PROF("Slave Wait");
  while (!(*FTCSR & 0x80))
     i++;
  /* sync */
- *FTCSR=0x0;
+ *FTCSR=0x0; CFG_PROF_END();
  if (i>100 && slaveSize>0)
     slaveSize--;
  if (i<100 && slaveSize<50)
     slaveSize++;
- drawSlaveWalls();
+ CFG_PROF("Slave Cmds"); drawSlaveWalls(); CFG_PROF_END();
 #ifndef NDEBUG
  drawDebugLines();
 #endif

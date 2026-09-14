@@ -46,9 +46,13 @@ Pad, disposé comme Mimas (`dg_saturn.cxx` pad_map) : A = tir ; B = utiliser (po
 (maintenu) ; L / R = pas de côté ; Z = arme suivante ; Y = arme précédente ; croix = avancer ou tourner. Le menu
 d'options de PowerSlave peut encore réaffecter (ses libellés restent ceux de PowerSlave : SAUT = courir, POUSSER =
 utiliser). L+R+X bascule le vol debug (A ou C pour descendre, l'automap affiche x/y/secteur). L+R+Y (ou A+B+C)
-bascule l'arbre de profil : 11 lignes à gauche puis une seconde colonne à droite (24 nœuds), avec les
-étapes d'après les murs — `Post` (animations, push blocks), `Weapon`, `HUD`, `Overlay` ; ce que `root`
-garde en propre est l'attente VDP1 / vblank.
+bascule l'arbre de profil : 11 lignes à gauche puis une seconde colonne à droite (24 nœuds), en ms à
+l'horloge du mode 320. Sous `Walls` : `Find Visible` (portails), `Master Draw` (les secteurs du maître et
+tous les sprites), `Slave Wait` (le maître attend l'esclave), `Slave Cmds` (le maître émet les commandes
+des cellules de l'esclave) ; puis les étapes d'après les murs — `Post` (animations, push blocks),
+`Weapon`, `HUD`, `Overlay`. Ce que `root` garde en propre est l'attente VDP1 / vblank. La ligne
+`sector:` porte aussi `vis:` (secteurs dessinés) et `sl:a/b` (secteurs confiés à l'esclave, ±1, et ses
+cellules). L'arbre coûte ~2,8 ms : relever `fps` et `time` arbre éteint, puis l'allumer.
 
 | vu | sens / où regarder |
 |---|---|

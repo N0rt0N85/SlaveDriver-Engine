@@ -56,6 +56,30 @@ le pôle long (fill des sprites proches) et ce n'est plus une question de CPU.
 
 `b` (attente VDP1) = 9 lignes partout : le CPU est le pôle long. P2 rate 30 fps de 0,8 ms (le runtime),
 P3 de 4,5 ms (587 cellules > 470 : la géométrie). Mimas-psw au même endroit : 12,0 / 12,6 / 12,4 fps.
+(Arbre de cette mesure lu avec l'ancienne constante du profileur : ses ms sont 6,6 % trop basses.)
+
+**Deuxième mesure (14-09, disque NDEBUG + overlay, `bcee814` : acteurs au repos sans collision)** —
+`calc` en lignes (`c − b` = frame N−1, `2a − (c − b)` = frame N−2), arbre converti à l'horloge du mode
+320 (× 1,066) :
+
+| poste | polys | fps | calc N−1 / N−2 | calc (ms) | loi ASSERT (ms) | Motion | Walls (Find Doorways) | Overlay |
+|---|---|---|---|---|---|---|---|---|
+| P1 | 323 | 30 | 332 / 328 | 21,1 | 27,6 | 0,9 | 15,7 (3,8) | 3,8 |
+| P2 | 392 | **30** | 458 / 468 | 29,1 | 30,3 | 2,6 | 20,8 (5,4) | 3,8 |
+| P3 | 560 | 20 | 562 / 506 | 35,7 / 32,2 | 36,9 | 5,6 | 22,3 (6,3) | 3,8 |
+
+- **Motion −8 ms** à P1 et P2 : P2 passe de 20 à 30 fps.
+- **Walls monte de 2 à 3 ms dans l'arbre sans allonger `calc`** : c'est le partage maître/esclave.
+  `drawWalls` donne `slaveSize + 1` secteurs à l'esclave, dessine les autres, puis le maître fait
+  Motion pendant que l'esclave travaille ; `drawWallsFinish` attend l'esclave et bouge `slaveSize` de
+  ±1 par frame pour que les deux finissent ensemble (`WALLS.C:2417-2459`). Avec 9 ms de Motion,
+  l'esclave prenait presque tout ; avec 1 ms, le maître reprend des secteurs à son compte.
+- **P3 alterne 506 et 562 lignes** : à 20 fps une frame joue 1 ou 2 tics (21/12), et le moteur ne
+  revient à 30 fps qu'après **10 frames consécutives sous 2 fields** (`smoothVTime`,
+  `SRUINS.C:2277-2301`) — c'est la frame à 2 tics qui doit tenir, pas la moyenne.
+- **L'overlay coûte 3,8 ms, dont ~2,8 pour l'arbre** (~12 µs par caractère, une commande VDP1
+  chacun) : à P3 c'est la différence entre les deux paliers. Relever `fps`/`time` **arbre éteint**,
+  l'allumer ensuite pour la répartition.
 
 ## 4. Ressenti, point par point (oui / non / différent)
 

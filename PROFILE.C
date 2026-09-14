@@ -151,6 +151,13 @@ static void printTree(ProfileNode *tree,int level,
 #define PROF_COL1 11
 #define PROF_COL2_X 2
 #define PROF_COL2_Y (-58)
+/* the 28.636 MHz above is the 352-dot clock, set only by an SMPC CKCHG352; the game runs in
+   the 320-dot mode, 26.8741 MHz NTSC (SMPC manual table 1.1), so a tick is 1/839.8 ms and
+   2/179 reads 6.6 % low.  Checked on the 2026-09-14 E1M1 captures: with 839.8 the children of
+   the root add up to the frame's calc (time: c - b) within 5 lines at all three spots, with
+   895 they fall short of the frame period.  The default build keeps its constant. */
+#undef PROF_TENTHS
+#define PROF_TENTHS(t) (((t)*50)/4199)
 #else
 #define MAXPROFLINES 14
 #endif

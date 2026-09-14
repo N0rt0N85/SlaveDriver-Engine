@@ -2217,7 +2217,7 @@ int runLevel(char *filename,int levelNm)
 #ifdef STATUSTEXT
      CFG_PROF("Overlay"); drawStringf(-158,-60,1,"fps:%d %d",60/framesElapsed,60/(smoothVTime+1));
 
-     drawStringf(-158,-80,1,"sector:%d",camera->s);
+     CFG_STATUS_SECTOR();
 
 #ifndef NDEBUG
      drawStringf(-158,-100,1,"extra:%d",extraStuff);
