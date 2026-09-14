@@ -128,6 +128,125 @@ void suckSpriteParams(Sprite *s);
 #endif
 #define PLAYER_RADIUS      F(GP_PLAYER_RADIUS)       /* AI.C:46                                 */
 
+/* GAME = doom (params/doom.cfg): the Doom runtime in game/doom/ (DOOM_ABI, SPEC_RUNTIME section
+   9).  Same rule as above: every macro sits ON the line it replaces, the #else branch is the
+   engine's original expression.  The tic clock: monsterMoveCounter accumulates vtimer (60 Hz
+   vblanks) and the loop consumes CFG_TIC_UNIT per tic -- x7 / 12 gives 60*7/12 = 35 Hz exactly,
+   CFG_TIC_CAP = 4 tics per frame either way (SRUINS.C:2139-2143, 2196, 2302). */
+#ifdef GP_GAME_DOOM
+int  game_placeObject(int ot);                       /* DOOM_GAME.C (OBJECT.C:212 hook)         */
+void doom_playerTic(void);                           /* DOOM_PLAYER.C, 35 Hz                    */
+char *doom_levelName(int lNm);                       /* DOOM_GAME.C, doomLevelNames[] bounded   */
+#define CFG_TIC_ADD(v)       ((v)*7)                 /* SRUINS.C:2302                           */
+#define CFG_TIC_UNIT         12                      /* SRUINS.C:2142, 2196                     */
+#define CFG_TIC_CAP          48                      /* SRUINS.C:2139-2140                      */
+#define CFG_PLACE(t)         game_placeObject(t)     /* OBJECT.C:212: 1 = consumed by game/doom */
+#define CFG_PLAYER_TIC()     doom_playerTic()        /* SRUINS.C:2143, before runObjects()      */
+#define CFG_DOOR_FIT         GP_PLAYER_FIT_HEIGHT    /* AI.C:4304 SHORTOPENING threshold (56)   */
+#define CFG_SPRITE_NEARCLIP  F(10)                   /* WALLS.C:2701                            */
+#define CFG_LIFT_RESET(o)    if ((o)->channel!=-1) signalAllObjects(SIGNAL_SWITCHRESET,(o)->channel,0)  /* AI.C:4667 */
+#define CFG_LIFT_STOP_SND    3                       /* AI.C:4674: ST_PUSHBLOCK+3 = PSTOP       */
+#define CFG_LEVEL_NAME(l)    doom_levelName(l)       /* SRUINS.C:2510 (BIGMAP.C levelGraph)     */
+#define CFG_PLAY_INTRO()                             /* INITMAIN.C:617: no LOGOS.PCS/OPEN.MOV   */
+/* player / weapons (SPEC_PLAYER sections 1-2, 5; DOOM_PLAYER.C, DOOM_WEAPON.C) */
+void doom_playerInit(void);                          /* every level, after initWeapon()        */
+void doom_playerFrame(unsigned short input,unsigned short pushed);   /* 60 Hz, movePlayer      */
+void doom_playerDamage(int damage,Object *source);   /* replaces playerHurt                    */
+void doom_weaponNext(int dir);                       /* +1 / -1: next / previous owned weapon   */
+void doom_weaponDraw(int nmFrames);                  /* the pinned psprite (advanceWeaponSequence) */
+#define CFG_CONTROL(in,ch,p)   doom_playerFrame(in,p)           /* SRUINS.C:960                  */
+#define CFG_DEATH_SFX          11                                /* SRUINS.C:967: PLDETH (1 = SHOTGN in the Doom static list) */
+#define CFG_WEAPON_UP(m)       doom_weaponNext(1)                /* SRUINS.C:983                  */
+#define CFG_WEAPON_DN(m)       doom_weaponNext(-1)               /* SRUINS.C:988                  */
+#define CFG_BOWLDOTS()                                           /* SRUINS.C:984, 989: no bowls   */
+#define CFG_FALL_MIN           0x7fffffff                        /* SRUINS.C:238: no fall damage  */
+#define CFG_LEVEL_PLAYER_INIT() doom_playerInit()                /* SRUINS.C:2010                 */
+#define CFG_RUN_WEAPON(n,i,b)  if (!mapOn) doom_weaponDraw(n)    /* SRUINS.C:2207; no gun over the automap */
+#define CFG_PLAYER_HURT(hp,src) doom_playerDamage(hp,(Object *)(src))   /* AI.C:34 player_func  */
+#define CFG_WOVERLAY_FROM      0x7fffffff                        /* SEQUENCE.C:252: no palette swap at wseq 50 */
+#define CFG_WFLASH_OVERLAY     0                                 /* SEQUENCE.C:311: flash = object palette 0   */
+#define CFG_ENGINE_FIRE        0                                 /* SRUINS.C:977: no fireWeapon() on an empty queue -- the Doom psprite machine fires (A_WeaponReady) */
+void doom_useRefused(void);                          /* DOOM_PLAYER.C: sfx_noway                */
+#define CFG_DEATH_PITCH        0                                 /* SRUINS.C:895: dead view stays level (Doom has no pitch) */
+#define CFG_USE_REFUSED        else doom_useRefused();           /* SRUINS.C:853: use on a plain wall => sfx_noway (p_map.c PTR_UseTraverse) */
+#else
+#define CFG_TIC_ADD(v)       (v)
+#define CFG_TIC_UNIT         2
+#define CFG_TIC_CAP          8
+#define CFG_PLACE(t)         0
+#define CFG_PLAYER_TIC()
+#define CFG_DOOR_FIT         80
+#define CFG_SPRITE_NEARCLIP  F(32)
+#define CFG_LIFT_RESET(o)
+#define CFG_LIFT_STOP_SND    1
+#define CFG_LEVEL_NAME(l)    getLevelName(l)
+#define CFG_PLAY_INTRO()     playIntro()
+#define CFG_CONTROL(in,ch,p)   controlInput(in,ch)
+#define CFG_DEATH_SFX          1
+#define CFG_WEAPON_UP(m)       weaponUp(m)
+#define CFG_WEAPON_DN(m)       weaponDown(m)
+#define CFG_BOWLDOTS()         redrawBowlDots()
+#define CFG_FALL_MIN           F(1)
+#define CFG_LEVEL_PLAYER_INIT()
+#define CFG_RUN_WEAPON(n,i,b)  runWeapon(n,i,b)
+#define CFG_PLAYER_HURT(hp,src) playerHurt(hp)
+#define CFG_WOVERLAY_FROM      50
+#define CFG_WFLASH_OVERLAY     0x4000
+#define CFG_ENGINE_FIRE        1
+#define CFG_DEATH_PITCH        F(80)
+#define CFG_USE_REFUSED
+#endif
+
+/* HUD / screen frame (SPEC_PLAYER section 3, owner: DOOM_HUD.C).  Doom runs a 320x224 frame: 3D
+   window = screen lines 0..191 (YMIN -112 .. YMAX 80 around the line-112 centre), the STBAR char at
+   lines 192..223 (y_e = y_doom - 88), weapon clip 192, DOOM_PSP_Y0 = 0 (DOOM.H).  Chars: 0 STBAR,
+   1-3 keys, 4 face (doom_hudInit, replacing stat_bar + 3 compasses), fonts from 5.  Fonts: PRINT.o
+   is linked into INIT, MAIN and KEYGEN, so the PowerSlave list stays the default one and the Doom
+   list (STCFN 1, STTNUM 2, STYSNUM 3; set by doom_hudInit) is taken only when the initFonts mask
+   carries CFG_FONT_DOOMLIST -- runLevel's call -- the menus/title/INIT keep brianFont/bigFont. */
+#ifdef GP_GAME_DOOM
+void doom_hudInit(void);                             /* DOOM_HUD.C: chars 0-4 + doomFontList    */
+void doom_drawStatBar(void);                         /* DOOM_HUD.C                              */
+void doom_drawMessage(void);                         /* DOOM_HUD.C                              */
+extern int mapOn;                                    /* SRUINS.C:85                             */
+#define CFG_FONT_DOOMLIST      0x10                              /* initFonts mask bit: Doom list */
+#define CFG_NMFONTS            4                                 /* PRINT.C:14 MAXNMFONTS         */
+#define CFG_FONTLIST_DEF       static unsigned char *peFontList[]={brianFont,brianFont,bigFont,NULL,NULL}; unsigned char **doomFontList; static unsigned char **fontList=peFontList;   /* PRINT.C:17 */
+#define CFG_FONT_PICK(m)       fontList=(((m)&CFG_FONT_DOOMLIST)&&doomFontList)?doomFontList:peFontList;   /* PRINT.C:55 */
+#define CFG_FONT_BASE          5                                 /* SRUINS.C:1902: after chars 0-4 */
+#define CFG_FONT_MASK          (CFG_FONT_DOOMLIST|0xE)           /* fonts 1-3 of the Doom list    */
+#define CFG_TV_SIZE            SPR_TV_320X224                    /* SRUINS.C:1878, 2433           */
+#define CFG_SCL_LINES          SCL_224LINE                       /* SRUINS.C:2399, 2487           */
+#define CFG_YCENTER            112                               /* SRUINS.C:2127, 2316-2317; WALLS.C; SEQUENCE.C:297; MAP.C */
+#define CFG_YMIN               -112                              /* WALLS.C:129, MAP.C:22         */
+#define CFG_YMAX               80                                /* WALLS.C:131, MAP.C:23         */
+#define CFG_WCLIP_BOTTOM       192                               /* SEQUENCE.C:258                */
+#define CFG_HUD_CHARS(x)       doom_hudInit()                    /* SRUINS.C:1890-1897            */
+#define CFG_REDRAW_STATBAR()                                     /* SRUINS.C:1906: done by doom_hudInit */
+#define CFG_BOWLDOTS_GUARD     return;                           /* SRUINS.C:1171: never poke bowls into STBAR */
+#define CFG_DRAW_MESSAGE()     doom_drawMessage()                /* SRUINS.C:2211 (after drawMessage) */
+#define CFG_DRAW_STATBAR(f)    doom_drawStatBar()                /* SRUINS.C:2212                 */
+#define CFG_DRAW_AIRMETER(f)                                     /* SRUINS.C:2214: no air meter   */
+#else
+#define CFG_NMFONTS            3
+#define CFG_FONTLIST_DEF       static unsigned char *fontList[]={brianFont,brianFont,bigFont,NULL};
+#define CFG_FONT_PICK(m)
+#define CFG_FONT_BASE          4
+#define CFG_FONT_MASK          3
+#define CFG_TV_SIZE            SPR_TV_320X240
+#define CFG_SCL_LINES          SCL_240LINE
+#define CFG_YCENTER            120
+#define CFG_YMIN               -110
+#define CFG_YMAX               90
+#define CFG_WCLIP_BOTTOM       210
+#define CFG_HUD_CHARS(x)       x
+#define CFG_REDRAW_STATBAR()   redrawStatBar()
+#define CFG_BOWLDOTS_GUARD
+#define CFG_DRAW_MESSAGE()
+#define CFG_DRAW_STATBAR(f)    drawStatBar(f)
+#define CFG_DRAW_AIRMETER(f)   drawAirMeter(f)
+#endif
+
 #ifdef GP_CROUCH_BUTTON_WEPDN
 #define CFG_WEPDN          0                         /* that slot crouches now (SRUINS.C:987)   */
 #define WEP_NEXT(m,d)      cylWeaponNext((m),(d))    /* so one button cycles (WEAPON.C:977)     */

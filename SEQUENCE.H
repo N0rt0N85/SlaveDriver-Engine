@@ -30,4 +30,5 @@ int advanceWeaponSequence(int xbase,int ybase,int hack);
 int getWeaponSequenceQSize(void);
 void addWeaponSequence(int seqNm);
 void clearWeaponQ();
+void setWeaponSequence(int seqNm,int cx,int cy);   /* GP_GAME_DOOM only: pin, not queue (SPEC_PLAYER 2.3) */
 #endif

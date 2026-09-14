@@ -89,6 +89,17 @@ PYTHON   ?= python
 ifeq ($(shell $(PYTHON) tools/gameparams.py --get PLAYER_MODEL $(PARAMS)),cylinder)
   PLAYER_C := PLRCYL
 endif
+# GAME = doom (params/doom.cfg -> GP_GAME_DOOM): the Doom runtime under game/doom/ joins MAIN
+# (DOOM_ABI section 8), the disc data comes from cd_doom/ (section 9) and the HUD art is a
+# generated header, $(BUILD)/doom_art.h (section 5; $(BUILD) is on the include path).  Nothing
+# here is evaluated for the default build, whose binaries stay byte for byte the same.
+ifeq ($(shell $(PYTHON) tools/gameparams.py --get GAME $(PARAMS)),doom)
+  GAME_C   := $(notdir $(basename $(wildcard game/doom/*.C)))
+  GAME_INC := -Igame/doom
+  CDDIR    := cd_doom
+  DOOMWAD  ?= ../Mimas/cd/data/DOOM1.WAD
+  WAD2HUD  := $(wildcard tools/doom2ps/wad2hud.py)
+endif
 
 # ---------------------------------------------------------------------------------------------
 # Flags (baseline from docs/PORTING_NOTES.md)
@@ -107,7 +118,7 @@ endif
 #   -fwrapv                 wrapping signed arithmetic
 #   -fno-aggressive-loop-optimizations   no UB-derived trip counts on the 1-element COMMON arrays
 # ---------------------------------------------------------------------------------------------
-INCLUDES := -Isdk/sbl6/include -Ishim -I. -I$(BUILD)
+INCLUDES := -Isdk/sbl6/include -Ishim -I. -I$(BUILD) $(GAME_INC)
 CFLAGS   := -x c -m2 -O2 -std=gnu89 -fgnu89-inline -fcommon -fno-builtin -Wall -g $(DEFINES) $(INCLUDES) -MMD -MP \
             -fno-delete-null-pointer-checks -fno-toplevel-reorder -fno-strict-aliasing -fwrapv -fno-aggressive-loop-optimizations
 ASFLAGS  := -m2 -g $(DEFINES) $(INCLUDES)
@@ -163,6 +174,8 @@ INIT_C       := DMA FILE INITMAIN LOCAL MOV PICSET PRINT SOUND SPR UTIL $(COMMON
 MAIN_C       := AI AI2 AICOMMON ART BIGMAP BUP DMA FILE HITSCAN INTRO LOCAL MAP MENU OBJECT PIC \
                 PICSET PLAX PRINT PROFILE ROUTE SEQUENCE SOUND SPR SPRITE SRUINS UTIL WEAPON $(COMMON4) WALLS $(PLAYER_C)
 KEYGEN_C     := DMA FILE KEYGEN LOCAL MOV PICSET PRINT SOUND SPR UTIL LEVEL SCL_FUNC SCL_VBLV V_BLANK
+MAIN_C       += $(GAME_C)              # game/doom/*.C when GAME = doom (empty otherwise)
+vpath %.C game/doom
 
 # crt0 first (its .text.crt0 section is placed first by saturn.ld anyway, but keep the order
 # explicit: the .BIN must start with the entry — executeLink jumps to MAIN's first byte).
@@ -210,6 +223,24 @@ $(GAMEPARAMS_H): $(PARAMS) tools/gameparams.py
 	$(PYTHON) tools/gameparams.py $(PARAMS) $@
 
 $(ALL_OBJS): $(GAMEPARAMS_H)
+
+# --- GAME = doom: HUD art header (STBAR+STARMS, faces, keys, fonts) generated from the WAD by
+#     tools/doom2ps/wad2hud.py (SPEC_CONVERTER section 3bis).  Until that script exists the rule
+#     writes an EMPTY stub (DOOM_ART_STUB, no arrays: -fno-toplevel-reorder keeps unreferenced
+#     statics, a zero-filled stub would cost MAIN 30 KB) so DOOM_HUD.C always compiles; the header
+#     is rebuilt as soon as the script appears (it is a prerequisite).
+ifeq ($(shell $(PYTHON) tools/gameparams.py --get GAME $(PARAMS)),doom)
+$(BUILD)/doom_art.h: $(WAD2HUD) $(wildcard tools/doom2ps/wad2font.py) | $(OBJDIR)
+ifneq ($(WAD2HUD),)
+	$(PYTHON) $(WAD2HUD) $(DOOMWAD) $@
+else
+	@echo "*** $@: tools/doom2ps/wad2hud.py not found -- writing an empty stub; rerun make once it exists"
+	@printf '%s\n' '/* doom_art.h -- STUB written by the Makefile: tools/doom2ps/wad2hud.py was absent.' \
+	  '   No arrays on purpose (see the Makefile rule); DOOM_HUD.C draws nothing while DOOM_ART_STUB is set. */' \
+	  '#ifndef DOOM_ART_H' '#define DOOM_ART_H' '#define DOOM_ART_STUB 1' '#endif' > $@.tmp && mv $@.tmp $@
+endif
+$(OBJDIR)/DOOM_HUD.o $(OBJDIR)/PRINT.o: $(BUILD)/doom_art.h
+endif
 
 # --- C: every root *.C, compiled as C ---------------------------------------------------------
 $(OBJDIR)/%.o: %.C | $(OBJDIR)

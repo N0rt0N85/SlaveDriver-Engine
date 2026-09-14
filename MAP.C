@@ -19,8 +19,8 @@
 
 #define MINX (-160)
 #define MAXX (160)
-#define MINY (-110)
-#define MAXY (90)
+#define MINY (CFG_YMIN)   /* -110; GP_GAME_DOOM -112 (224-line frame, SPRITE.H) */
+#define MAXY (CFG_YMAX)   /* 90;   GP_GAME_DOOM 80 */
 
 char mapColor[MAXNMWALLS];
 
@@ -53,6 +53,37 @@ void initMap(void)
 	{mapColor[w]=0;
 	 if (level_wall[w].normal[1]!=0)
 	    continue;
+#ifdef GP_GAME_DOOM
+	 /* AM_drawWalls (am_map.c) by wall kind (SPEC_PLAYER 3.7): 1 = one-sided line (REDS),
+	    2 = floor step (BROWNS), 3 = ceiling step (YELLOWS), 0 = not drawn.  One-sided = no
+	    nextSector; only the face that spans floor to ceiling is drawn, as below (a step face
+	    under a portal would repaint that portal red).  The heights compared are the vertex
+	    distances to each side's floor/ceiling (sSectorType has no ceiling level). */
+	 if (level_wall[w].nextSector==-1)
+	    {if (findCeilDistance(s,getVertex(level_wall[w].v[0],&t))<F(1) &&
+		 findFloorDistance(s,getVertex(level_wall[w].v[3],&t))<F(1) &&
+		 findCeilDistance(s,getVertex(level_wall[w].v[1],&t))<F(1) &&
+		 findFloorDistance(s,getVertex(level_wall[w].v[2],&t))<F(1))
+		mapColor[w]=1;
+	     continue;
+	    }
+	 {int ns=level_wall[w].nextSector,k;
+	  Fixed32 df=0,dc=0,d;
+	  for (k=0;k<2;k++)
+	     {d=abs(findFloorDistance(s,getVertex(level_wall[w].v[3-k],&t))-
+		    findFloorDistance(ns,getVertex(level_wall[w].v[3-k],&t)));
+	      if (d>df) df=d;
+	      d=abs(findCeilDistance(s,getVertex(level_wall[w].v[k],&t))-
+		    findCeilDistance(ns,getVertex(level_wall[w].v[k],&t)));
+	      if (d>dc) dc=d;
+	     }
+	  if (df>F(1)/2)
+	     mapColor[w]=2;
+	  else if (dc>F(1)/2)
+	     mapColor[w]=3;
+	 }
+	 continue;
+#endif
 	 if (/*level_wall[w].nextSector==-1*/
 	     level_wall[w].flags & WALLFLAG_BLOCKED)
 	    {/* only draw wall if goes from floor to ceiling */
@@ -110,6 +141,78 @@ static unsigned short colors[4]=
     0x8000| 25<<10 | 25<<5 | 25,
     0x8000| 18<<10 | 18<<5 | 18};
 
+#ifdef GP_GAME_DOOM
+/* am_map.c colour indices (am_map.c:50-83): mapColor 1..3, then allmap grey and the arrow */
+#define DOOM_AM_REDS      176           /* WALLCOLORS                                          */
+#define DOOM_AM_BROWNS    64            /* FDWALLCOLORS                                        */
+#define DOOM_AM_YELLOWS   231           /* CDWALLCOLORS                                        */
+#define DOOM_AM_GRAYS3    (96+3)        /* GRAYS+3: lines revealed by the computer map          */
+#define DOOM_AM_WHITE     209           /* YOURCOLORS                                          */
+
+/* PLAYPAL entry -> RGB colour word, read from CRAM bank 0 (the object palette of the .LEV =
+   PLAYPAL, copied there by loadPalletes, PIC.C:630-634): no palette data in the source */
+static unsigned short doomMapColor(int index)
+{return ((unsigned short *)SCL_COLRAM_ADDR)[index] | 0x8000;
+}
+
+/* Doom automap walls: black view (AM_clearFB), then the classified walls of the seen leaves in
+   their Doom colour; unseen leaves only with the computer map, in grey.  Same projection and
+   clipping as the engine loop below. */
+static void doomDrawMapWalls(int cx,int cy,MthXyz *north,MthXyz *east)
+{int s,w,color;
+ unsigned short pal[4];
+ XyInt mapLine[4];
+ MthXyz p1,p2,wallP;
+
+ pal[0]=0;
+ pal[1]=doomMapColor(DOOM_AM_REDS);
+ pal[2]=doomMapColor(DOOM_AM_BROWNS);
+ pal[3]=doomMapColor(DOOM_AM_YELLOWS);
+ colors[1]=doomMapColor(DOOM_AM_WHITE);       /* the player arrow drawn by drawMap */
+
+ mapLine[0].x=MINX; mapLine[0].y=MINY;
+ mapLine[1].x=MAXX; mapLine[1].y=MINY;
+ mapLine[2].x=MAXX; mapLine[2].y=MAXY;
+ mapLine[3].x=MINX; mapLine[3].y=MAXY;
+ EZ_polygon(ECD_DISABLE|SPD_DISABLE,RGB(0,0,0),mapLine,NULL);
+
+ for (s=0;s<level_nmSectors;s++)
+    {if (level_sector[s].flags & SECFLAG_NOMAP)
+	continue;
+     if (!(level_sector[s].flags & SECFLAG_SEEN) && !gotFullMap)
+	continue;
+     for (w=level_sector[s].firstWall;w<=level_sector[s].lastWall;w++)
+	{if (!mapColor[w])
+	    continue;
+	 if (level_sector[s].flags & SECFLAG_SEEN)
+	    color=pal[(int)mapColor[w]];
+	 else
+	    color=doomMapColor(DOOM_AM_GRAYS3);
+	 getVertex(level_wall[w].v[0],&wallP);
+	 p1.x=f(wallP.x-cx);
+	 p1.y=f(wallP.z-cy);
+	 getVertex(level_wall[w].v[1],&wallP);
+	 p2.x=f(wallP.x-cx);
+	 p2.y=f(wallP.z-cy);
+
+	 mapLine[0].x=f(p1.x*north->x+p1.y*north->y);
+	 mapLine[0].y=f(p1.x*east->x+p1.y*east->y);
+	 mapLine[1].x=f(p2.x*north->x+p2.y*north->y);
+	 mapLine[1].y=f(p2.x*east->x+p2.y*east->y);
+	 if (mapLine[0].x<MINX && mapLine[1].x<MINX)
+	    continue;
+	 if (mapLine[0].x>MAXX && mapLine[1].x>MAXX)
+	    continue;
+	 if (mapLine[0].y<MINY && mapLine[1].y<MINY)
+	    continue;
+	 if (mapLine[0].y>MAXY && mapLine[1].y>MAXY)
+	    continue;
+	 EZ_line(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|COMPO_REP,color,mapLine,NULL);
+	}
+    }
+}
+#endif
+
 
 #define ARROWR 5
 
@@ -124,8 +227,8 @@ void drawMap(int cx,int cy,int cz,int yaw,int currentSector)
  east.x=north.y;
  east.y=-north.x;
 
- {mapLine[0].x=MINX+160; mapLine[0].y=MINY+120;
-  mapLine[1].x=MAXX+160; mapLine[1].y=MAXY+120;
+ {mapLine[0].x=MINX+160; mapLine[0].y=MINY+CFG_YCENTER;
+  mapLine[1].x=MAXX+160; mapLine[1].y=MAXY+CFG_YCENTER;
   EZ_userClip(mapLine);
  }
 #ifndef NDEBUG
@@ -145,6 +248,10 @@ void drawMap(int cx,int cy,int cz,int yaw,int currentSector)
  nmMarks=0;
 #endif
 
+#ifdef GP_GAME_DOOM
+ doomDrawMapWalls(cx,cy,&north,&east);
+ (void)cz; (void)currentSector; (void)w; (void)s; (void)color; (void)transp; (void)currentHeight; (void)p1; (void)p2; (void)wallP;
+#else
  currentHeight=level_sector[currentSector].floorLevel;
  for (s=0;s<level_nmSectors;s++)
     {transp=0;
@@ -208,6 +315,7 @@ void drawMap(int cx,int cy,int cz,int yaw,int currentSector)
 		    color,mapLine,NULL);
 	}
     }
+#endif
 
  mapLine[0].x=0;
  mapLine[0].y=-ARROWR;

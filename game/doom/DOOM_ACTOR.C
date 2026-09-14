@@ -1,0 +1,771 @@
+/* DOOM_ACTOR.C -- the generic Doom object: spawn, states, rotations, damage, projectiles.
+ * SPEC_RUNTIME sections 2, 4, 5, 7; contract sections 1, 2, 4.
+ *
+ * One handler, game_actor_func, drives every mobj of the level (monsters, barrels, decor,
+ * missiles, puffs, blood); pickups share it through doom_item_func (DOOM_GAME.C).  States and
+ * tics come from doomStates[] (35 Hz, counted by SIGNAL_MOVE), the verb of a state from
+ * doomActions[] (DOOM_VERBS.C), the drawn sequence from the contract section 2 formula.
+ * Randomness: P_Random() over rndtable[] (DOOM_TABLES.C), consumed in Doom's order wherever
+ * the engine mechanics allow (deviations are noted at the call). */
+#include "util.h"
+#include "level.h"
+#include "sprite.h"
+#include "object.h"
+#include "ai.h"
+#include "aicommon.h"
+#include "sruins.h"
+#include "sequence.h"
+#include "hitscan.h"
+#include "gamestat.h"
+#include "doom.h"
+
+#define DOOM_MISSILERANGE F(2048)      /* p_local.h:55 */
+#define DOOM_BASETHRESHOLD 100         /* p_local.h:58 */
+
+int nmSpawnFail;
+Object *doomSoundTarget[MAXNMSECTORS];
+
+static void doomMissileHit(DoomActor *this,int collide);
+static int doomMoveMissile(DoomActor *this);
+
+/* --- helpers shared with DOOM_VERBS.C ------------------------------------------------------ */
+
+/* The usual target is the engine PlayerObject (AI.C:39-58), which is not a DoomActor: its
+   sprite is the camera and its life is currentState.health (SPEC_RUNTIME section 3.2). */
+Sprite *doom_targetSprite(Object *t)
+{if (!t)
+    return NULL;
+ if (t==(Object *)player)
+    return camera;
+ if (t->func==game_actor_func || t->func==doom_item_func)
+    return ((DoomActor *)t)->sprite;
+ return NULL;
+}
+
+int doom_targetAlive(Object *t)
+{if (!t)
+    return 0;
+ if (t==(Object *)player)
+    return currentState.health>0;
+ if (t->func==game_actor_func)
+    {DoomActor *a=(DoomActor *)t;
+     return a->health>0 && (a->mflags & DF_SHOOTABLE);
+    }
+ return 0;
+}
+
+/* P_AproxDistance (p_maputl.c): dx+dy-min/2, the 2D version (approxDist is 3D) */
+Fixed32 doom_approxDist2(Fixed32 dx,Fixed32 dz)
+{dx=abs(dx);
+ dz=abs(dz);
+ if (dx<dz)
+    return dx+dz-(dx>>1);
+ return dx+dz-(dz>>1);
+}
+
+void doom_actorLevelInit(void)
+{int s;
+ for (s=0;s<MAXNMSECTORS;s++)
+    doomSoundTarget[s]=NULL;
+ nmSpawnFail=0;
+}
+
+/* --- sequences (contract section 2) --------------------------------------------------------- */
+
+/* Identical to the Python side:
+     if (map[spr] == -2) return -2            (guard BEFORE the 0x8000 test: -2 = 0xFFFE)
+     stride = (map[spr] & 0x8000) ? 8 : 1
+     seq = (map[spr] & 0x7fff) + frame*stride + (stride == 8 ? view : 0)
+   view = getFacingAngle() 0..7 = Doom rotation view+1; frame = states[].frame & 0x7fff. */
+short doom_seq(int sprite,int frame,int view)
+{int m,stride;
+ assert(sprite>=0 && sprite<NUMSPRITES);
+ assert(frame>=0 && frame<0x8000);
+ assert(view>=0 && view<8);
+ m=level_sequenceMap[sprite];
+ if (m==-2)
+    return -2;
+ stride=(m & 0x8000)?8:1;
+ return (short)((m & 0x7fff)+frame*stride+(stride==8?view:0));
+}
+
+/* sprite->sequence for the current state and the current view; an absent family (-2) leaves
+   the sprite undrawn (-1: WALLS.C:2594 skips it) instead of reading outside the block */
+static void doomSetSequence(DoomActor *this)
+{const DoomState *st=&doomStates[this->state];
+ int view=camera?getFacingAngle(this->sprite,camera):0;
+ int seq=doom_seq(st->sprite,st->frame,view);
+ if (seq<0)
+    seq=-1;
+ assert(seq<level_nmSequences);
+ this->sprite->sequence=(short)seq;
+}
+
+/* --- states (P_SetMobjState, p_mobj.c:49-72) ------------------------------------------------ */
+
+/* terminal states without motion leave objectRunList: decor and corpses only (SPEC_RUNTIME
+   section 2) -- never a pickup (doom_item_func needs SIGNAL_MOVE for its collision) */
+static void doomIdleIfTerminal(DoomActor *this)
+{if (this->tics==-1 && this->func==game_actor_func && !(this->mflags & DF_IDLE) &&
+     ((this->mflags & DF_CORPSE) || !(this->mflags & (DF_SHOOTABLE|DF_MISSILE))))
+    {this->mflags|=DF_IDLE;
+     delay_moveObject((Object *)this,objectIdleList);
+    }
+}
+
+/* P_SpawnMobj's state: `mobj->state = st; mobj->tics = st->tics` WITHOUT the verb ("action
+   routines can not be called yet", p_mobj.c) -- a monster's first A_Look is its first tic. */
+static void doomSetSpawnState(DoomActor *this,int state)
+{const DoomState *st;
+ if (state==S_NULL)
+    {doom_setState(this,S_NULL);                /* MT_TELEPORTMAN and kin: nothing to show */
+     return;
+    }
+ assert(state>0 && state<NUMSTATES);
+ st=&doomStates[state];
+ assert(!(st->flags & DOOM_SF_PSPRITE));
+ this->state=(short)state;
+ this->tics=st->tics;
+ this->sprite->frame=0;
+ doomSetSequence(this);
+ doomIdleIfTerminal(this);
+}
+
+void doom_setState(DoomActor *this,int state)
+{const DoomState *st;
+ assert(this);
+ assert(this->sprite);
+ do
+    {if (state==S_NULL)
+	{this->state=0;
+	 this->tics=-1;
+	 delayKill((Object *)this);
+	 return;
+	}
+     assert(state>0 && state<NUMSTATES);
+     st=&doomStates[state];
+     assert(!(st->flags & DOOM_SF_PSPRITE));    /* weapon states never reach an actor */
+     this->state=(short)state;
+     this->tics=st->tics;
+     this->sprite->frame=0;
+     doomSetSequence(this);
+     /* Doom actors have no momentum: a state that does not walk (attack, pain, look) stands
+	still.  A_Chase sets the velocity again right after this, missiles keep theirs. */
+     if (!(this->mflags & DF_MISSILE))
+	{this->sprite->vel.x=0;
+	 this->sprite->vel.z=0;
+	}
+     if (st->action)
+	{assert(st->action<DOOM_NUMACTIONS);
+	 if (doomActions[st->action].mobj)
+	    doomActions[st->action].mobj(this);
+	 if (this->type==OT_DEAD)
+	    return;                             /* the verb killed us */
+	}
+     state=st->nextstate;
+    }
+ while (!this->tics);
+ doomIdleIfTerminal(this);
+}
+
+/* --- the handler ---------------------------------------------------------------------------- */
+
+void game_actor_func(Object *_this,int message,int param1,int param2)
+{DoomActor *this=(DoomActor *)_this;
+ switch (message)
+    {case SIGNAL_MOVE:
+	assert(this->sprite);
+	if (this->mflags & DF_CORPSE)
+	   this->collide=0;
+	else if (this->mflags & DF_MISSILE)
+	   {this->collide=doomMoveMissile(this);
+	    doomMissileHit(this,this->collide);
+	   }
+	else
+	   this->collide=moveSprite(this->sprite);
+	if (this->tics>0)
+	   {if (--this->tics==0)
+	       doom_setState(this,doomStates[this->state].nextstate);
+	   }
+	break;
+     case SIGNAL_VIEW:
+	if (this->sprite)
+	   doomSetSequence(this);
+	break;
+     case SIGNAL_HURT:
+	doom_damageActor(this,param1,(Object *)param2);
+	break;
+     case SIGNAL_OBJECTDESTROYED:
+	if ((Object *)param1==_this)
+	   {if (this->sprite)
+	       freeSprite(this->sprite);
+	    this->sprite=NULL;
+	   }
+	else if ((Object *)param1==this->target)
+	   this->target=NULL;
+	break;
+     default:
+	break;
+    }
+}
+
+/* --- spawn (P_SpawnMobj, SPEC_RUNTIME section 2) -------------------------------------------- */
+
+/* Sphere radius of a solid, non-shootable thing (COLU, ELEC, CBRA...).  Doom blocks by the 2D
+   distance r + 16 whatever the heights; the engine collides spheres, the player's being centred
+   on the eye (41 above the feet, radius 16: params/doom.cfg).  A sphere of radius R resting on
+   the floor stops that eye ball at the 2D distance D = r + 16 when (16+R)^2 - (41-R)^2 = D^2,
+   i.e. R = (D^2/57 + 25)/2 (COLU r 16 -> R 21; its height/2 would be 8, which the eye ball
+   never reaches).  Monsters (sphere 28 at feet + 28) are then stopped ~13 u farther than Doom. */
+static int doomSolidRadius(int r)
+{int d=r+16;
+ return (d*d/(16+41)+(41-16)+1)/2;
+}
+
+/* angle = engine angle (degrees << 16); pos taken as is (placeObjects adds the radius through
+   shiftSprites, dynamic callers set pos.y themselves).  NULL when a pool is empty. */
+DoomActor *doom_spawn(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
+{const DoomMobjInfo *info;
+ DoomActor *this;
+ messHandler func;
+ int class,sflags,gravity,radius,lastlook;
+ assert(mt>=0 && mt<NUMMOBJTYPES);
+ assert(pos);
+ assert(sector>=0 && sector<level_nmSectors);
+ info=&doomMobjInfo[mt];
+ /* P_SpawnMobj draws `lastlook = P_Random() % MAXPLAYERS` for every mobj (placed or spawned):
+    drawn first, even when a pool turns out empty below, so the RNG index follows Doom's */
+ lastlook=P_Random()%4;
+ func=game_actor_func;
+ if (info->flags & MF_SHOOTABLE)
+    {class=CLASS_MONSTER;               /* monsters AND barrels: autoTarget, OBJECTDESTROYED */
+     /* BSHORT (beyond the spec's BWATERBNDRY|BCLIFF): a closed door portal carries
+	WALLFLAG_SHORTOPENING and only blocks sprites that carry the matching bit
+	(bumpSectorBoundries SPRITE.C:414); without it a monster would penetrate the 1 u slit
+	of a closed door.  With it the door wall is the COLLIDE_WALL of the tic, and A_Chase
+	presses it (doomBlocked, DOOM_VERBS.C). */
+     sflags=SPRITEFLAG_BWATERBNDRY|SPRITEFLAG_BCLIFF|SPRITEFLAG_BSHORT;
+    }
+ else if (info->flags & MF_MISSILE)
+    {class=CLASS_PROJECTILE;
+     sflags=SPRITEFLAG_IMATERIAL;
+    }
+ else if (info->flags & MF_SPECIAL)
+    {class=CLASS_SPRITE;                /* pickups: collision only, doom_item_func */
+     sflags=SPRITEFLAG_IMATERIAL|SPRITEFLAG_IMMOBILE;
+     func=doom_item_func;
+    }
+ else if (info->flags & MF_SOLID)
+    {class=CLASS_SPRITE;                /* solid decor: blocks walkers and missiles, bullets pass
+					   (PIT_CheckThing; P_LineAttack shoots only SHOOTABLE) */
+     sflags=SPRITEFLAG_NOHITSCAN|SPRITEFLAG_NOSHADOW|SPRITEFLAG_IMMOBILE;
+    }
+ else if (doomStates[info->spawnstate].tics==-1)
+    {class=CLASS_SPRITE;                /* decor: never moves */
+     sflags=SPRITEFLAG_IMATERIAL|SPRITEFLAG_IMMOBILE;
+    }
+ else
+    {class=CLASS_SPRITE;                /* puff, blood, fog: one-shots with a velocity */
+     sflags=SPRITEFLAG_IMATERIAL;
+    }
+ /* P_ZMovement: momz -= GRAVITY = FRACUNIT per tic (SIGNAL_MOVE is one 35 Hz tic) */
+ gravity=(info->flags & MF_NOGRAVITY)?0:F(1);
+ /* one sphere: height/2 covers the Doom height (SPEC_RUNTIME section 2); a missile keeps its
+    Doom radius (TROOPSHOT 6, height 8: the horizontal hit is what matters, section 5); solid
+    decor gets the radius that blocks the player at Doom's distance (doomSolidRadius) */
+ if (info->flags & MF_MISSILE)
+    radius=info->radius;
+ else if ((info->flags & MF_SOLID) && !(info->flags & (MF_SHOOTABLE|MF_SPECIAL)))
+    radius=doomSolidRadius(info->radius);
+ else
+    radius=info->height/2;
+
+ this=(DoomActor *)getFreeObject(func,doomMtToOt[mt],class);
+ if (!this)
+    {nmSpawnFail++;
+     return NULL;
+    }
+ moveObject((Object *)this,objectRunList);   /* getFreeObject leaves it in the free list */
+ this->sprite=newSprite(sector,F(radius),F(1),gravity,-1,sflags,(Object *)this);
+ if (!this->sprite)
+    {this->type=OT_DEAD;
+     this->class=CLASS_DEAD;
+     moveObject((Object *)this,objectFreeList);
+     nmSpawnFail++;
+     return NULL;
+    }
+ this->sprite->pos=*pos;
+ this->sprite->angle=normalizeAngle(angle);
+ this->sprite->scale=65536;                  /* 1 texel per unit (contract section 2) */
+ this->sequenceMap=NULL;
+ this->state=0;
+ this->pad1=0;
+ this->mt=(short)mt;
+ this->tics=0;
+ this->health=info->spawnhealth;
+ this->reactiontime=info->reactiontime;
+ this->threshold=0;
+ this->movecount=0;
+ this->movedir=DI_NODIR;
+ this->dirCur=0;
+ this->nDir=0;
+ this->mflags=0;
+ if (thingFlags & 8)
+    this->mflags|=DF_AMBUSH;
+ if (info->flags & MF_SHOOTABLE)
+    this->mflags|=DF_SHOOTABLE;
+ if (info->flags & MF_MISSILE)
+    this->mflags|=DF_MISSILE;
+ if (info->flags & MF_NOBLOOD)
+    this->mflags|=DF_NOBLOOD;
+ if (info->flags & MF_SOLID)
+    this->mflags|=DF_SOLID;
+ this->target=NULL;
+ this->collide=0;
+ this->lastlook=(short)lastlook;
+ this->pad2=0;
+ this->chStage=2;
+ this->chD1=DI_NODIR;
+ this->chD2=DI_NODIR;
+ this->chOld=DI_NODIR;
+ this->chFlags=0;
+ this->pad3=0;
+ doomSetSpawnState(this,info->spawnstate);
+ return this;
+}
+
+/* --- damage (SPEC_RUNTIME section 4) -------------------------------------------------------- */
+
+/* target == camera => doom_playerDamage(damage, source) (armour maths live there only);
+   DoomActor => SIGNAL_HURT(damage, source): param2 is the SOURCE (a missile passes its
+   shooter, p_inter.c:781), not the inflictor. */
+void doom_damage(Sprite *target,Object *inflictor,Object *source,int damage)
+{assert(target);
+ if (target==camera)
+    {/* P_DamageMobj pushes the player away from the inflictor before the armour maths */
+     Sprite *is=doom_targetSprite(inflictor);
+     if (is && is!=camera)
+	doom_playerThrust(is,damage);
+     doom_playerDamage(damage,source);
+    }
+ else if (target->owner && target->owner->func==game_actor_func)
+    signalObject(target->owner,SIGNAL_HURT,damage,(int)source);
+}
+
+/* P_KillMobj (p_inter.c:668-730): corpse flags, death/xdeath state, random tic shortening,
+   drops (CLIP, SHOTGUN, CHAINGUN) at floor + item radius (SPEC_RUNTIME section 6) */
+static void doomKill(DoomActor *this,Object *source)
+{const DoomMobjInfo *info=&doomMobjInfo[this->mt];
+ int item;
+ (void)source;
+ this->mflags&=~DF_SHOOTABLE;
+ this->mflags|=DF_CORPSE;
+ /* Doom: a dying thing is no longer MF_SHOOTABLE -- the autoaim (PTR_AimTraverse) and the
+    bullets (PTR_ShootTraverse) pass it from THIS tic on, while it stays MF_SOLID until A_Fall.
+    Engine: the autoaim elects CLASS_MONSTER sprites (WALLS.C:2724-2732) and hitScan hits any
+    sprite without NOHITSCAN (HITSCAN.C:33-34) -- both dropped here, not 2 states later in
+    A_Fall (10 tics of a dying POSS stealing the aim from the live one behind it); the body
+    keeps blocking (NOSPRCOLLISION comes with A_Fall's IMATERIAL). */
+ this->class=CLASS_SPRITE;
+ this->sprite->flags|=SPRITEFLAG_NOHITSCAN;
+ if (this->health< -info->spawnhealth && info->xdeathstate)
+    doom_setState(this,info->xdeathstate);
+ else
+    doom_setState(this,info->deathstate);
+ if (this->type==OT_DEAD)
+    return;                                     /* no death state: already S_NULL */
+ this->tics-=P_Random()&3;
+ if (this->tics<1)
+    this->tics=1;
+
+ switch (this->mt)
+    {case MT_WOLFSS:
+     case MT_POSSESSED:
+	item=MT_CLIP;
+	break;
+     case MT_SHOTGUY:
+	item=MT_SHOTGUN;
+	break;
+     case MT_CHAINGUY:
+	item=MT_CHAINGUN;
+	break;
+     default:
+	return;
+    }
+ {MthXyz pos=this->sprite->pos;
+  DoomActor *drop;
+  pos.y=(pos.y-findFloorDistance(this->sprite->s,&pos))+F(doomMobjInfo[item].height/2);
+  drop=doom_spawn(item,this->sprite->s,&pos,0,0);
+  if (drop)
+     drop->mflags|=DF_DROPPED;
+ }
+}
+
+/* P_DamageMobj (p_inter.c:792-926) without the thrust */
+void doom_damageActor(DoomActor *this,int damage,Object *source)
+{const DoomMobjInfo *info;
+ assert(this);
+ info=&doomMobjInfo[this->mt];
+ if (!(this->mflags & DF_SHOOTABLE))
+    return;
+ if (this->health<=0)
+    return;
+ this->health-=damage;
+ if (this->health<=0)
+    {doomKill(this,source);
+     return;
+    }
+ if (P_Random()<info->painchance && info->painstate)
+    {this->mflags|=DF_JUSTHIT;                 /* fight back! */
+     doom_setState(this,info->painstate);
+    }
+ this->reactiontime=0;                         /* awake now */
+ if (!this->threshold && source && source!=(Object *)this)
+    {/* if not intent on another target, chase after this one */
+     this->target=source;
+     this->threshold=DOOM_BASETHRESHOLD;
+     if (this->state==info->spawnstate && info->seestate)
+	doom_setState(this,info->seestate);
+    }
+}
+
+/* P_RadiusAttack / PIT_RadiusAttack (p_map.c:1240-1300) over the live sprites: distance =
+   max(|dx|,|dz|) - radius in units, damage - distance when in range and in sight */
+void doom_radiusAttack(DoomActor *spot,Object *source,int damage)
+{int s,dist;
+ Sprite *spr;
+ Fixed32 dx,dz,d;
+ assert(spot);
+ assert(spot->sprite);
+ for (s=0;s<level_nmSectors;s++)
+    for (spr=sectorSpriteList[s];spr;spr=spr->next)
+       {if (spr==spot->sprite || !spr->owner)
+	   continue;
+	if (!doom_targetAlive(spr->owner))
+	   continue;
+	if (doom_targetSprite(spr->owner)!=spr)
+	   continue;
+	dx=abs(spr->pos.x-spot->sprite->pos.x);
+	dz=abs(spr->pos.z-spot->sprite->pos.z);
+	d=(dx>dz)?dx:dz;
+	/* thing->radius of Doom: the camera's is the player's (16), an actor's sphere is
+	   height/2 -- take info->radius (POSS 20, barrel 10) */
+	dist=f(d-((spr==camera)?spr->radius:
+		  F(doomMobjInfo[((DoomActor *)spr->owner)->mt].radius)));
+	if (dist<0)
+	   dist=0;
+	if (dist>=damage)
+	   continue;                            /* out of range */
+	if (canSee(spr,spot->sprite))
+	   doom_damage(spr,(Object *)spot,source,damage-dist);
+       }
+}
+
+/* --- noise alert (P_RecursiveSound, p_enemy.c:101-160) -------------------------------------- */
+
+/* Breadth-first flood over the portals from `sector`; a door portal whose blocking bits are
+   set (closed: setDoorBlockBits AI.C:4294-4309) stops the sound.  No ML_SOUNDBLOCK here. */
+void doom_noiseAlert(Object *emitter,int sector)
+{static short queue[MAXNMSECTORS];
+ static unsigned short soundValid[MAXNMSECTORS];
+ static unsigned short validcount;
+ int head,tail,s,w,ns;
+ assert(sector>=0 && sector<level_nmSectors);
+ validcount++;
+ if (!validcount)
+    {for (s=0;s<MAXNMSECTORS;s++)
+	soundValid[s]=0;
+     validcount=1;
+    }
+ head=0;
+ tail=0;
+ queue[tail++]=(short)sector;
+ soundValid[sector]=validcount;
+ while (head<tail)
+    {s=queue[head++];
+     doomSoundTarget[s]=emitter;
+     for (w=level_sector[s].firstWall;w<=level_sector[s].lastWall;w++)
+	{ns=level_wall[w].nextSector;
+	 if (ns<0)
+	    continue;
+	 if ((level_wall[w].flags & WALLFLAG_DOORWALL) &&
+	     (level_wall[w].flags & WALLFLAG_BLOCKBITS))
+	    continue;                           /* closed door */
+	 assert(ns<level_nmSectors);
+	 if (soundValid[ns]==validcount)
+	    continue;                           /* already flooded */
+	 soundValid[ns]=validcount;
+	 assert(tail<MAXNMSECTORS);
+	 queue[tail++]=(short)ns;
+	}
+    }
+}
+
+/* --- projectiles (SPEC_RUNTIME section 5) --------------------------------------------------- */
+
+/* P_ExplodeMissile (p_mobj.c:85-98) */
+static void doomExplodeMissile(DoomActor *this)
+{const DoomMobjInfo *info=&doomMobjInfo[this->mt];
+ this->sprite->vel.x=0;
+ this->sprite->vel.y=0;
+ this->sprite->vel.z=0;
+ doom_setState(this,info->deathstate);
+ if (this->type==OT_DEAD)
+    return;
+ this->tics-=P_Random()&3;
+ if (this->tics<1)
+    this->tics=1;
+ this->mflags&=~DF_MISSILE;
+ if (info->deathsound)
+    doom_sound(this->sprite,info->deathsound);
+}
+
+/* moveSprite of a missile with its shooter made transparent for the call (PIT_CheckThing:
+   `tmthing->target == thing` => no interaction at all).  Spawned at the shooter's centre
+   (28 + 6 u of overlap) the missile would otherwise be pushed 30 u out of the shooter's
+   sphere by collideSpriteSprite (SPRITE.C:506-517), mostly upwards, and lose the velocity
+   component along the push; the player's rocket would do the same against the camera. */
+static int doomMoveMissile(DoomActor *this)
+{Sprite *shooter=doom_targetSprite(this->target);
+ int saved=0,collide;
+ assert(this->sprite);
+ if (shooter)
+    {saved=shooter->flags;
+     shooter->flags|=SPRITEFLAG_NOSPRCOLLISION;
+    }
+ collide=moveSprite(this->sprite);
+ if (shooter)
+    shooter->flags=saved;
+ return collide;
+}
+
+/* PIT_CheckThing for a missile (p_map.c:310-360): the shooter is passed through; the same
+   species as the shooter (player excepted) explodes the missile without damage; anything
+   else takes (P_Random()%8+1)*damage.  Walls, floors and ceilings explode it. */
+static void doomMissileHit(DoomActor *this,int collide)
+{const DoomMobjInfo *info=&doomMobjInfo[this->mt];
+ if (!collide)
+    return;
+ if (collide & COLLIDE_SPRITE)
+    {Sprite *spr=&sprites[collide&0xffff];
+     Object *o=spr->owner;
+     int damage;
+     if (o && o==this->target)
+	goto walls;                             /* shooter */
+     if (o && spr!=camera && (o->func==game_actor_func || o->func==doom_item_func))
+	{DoomActor *hit=(DoomActor *)o;
+	 if (this->target && this->target->func==game_actor_func &&
+	     ((DoomActor *)this->target)->mt==hit->mt)
+	    {doomExplodeMissile(this);          /* same species: explode, no damage */
+	     return;
+	    }
+	 if (!(hit->mflags & DF_SHOOTABLE))
+	    {if (hit->mflags & DF_SOLID)
+		{doomExplodeMissile(this);      /* `return !(thing->flags & MF_SOLID)`: solid decor,
+						   dying body before A_Fall */
+		 return;
+		}
+	     goto walls;                        /* corpse, puff: not solid */
+	    }
+	}
+     else if (spr!=camera)
+	goto walls;                             /* engine sprite: ignore */
+     damage=(P_Random()%8+1)*info->damage;
+     doom_damage(spr,(Object *)this,this->target,damage);
+     doomExplodeMissile(this);
+     return;
+    }
+ walls:
+ if (collide & (COLLIDE_WALL|COLLIDE_FLOOR|COLLIDE_CEILING))
+    doomExplodeMissile(this);
+}
+
+/* P_SpawnMissile + P_CheckMissileSpawn (p_mobj.c:1121-1160): spawned 32 u above the feet,
+   speed u/tic (contract section 4) towards dest, vertical rate from the flight time */
+Object *doom_spawnMissile(DoomActor *src,Object *dest,int mt)
+{const DoomMobjInfo *info;
+ DoomActor *th;
+ Sprite *ds;
+ MthXyz pos,vel;
+ int an,dist,collide;
+ assert(src);
+ assert(src->sprite);
+ assert(mt>=0 && mt<NUMMOBJTYPES);
+ ds=doom_targetSprite(dest);
+ if (!ds)
+    return NULL;
+ info=&doomMobjInfo[mt];
+ pos=src->sprite->pos;
+ pos.y+=F(32)-src->sprite->radius;
+ an=getAngle(ds->pos.x-src->sprite->pos.x,ds->pos.z-src->sprite->pos.z);
+ th=doom_spawn(mt,src->sprite->s,&pos,an,0);
+ if (!th)
+    return NULL;
+ if (info->seesound)
+    doom_sound(th->sprite,info->seesound);
+ th->target=(Object *)src;                     /* where it came from */
+ th->sprite->vel.x=MTH_Mul(F(info->speed),MTH_Cos(an));
+ th->sprite->vel.z=MTH_Mul(F(info->speed),MTH_Sin(an));
+ dist=f(doom_approxDist2(ds->pos.x-src->sprite->pos.x,ds->pos.z-src->sprite->pos.z));
+ dist=dist/info->speed;
+ if (dist<1)
+    dist=1;
+ {/* momz = (dest->z - source->z)/dist: feet to feet (the camera is the eye, 41 above) */
+  Fixed32 dfeet=(ds==camera)?ds->pos.y-F(41):ds->pos.y-ds->radius;
+  th->sprite->vel.y=(dfeet-(src->sprite->pos.y-src->sprite->radius))/dist;
+ }
+
+ /* P_CheckMissileSpawn: shorten the first state, move half a tic, explode on contact */
+ th->tics-=P_Random()&3;
+ if (th->tics<1)
+    th->tics=1;
+ vel=th->sprite->vel;
+ th->sprite->vel.x=vel.x>>1;
+ th->sprite->vel.y=vel.y>>1;
+ th->sprite->vel.z=vel.z>>1;
+ collide=doomMoveMissile(th);
+ th->sprite->vel=vel;
+ th->collide=collide;
+ doomMissileHit(th,collide);
+ return (Object *)th;
+}
+
+/* P_SpawnPlayerMissile (p_mobj.c:1167-1200) for the rocket launcher (SPEC_PLAYER section 2.5):
+   spawned 32 u above the feet (camera->pos.y is the eye, 41 above the feet), speed u/tic along
+   the sprite-convention angle (yaw + 90) and the autoaim pitch, shooter = the player object
+   (doomMissileHit lets it through, the victims target the player).  Same P_CheckMissileSpawn. */
+Object *doom_spawnPlayerMissile(int mt,int angle,int pitch)
+{const DoomMobjInfo *info;
+ DoomActor *th;
+ MthXyz pos,vel;
+ Fixed32 cp;
+ int collide;
+ assert(mt>=0 && mt<NUMMOBJTYPES);
+ assert(camera);
+ info=&doomMobjInfo[mt];
+ pos=camera->pos;
+ pos.y-=F(41-32);
+ th=doom_spawn(mt,camera->s,&pos,angle,0);
+ if (!th)
+    return NULL;
+ if (info->seesound)
+    doom_sound(th->sprite,info->seesound);
+ th->target=(Object *)player;
+ cp=MTH_Mul(F(info->speed),MTH_Cos(pitch));
+ th->sprite->vel.x=MTH_Mul(cp,MTH_Cos(angle));
+ th->sprite->vel.z=MTH_Mul(cp,MTH_Sin(angle));
+ th->sprite->vel.y=MTH_Mul(F(info->speed),MTH_Sin(pitch));
+ th->tics-=P_Random()&3;
+ if (th->tics<1)
+    th->tics=1;
+ vel=th->sprite->vel;
+ th->sprite->vel.x=vel.x>>1;
+ th->sprite->vel.y=vel.y>>1;
+ th->sprite->vel.z=vel.z>>1;
+ collide=doomMoveMissile(th);
+ th->sprite->vel=vel;
+ th->collide=collide;
+ doomMissileHit(th,collide);
+ return (Object *)th;
+}
+
+/* P_SpawnPuff (p_mobj.c:1022-1036): MT_PUFF, random height, rises 1 u/tic, S_PUFF3 for
+   a punch.  The ONE implementation, also used by the player hitscan (SPEC_PLAYER 2.5). */
+void doom_spawnPuff(MthXyz *pos,int sector,int melee)
+{MthXyz p;
+ DoomActor *th;
+ assert(pos);
+ p=*pos;
+ p.y+=(P_Random()-P_Random())<<10;
+ th=doom_spawn(MT_PUFF,sector,&p,0,0);
+ if (!th)
+    return;
+ th->sprite->vel.y=F(1);
+ th->tics-=P_Random()&3;
+ if (th->tics<1)
+    th->tics=1;
+ if (melee)
+    doom_setState(th,S_PUFF3);                 /* punches do not spark on the wall */
+}
+
+/* P_SpawnBlood (p_mobj.c:1049-1066): MT_BLOOD, rises 2 u/tic under gravity, smaller
+   splashes for smaller damage */
+void doom_spawnBlood(MthXyz *pos,int sector,int damage)
+{MthXyz p;
+ DoomActor *th;
+ assert(pos);
+ p=*pos;
+ p.y+=(P_Random()-P_Random())<<10;
+ th=doom_spawn(MT_BLOOD,sector,&p,0,0);
+ if (!th)
+    return;
+ th->sprite->vel.y=F(2);
+ th->tics-=P_Random()&3;
+ if (th->tics<1)
+    th->tics=1;
+ if (damage<=12 && damage>=9)
+    doom_setState(th,S_BLOOD2);
+ else if (damage<9)
+    doom_setState(th,S_BLOOD3);
+}
+
+/* --- monster hitscan (SPEC_RUNTIME section 3.3) --------------------------------------------- */
+
+/* Eye at feet + height/2 + 8 (p_map.c:1116), yaw with the spread already applied, pitch
+   towards the centre of the target sphere (P_AimLineAttack), range MISSILERANGE.  On a
+   sprite: puff or blood first, then the damage (PTR_ShootTraverse order, p_map.c:1083-1089);
+   on a wall: puff pulled back 4 u along the ray.  Returns the hitScan code (0 = nothing). */
+int doom_lineAttack(DoomActor *src,int yaw,int damage)
+{const DoomMobjInfo *info;
+ MthXyz eye,ray,hit;
+ Sprite *ts;
+ Fixed32 cp;
+ int hitSec,code,pitch;
+ assert(src);
+ assert(src->sprite);
+ info=&doomMobjInfo[src->mt];
+ eye=src->sprite->pos;
+ eye.y=eye.y-src->sprite->radius+F(info->height/2+8);
+ pitch=0;
+ ts=doom_targetSprite(src->target);
+ if (ts)
+    {int du=dist(ts->pos.x-eye.x,0,ts->pos.z-eye.z);   /* fixSqrt(n,0): integer units */
+     if (du>32767)
+	du=32767;
+     if (du>0)
+	pitch=getAngle(F(du),ts->pos.y-eye.y);
+    }
+ cp=MTH_Cos(pitch);
+ ray.x=MTH_Mul(cp,MTH_Cos(yaw));
+ ray.y=MTH_Sin(pitch);
+ ray.z=MTH_Mul(cp,MTH_Sin(yaw));
+ code=hitScan(src->sprite,&ray,&eye,src->sprite->s,&hit,&hitSec);
+ if (!code)
+    return 0;
+ if (approxDist(hit.x-eye.x,hit.y-eye.y,hit.z-eye.z)>DOOM_MISSILERANGE)
+    return 0;
+ if (code & COLLIDE_SPRITE)
+    {Sprite *spr=&sprites[code&0xffff];
+     if (spr==camera)
+	{doom_spawnBlood(&hit,hitSec,damage);
+	 doom_damage(spr,(Object *)src,(Object *)src,damage);
+	}
+     else if (spr->owner && spr->owner->func==game_actor_func)
+	{if (((DoomActor *)spr->owner)->mflags & DF_NOBLOOD)
+	    doom_spawnPuff(&hit,hitSec,0);
+	 else
+	    doom_spawnBlood(&hit,hitSec,damage);
+	 doom_damage(spr,(Object *)src,(Object *)src,damage);
+	}
+     else
+	doom_spawnPuff(&hit,hitSec,0);
+    }
+ else
+    {MthXyz p;
+     p.x=hit.x-(ray.x<<2);
+     p.y=hit.y-(ray.y<<2);
+     p.z=hit.z-(ray.z<<2);
+     doom_spawnPuff(&p,hitSec,0);
+    }
+ return code;
+}

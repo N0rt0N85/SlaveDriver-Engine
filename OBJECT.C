@@ -209,7 +209,7 @@ void placeObjects(void)
 
  for (o=0;o<level_nmObjects;o++)
     {assert(level_object[o].type<OT_NMTYPES);
-     assert(level_object[o].firstParam==objectPPos);
+     assert(level_object[o].firstParam==objectPPos); if (CFG_PLACE(level_object[o].type)) continue;
      switch (level_object[o].type)
 	{case OT_SECTORSWITCH:
 	    constructSectorSwitch();

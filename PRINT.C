@@ -4,17 +4,17 @@
 #include "spr.h"
 #include "print.h"
 
-/* #include "font0.h" */
+#include "sprite.h" /* CFG_* (GP_GAME_DOOM: Doom font list, SPRITE.H) -- was the commented font0.h include */
 #include "font1.h"
 #include "font2.h"
 
 #ifdef JAPAN
 #define MAXNMFONTS 4
 #else
-#define MAXNMFONTS 3
+#define MAXNMFONTS CFG_NMFONTS
 #endif
 
-static unsigned char *fontList[]={brianFont,brianFont,bigFont,NULL};
+CFG_FONTLIST_DEF
 
 static short charMap[MAXNMFONTS][256];
 static char widths[MAXNMFONTS][256];
@@ -52,7 +52,7 @@ int initFonts(int spriteNm,int fontMask)
 {int f,i,x,y,c,fontc,fontHeight,widthBy8;
  unsigned char buffer[32*32];
 
- fontMask&=~1;
+ fontMask&=~1; CFG_FONT_PICK(fontMask)
 
  for (f=0;fontList[f];f++)
     {i=fontMask&1;

@@ -614,7 +614,7 @@ void main(void)
     }
 
  BOOT_PROBE(0x7fe0);	/* GCC14: cyan = VDP2, sprites, fonts and the vblank interrupt up */
- playIntro();
+ CFG_PLAY_INTRO();
 
  displayEnable(0);
  SCL_DisplayFrame();

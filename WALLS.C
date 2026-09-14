@@ -126,9 +126,9 @@ void project_point(MthXyz *v,XyInt *p)
 #endif
 
 #define XMIN        -160
-#define YMIN        -110
+#define YMIN        CFG_YMIN   /* GP_GAME_DOOM: -112 (3D window = screen lines 0..191, SPEC_PLAYER 3.1) */
 #define XMAX        160
-#define YMAX        90
+#define YMAX        CFG_YMAX   /* GP_GAME_DOOM: 80 */
 Bool clip_visible( XyInt *poly,SectorDrawRecord *s);
 
 #if 0
@@ -2007,8 +2007,8 @@ void drawSlaveWalls(void)
  if (nmSlavePolys==0)
     return;
 #if RECTCLIP
- parms[0].x=updateList[s]->xmin+160;parms[0].y=updateList[s]->ymin+120;
- parms[1].x=updateList[s]->xmax+160;parms[1].y=updateList[s]->ymax+120;
+ parms[0].x=updateList[s]->xmin+160;parms[0].y=updateList[s]->ymin+CFG_YCENTER;
+ parms[1].x=updateList[s]->xmax+160;parms[1].y=updateList[s]->ymax+CFG_YCENTER;
  EZ_userClip(parms);
 #endif
 
@@ -2069,9 +2069,9 @@ void drawSlaveWalls(void)
 #if RECTCLIP
 		 if (s>=0)
 		    {parms[0].x=updateList[s]->xmin+160;
-		     parms[0].y=updateList[s]->ymin+120;
+		     parms[0].y=updateList[s]->ymin+CFG_YCENTER;
 		     parms[1].x=updateList[s]->xmax+160;
-		     parms[1].y=updateList[s]->ymax+120;
+		     parms[1].y=updateList[s]->ymax+CFG_YCENTER;
 		     EZ_userClip(parms);
 		    }
 #endif
@@ -2420,8 +2420,8 @@ void drawWalls(MthMatrix *view)
  /* start slave */
  *(Uint16 volatile *)0x21000000=0xffff;
  for (i=updateListSize-1;i>slaveDrawStart;i--)
-    {parms[0].x=updateList[i]->xmin+160;parms[0].y=updateList[i]->ymin+120;
-     parms[1].x=updateList[i]->xmax+160;parms[1].y=updateList[i]->ymax+120;
+    {parms[0].x=updateList[i]->xmin+160;parms[0].y=updateList[i]->ymin+CFG_YCENTER;
+     parms[1].x=updateList[i]->xmax+160;parms[1].y=updateList[i]->ymax+CFG_YCENTER;
 #if RECTCLIP
      EZ_userClip(parms);
 #endif
@@ -2632,8 +2632,8 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 /* assert(nmDraw<=1);*/
 
 #if RECTCLIP
- pos[0].x=XMIN+160; pos[0].y=YMIN+120;
- pos[1].x=XMAX+160; pos[1].y=YMAX+120;
+ pos[0].x=XMIN+160; pos[0].y=YMIN+CFG_YCENTER;
+ pos[1].x=XMAX+160; pos[1].y=YMAX+CFG_YCENTER;
  EZ_userClip(pos);
 #endif
 
@@ -2698,7 +2698,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
      feetPos.y=o->pos.y-o->radius;
      feetPos.z=o->pos.z;
      MTH_CoordTrans(view,&feetPos,&tformed);
-     if (tformed.z<F(32))
+     if (tformed.z<CFG_SPRITE_NEARCLIP)
 	continue;
      /* if (tformed.z>FARCLIP)
 	continue; */
@@ -2767,9 +2767,9 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
      if (o->flags & SPRITEFLAG_FOOTCLIP)
 	{if (feetScreenPos.y<sectorDraw[sector].ymax)
 	    {pos[0].x=sectorDraw[sector].xmin+160;
-	     pos[0].y=sectorDraw[sector].ymin+120;
+	     pos[0].y=sectorDraw[sector].ymin+CFG_YCENTER;
 	     pos[1].x=sectorDraw[sector].xmax+160;
-	     pos[1].y=feetScreenPos.y+120;
+	     pos[1].y=feetScreenPos.y+CFG_YCENTER;
 	     EZ_userClip(pos);
 	    }
 	}
@@ -2849,8 +2849,8 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	    pos[0].y=sectorDraw[sector].ymin+120;
 	    pos[1].x=sectorDraw[sector].xmax+160;
 	    pos[1].y=sectorDraw[sector].ymax+120; */
-	 pos[0].x=XMIN+160; pos[0].y=YMIN+120;
-	 pos[1].x=XMAX+160; pos[1].y=YMAX+120;
+	 pos[0].x=XMIN+160; pos[0].y=YMIN+CFG_YCENTER;
+	 pos[1].x=XMAX+160; pos[1].y=YMAX+CFG_YCENTER;
 	 EZ_userClip(pos);
 	}
     }

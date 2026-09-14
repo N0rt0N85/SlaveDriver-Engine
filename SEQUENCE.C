@@ -7,7 +7,7 @@
 #include"spr.h"
 #include"pic.h"
 #include"sound.h"
-
+#include"sprite.h"
 #include "grenpal.h"
 #include "manpal.h"
 
@@ -249,13 +249,13 @@ int advanceWeaponSequence(int xbase,int ybase,int hack)
 
  VDP2PicOn=0;
  overlay=0;
- if (sequence>=50)
+ if (sequence>=CFG_WOVERLAY_FROM)
     overlay=0x4000;
  {XyInt pos[2];
   pos[0].x=0;
   pos[0].y=0;
   pos[1].x=320;
-  pos[1].y=210;
+  pos[1].y=CFG_WCLIP_BOTTOM;
   EZ_userClip(pos);
  }
  while (1)
@@ -294,7 +294,7 @@ int advanceWeaponSequence(int xbase,int ybase,int hack)
 	    }
 	 else
 	    {pos.x=xo-320/2+c->chunkx;
-	     pos.y=yo-240/2+c->chunky;
+	     pos.y=yo-CFG_YCENTER+c->chunky;
 	     flip=0;
 	     if (c->flags & 1)
 		flip|=DIR_LRREV;
@@ -308,7 +308,7 @@ int advanceWeaponSequence(int xbase,int ybase,int hack)
      if (sequenceQ[qTail].seqWith==-1 || sequence==sequenceQ[qTail].seqWith)
 	break;
      sequence=sequenceQ[qTail].seqWith;
-     overlay=0x4000;
+     overlay=CFG_WFLASH_OVERLAY;
      if (hack)
 	break;
     }
@@ -321,3 +321,21 @@ int advanceWeaponSequence(int xbase,int ybase,int hack)
 void clearWeaponQ(void)
 {initWeaponQ();
 }
+
+#ifdef GP_GAME_DOOM
+/* Doom (SPEC_PLAYER section 2.3, deviation a): PIN the current entry instead of queueing it --
+   the 8-deep queue overflows with 1-tic weapon states.  Overwrites sequenceQ[qTail] (qHead stays
+   equal to qTail: initWeaponQ), resets frame/clock, clears the flash (addWeaponSequence re-adds
+   it).  seqNm < 0 = no weapon drawn.  At the end of the file: no assert follows, the __LINE__
+   of the default build is untouched. */
+void setWeaponSequence(int seqNm,int cx,int cy)
+{assert(qHead==qTail);
+ sequenceQ[qTail].seq=seqNm;
+ sequenceQ[qTail].centerx=cx;
+ sequenceQ[qTail].centery=cy;
+ sequenceQ[qTail].seqWith=-1;
+ frame=0;
+ clock=0;
+ sequenceOver=(seqNm<0);
+}
+#endif

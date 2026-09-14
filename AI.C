@@ -31,7 +31,7 @@ static int kilmaatPuzzleNumber=0;
 void player_func(Object *o,int message,int param1,int param2)
 {switch (message)
     {case SIGNAL_HURT:
-	playerHurt(param1);
+	CFG_PLAYER_HURT(param1,param2);
 	break;
        }
 }
@@ -4301,7 +4301,7 @@ static void setDoorBlockBits(PushBlockObject *this)
      if (!(level_wall[w].flags & WALLFLAG_DOORWALL))
 	continue;
      if (level_vertex[level_wall[w].v[1]].y-
-	 level_vertex[level_wall[w].v[2]].y<80)
+	 level_vertex[level_wall[w].v[2]].y<CFG_DOOR_FIT)
 	level_wall[w].flags|=WALLFLAG_SHORTOPENING;
      else
 	level_wall[w].flags&=~WALLFLAG_SHORTOPENING;
@@ -4664,14 +4664,14 @@ void elevator_func(Object *_this,int msg,int param1,int param2)
 		    wait=1;
 		   }
 		if (this->direction==1 && this->offset>=0)
-		   {pbObject_moveTo((PushBlockObject *)this,0);
+		   {pbObject_moveTo((PushBlockObject *)this,0); CFG_LIFT_RESET(this);
 		    wait=1;
 		   }
 		if (wait)
 		   {this->state=AI_ELEVATOR_WAIT;
 		    stopAllSound((int)this);
 		    pushBlockMakeSound((PushBlockObject *)this,
-				       level_staticSoundMap[ST_PUSHBLOCK]+1);
+				       level_staticSoundMap[ST_PUSHBLOCK]+CFG_LIFT_STOP_SND);
 		    this->counter=0;
 		    this->stepEnable=-5;
 		    this->direction=-1*this->direction;

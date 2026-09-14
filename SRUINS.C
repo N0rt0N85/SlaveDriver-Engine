@@ -235,7 +235,7 @@ static void stepPlayerHeight(void)
 
 void playerDYChange(Fixed32 dvel)
 {int ouch;
- if (dvel<F(1))
+ if (dvel<CFG_FALL_MIN)
     return;
  if (dvel>F(15))
     {ouch=currentState.nmBowls*
@@ -850,7 +850,7 @@ static void push(void)
      if (level_wall[hscan & 0xffff].object)
 	{signalObject((Object *)(level_wall[hscan & 0xffff].object),
 		      SIGNAL_PRESS,(int)(&collidePos),0);
-	}
+	} CFG_USE_REFUSED
     }
 }
 
@@ -892,7 +892,7 @@ void movePlayer(int inputEnd,int nmFrames)
 	     setMasterVolume(i);
 	     currentState.health=0;
 	     weaponSetVel(0,F(4));
-	     if (playerAngle.pitch<F(80))
+	     if (playerAngle.pitch<CFG_DEATH_PITCH)
 		{xavel+=1<<12;
 		 playerAngle.pitch += xavel;
 		 if (playerAngle.pitch>F(90)) playerAngle.pitch=F(90);
@@ -956,7 +956,7 @@ void movePlayer(int inputEnd,int nmFrames)
 	    if (currentState.gameFlags & GAMEFLAG_DOLLPOWERMODE)
 	       dollPowerControlInput(input,changeInput);
 	    else
-	       controlInput(input,changeInput);
+	       CFG_CONTROL(input,changeInput,pushed);
 	   }
 	 if (currentState.health<=0)
 	    {playerIsDead=1;
@@ -964,7 +964,7 @@ void movePlayer(int inputEnd,int nmFrames)
 	     colorCenter[1]=-255;
 	     colorCenter[2]=-255;
 
-	     playStaticSound(ST_JOHN,1);
+	     playStaticSound(ST_JOHN,CFG_DEATH_SFX);
 	     switchPlayerMotion(0);
 	     xavel=0;
 	     yavel=0;
@@ -974,19 +974,19 @@ void movePlayer(int inputEnd,int nmFrames)
 	     deathTimer=0;
 	    }
 
-	 if (!(input & IMASK(ACTION_FIRE)))
+	 if (CFG_ENGINE_FIRE && !(input & IMASK(ACTION_FIRE)))
 	    {if (weaponSequenceQEmpty())
 		fireWeapon();
 	    }
 
 	 if (pushed&IMASK(ACTION_WEPUP))
-	    {weaponUp(WEAPONINV(currentState.inventory));
-	     redrawBowlDots();
+	    {CFG_WEAPON_UP(WEAPONINV(currentState.inventory));
+	     CFG_BOWLDOTS();
 	    }
 
 	 if (CFG_WEPDN && (pushed&IMASK(ACTION_WEPDN)))
-	    {weaponDown(WEAPONINV(currentState.inventory));
-	     redrawBowlDots();
+	    {CFG_WEAPON_DN(WEAPONINV(currentState.inventory));
+	     CFG_BOWLDOTS();
 	    }
 
 	 if (pushed&IMASK(ACTION_PUSH))
@@ -1168,7 +1168,7 @@ static void plotNoDot(unsigned char *pos)
 void redrawBowlDots(void)
 {unsigned char *barPic,*pos;
  int i,w;
- barPic=(unsigned char *)((EZ_charNoToVram(0)<<3)+0x5c00000);
+ CFG_BOWLDOTS_GUARD barPic=(unsigned char *)((EZ_charNoToVram(0)<<3)+0x5c00000);
  for (i=0;i<currentState.nmBowls-1;i++)
     {pos=barPic+196+320*29+(10*i);
      plotBowl(pos);
@@ -1875,7 +1875,7 @@ int runLevel(char *filename,int levelNm)
  dPrint("B!\n");
  displayEnable(0);
 
- SPR_SetTvMode(SPR_TV_NORMAL,SPR_TV_320X240,OFF);
+ SPR_SetTvMode(SPR_TV_NORMAL,CFG_TV_SIZE,OFF);
  EZ_initSprSystem(1448,4,1224,
 		  240,0x8000);
  dPrint("C!\n");
@@ -1887,23 +1887,23 @@ int runLevel(char *filename,int levelNm)
      EZ_closeCommand();
      SCL_DisplayFrame();
     }
- EZ_setChar(0,COLOR_4,*(int *)stat_bar,*(int *)(stat_bar+4),
+ CFG_HUD_CHARS(EZ_setChar(0,COLOR_4,*(int *)stat_bar,*(int *)(stat_bar+4),
 	    (Uint8 *)stat_bar+8);
  EZ_setChar(1,COLOR_4,*(int *)stat_compass0,*(int *)(stat_compass0+4),
 	    (Uint8 *)stat_compass0+8);
  EZ_setChar(2,COLOR_4,*(int *)stat_compass1,*(int *)(stat_compass1+4),
 	    (Uint8 *)stat_compass1+8);
  EZ_setChar(3,COLOR_4,*(int *)stat_compass2,*(int *)(stat_compass2+4),
-	    (Uint8 *)stat_compass2+8);
+	    (Uint8 *)stat_compass2+8));
 
 #ifdef JAPAN
  initPicSystem(4,((int []){28,30,1,10,12,30,-1}));
 #else
- i=initFonts(4,3);
+ i=initFonts(CFG_FONT_BASE,CFG_FONT_MASK);
  initPicSystem(i,((int []){28,31,1,10,12,-1}));
 #endif
  dPrint("ert!\n");
- redrawStatBar();
+ CFG_REDRAW_STATBAR();
 
  MTH_InitialMatrix(&viewTransform,4,matstack);
  MTH_ClearMatrix(&viewTransform);
@@ -2007,7 +2007,7 @@ int runLevel(char *filename,int levelNm)
 #endif
 
  monsterMoveCounter=0;
- initWeapon();
+ initWeapon(); CFG_LEVEL_PLAYER_INIT();
  playerIsDead=0;
  hitCamel=0;
  hitPyramid=0;
@@ -2124,7 +2124,7 @@ int runLevel(char *filename,int levelNm)
      EZ_sysClip();
      EZ_userClip(noUserClip);
 
-     EZ_localCoord(320/2,240/2);
+     EZ_localCoord(320/2,CFG_YCENTER);
      pushProfile("Walls");
      /* ok */
      drawWalls(viewTransform.current);
@@ -2136,11 +2136,11 @@ int runLevel(char *filename,int levelNm)
      pushProfile("Motion");
      movePlayer(inputEnd,framesElapsed);
      camera->angle=playerAngle.yaw;
-     if (monsterMoveCounter>8)
-	monsterMoveCounter=8;
+     if (monsterMoveCounter>CFG_TIC_CAP)
+	monsterMoveCounter=CFG_TIC_CAP;
      mmcSave=monsterMoveCounter;
-     for (;monsterMoveCounter>1;monsterMoveCounter-=2)
-	{if (ltHurtTime>0)
+     for (;monsterMoveCounter>CFG_TIC_UNIT-1;monsterMoveCounter-=CFG_TIC_UNIT)
+	{CFG_PLAYER_TIC(); if (ltHurtTime>0)
 	    {ltHurtTime--;
 	     playerHurt(ltHurtAmount);
 	     if (!ltHurtTime)
@@ -2193,7 +2193,7 @@ int runLevel(char *filename,int levelNm)
      drawWallsFinish();
      popProfile();
 
-     for (;mmcSave>1;mmcSave-=2)
+     for (;mmcSave>CFG_TIC_UNIT-1;mmcSave-=CFG_TIC_UNIT)
 	{advanceWallAnimations();
 	 stepWater();
 	}
@@ -2204,14 +2204,14 @@ int runLevel(char *filename,int levelNm)
 	drawMap(camera->pos.x,camera->pos.z,camera->pos.y,playerAngle.yaw,
 		camera->s);
 
-     runWeapon(framesElapsed,invisibleCounter,weaponPowerUpCounter);
+     CFG_RUN_WEAPON(framesElapsed,invisibleCounter,weaponPowerUpCounter);
 
      MTH_PopMatrix(&viewTransform);
 
-     drawMessage(framesElapsed);
-     drawStatBar(framesElapsed);
+     drawMessage(framesElapsed); CFG_DRAW_MESSAGE();
+     CFG_DRAW_STATBAR(framesElapsed);
 
-     drawAirMeter(framesElapsed);
+     CFG_DRAW_AIRMETER(framesElapsed);
 
 
 #ifdef STATUSTEXT
@@ -2299,7 +2299,7 @@ int runLevel(char *filename,int levelNm)
 	    smoothVTime=2;
 	 vspeedSwitchCount=0;
 	}
-     monsterMoveCounter+=vtimer;
+     monsterMoveCounter+=CFG_TIC_ADD(vtimer);
      framesElapsed=vtimer;
      inputEnd=inputQHead;
      vtimer=0;
@@ -2313,8 +2313,8 @@ int runLevel(char *filename,int levelNm)
 	 plaxBBymax=90;
 	}
      SCL_SetWindow(SCL_W1,0,SCL_RBG0,0xfffffff,
-		   plaxBBxmin+160,plaxBBymin+120,
-		   plaxBBxmax+160,plaxBBymax+120);
+		   plaxBBxmin+160,plaxBBymin+CFG_YCENTER,
+		   plaxBBxmax+160,plaxBBymax+CFG_YCENTER);
      updateVDP2Pic();
      lastYaw=playerAngle.yaw; lastPitch=playerAngle.pitch;
 
@@ -2396,7 +2396,7 @@ void main(void)
  dPrint("done.\n");
 
  SCL_Vdp2Init();
- SCL_SetDisplayMode(SCL_NON_INTER,SCL_240LINE,SCL_NORMAL_A);
+ SCL_SetDisplayMode(SCL_NON_INTER,CFG_SCL_LINES,SCL_NORMAL_A);
  SPR_SetEraseData(RGB(0,0,0),0,0,319,239);
  displayEnable(0);
  setVDP2();
@@ -2430,7 +2430,7 @@ void main(void)
  EZ_initSprSystem(1540,8,1524,
 		  240,0x8000);
  SCL_SetFrameInterval(0xfffe);
- SPR_SetTvMode(SPR_TV_NORMAL,SPR_TV_320X240,OFF);
+ SPR_SetTvMode(SPR_TV_NORMAL,CFG_TV_SIZE,OFF);
 
 #ifdef JAPAN
  {int i;
@@ -2484,16 +2484,20 @@ void main(void)
  SCL_Vdp2Init();
  dPrint("2\n");
  displayEnable(0);
- SCL_SetDisplayMode(SCL_NON_INTER,SCL_240LINE,SCL_NORMAL_A);
+ SCL_SetDisplayMode(SCL_NON_INTER,CFG_SCL_LINES,SCL_NORMAL_A);
  setVDP2();
  dPrint("3\n");
 
 #ifndef TESTCODE
+#ifdef GP_GAME_DOOM
+ level=0; /* Doom: straight into doomLevelNames[0], no map screen (SPEC_RUNTIME section 9) */
+#else
  if ((currentState.gameFlags & GAMEFLAG_JUSTTELEPORTED) &&
      !(currentState.inventory & INV_MUMMY))
     level=3;
  else
     level=runMap(currentState.currentLevel);
+#endif
  currentState.inventory&=~INV_MUMMY;
 #else
  level=22;
@@ -2507,7 +2511,7 @@ void main(void)
 	 goto intro;
 	}
      currentState.currentLevel=level;
-     levelFile=getLevelName(level);
+     levelFile=CFG_LEVEL_NAME(level);
 
      action=runLevel(levelFile,level);
 
