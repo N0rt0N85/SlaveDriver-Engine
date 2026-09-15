@@ -24,14 +24,23 @@ typedef char doomMobjInfoIs44_[(sizeof(DoomMobjInfo)==44)?1:-1];
 unsigned char doomSectorDamage[MAXNMSECTORS];
 int doomLevelTime;
 
+/* Floor height of sector s, read from its flat as bumpFloor does (the vertices move with a lift) */
+static int doomFloorY(int s)
+{int f;
+ for (f=level_sector[s].firstWall;f<=level_sector[s].lastWall;f++)
+    if (level_wall[f].normal[1]>0)
+       return level_vertex[level_wall[f].v[0]].y;
+ return -0x7fff;
+}
+
 /* A moving lift's portals (AI.C:4670 CFG_LIFT_MOVED, every frame it moves).  doom2ps sets, for
-   the level as loaded, SHORTOPENING (opening < 56) and BLOCKED (portal bottom more than 24 over
-   the floor of its own sector: Doom's step, player only); nothing in the engine touches them when
-   an elevator moves -- setDoorBlockBits is doors only -- so a lift that came down left an
-   invisible wall (E1M1: the shotgun room behind sector 59, 8 u open while it is up).  Both rules
-   are re-read here from the vertices, the floor from its own flat, as bumpFloor does. */
+   the level as loaded, SHORTOPENING (opening < 56, or a step up of more than 24: player and
+   monsters carry BSHORT, missiles do not) and CLIFFBNDRY (a drop of more than 24: monsters only,
+   P_TryMove's dropoff); nothing in the engine touches them when an elevator moves --
+   setDoorBlockBits is doors only -- so a lift that came down left an invisible wall (E1M1: the
+   shotgun room behind sector 59, 8 u open while it is up).  Re-read here from the vertices. */
 void doom_pbBlockBits(int pb)
-{int i,w,s,lo,hi,f,bot;
+{int i,w,s,lo,hi,bot,own,next;
  for (i=level_pushBlock[pb].startWall;i<=level_pushBlock[pb].endWall;i++)
     {w=level_PBWall[i];
      if (level_wall[w].nextSector==-1 || level_wall[w].normal[1]!=0)
@@ -43,19 +52,17 @@ void doom_pbBlockBits(int pb)
 	}
      s=lo;
      assert(level_sector[s].firstWall<=w && w<=level_sector[s].lastWall);
-     for (f=level_sector[s].firstWall;f<=level_sector[s].lastWall;f++)
-	if (level_wall[f].normal[1]>0)
-	   break;
+     own=doomFloorY(s);
+     next=doomFloorY(level_wall[w].nextSector);
      bot=level_vertex[level_wall[w].v[2]].y;
-     if (level_vertex[level_wall[w].v[1]].y-bot<CFG_DOOR_FIT)
+     if (level_vertex[level_wall[w].v[1]].y-bot<CFG_DOOR_FIT || bot-own>GP_PLAYER_STEP)
 	level_wall[w].flags|=WALLFLAG_SHORTOPENING;
      else
 	level_wall[w].flags&=~WALLFLAG_SHORTOPENING;
-     if (f<=level_sector[s].lastWall &&
-	 bot-level_vertex[level_wall[f].v[0]].y>GP_PLAYER_STEP)
-	level_wall[w].flags|=WALLFLAG_BLOCKED;
+     if (own-next>GP_PLAYER_STEP)
+	level_wall[w].flags|=WALLFLAG_CLIFFBNDRY;
      else
-	level_wall[w].flags&=~WALLFLAG_BLOCKED;
+	level_wall[w].flags&=~WALLFLAG_CLIFFBNDRY;
     }
 }
 

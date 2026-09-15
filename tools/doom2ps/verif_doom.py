@@ -312,7 +312,9 @@ def main(argv=None):
             ys = [V[i]["y"] for i in w["v"]]
             h = max(ys) - min(ys)
             d = S[n]["floorLevel"] - s_["floorLevel"]
-            if (w["flags"] & PLAYER_FLAGS) & 0x1f00 and not (w["flags"] & 0x20):
+            # SHORTOPENING porte aussi la marche de Doom (> 24, doom3d.post_flags) : l'etiquette
+            # suit la vraie cause, et un portail marque sans l'une ni l'autre reste INEXPLIQUE.
+            if (w["flags"] & PLAYER_FLAGS) & 0x1f00 and not (w["flags"] & 0x20) and h < 56:
                 raisons[f"ouverture de {h} (< {56})"] += 1
             elif d > STEPHEIGHT:
                 raisons[f"marche de {d} (> {STEPHEIGHT})"] += 1
