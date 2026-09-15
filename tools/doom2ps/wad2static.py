@@ -98,12 +98,21 @@ def weapon_lumps(wad, families):
     return [n for n in rle8.sprite_lumps(wad) if n[:4] in fams]
 
 
+def shadow_disc(value=1):
+    """64 x 64 indices : disque plein centre (rayon 32), 0 = transparent autour."""
+    return bytes(value if (x - 31.5) ** 2 + (y - 31.5) ** 2 <= 32 * 32 else 0
+                 for y in range(64) for x in range(64))
+
+
 def weapon_tiles(wad, families, remap):
     """-> (tiles, chunks_by_lump). Une tuile 0x6A par case de la grille de chaque lump, sans
     dedoublonnage (contrat : n = somme des grilles = 95) ; chunks_by_lump[lump] = [(chunkx, chunky,
     tile)] avec `tile` = index dans le jeu de tuiles d'armes (pas de tileBase : loadWeaponSequences
     n'en ajoute pas, les tuiles d'armes sont les premiers pics, addPic PIC.C:405-407)."""
-    tiles, by_lump = [], {}
+    # Tuile 0 = l'OMBRE : drawSprites pose `mapPic(0)` sous chaque sprite, en COMPO_SHADOW
+    # (WALLS.C:2762) -- tout pixel non transparent assombrit ce qu'il couvre. Le retail y a un
+    # disque plein de 64 x 64 ; sans elle la 1re tuile d'arme servait d'ombre (forme bizarre).
+    tiles, by_lump = [rle8.tile_record(rle8.rle8(shadow_disc()))], {}
     for name in weapon_lumps(wad, families):
         p = rle8.read_patch(wad, name)
         cut, _, _ = rle8.cut_patch(p, remap)

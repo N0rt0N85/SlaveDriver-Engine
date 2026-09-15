@@ -188,6 +188,21 @@ def append_switch_sequences(sq, descs):
     frames.append(dict(chunkIndex=len(chunks), flags=0, sound=-1, pad=[0, 0]))
 
 
+OT_ANM1, OT_ANM12 = 192, 203          # SLEVEL.H : dans la liste de markAnimTiles (PIC.C:137-138)
+ANIM_REPEAT = 4                       # advanceWallAnimations avance 1 tic sur 2 (SRUINS.C:2197,
+                                      # PIC.C:120) ; Doom change d'image tous les 8 tics -> 4 chunks
+
+
+def anim_sequences(anims):
+    """Une sequence OT_ANM1+k par famille animee (doom3d.anim_flat_keys) : une frame par pas
+    d'animation, un chunk = la tuile de GEOMETRIE de l'image (loadSequences lui ajoute le meme
+    tileBase que loadLevel). markAnimTiles marque chacune de ces tuiles ; mapPic les redirige."""
+    assert len(anims) <= OT_ANM12 - OT_ANM1 + 1, "plus de 12 familles animees"
+    return [dict(type=OT_ANM1 + k,
+                 sequences=[[[dict(chunkx=0, chunky=0, tile=t)] for t in fam for _ in range(ANIM_REPEAT)]])
+            for k, fam in enumerate(anims)]
+
+
 def assemble_doom(G, T, sprites, sounds, objects, params, sky, palette, switches=()):
     """-> modele lev_io (SPEC_CONVERTER §6 etape 5). `sprites` = SpriteSet construit avec
     tile_base = len(T['tiles']) ; `sounds` = bloc {map, sounds} ; `palette` = 256 u16 (entree 0 =
@@ -199,6 +214,8 @@ def assemble_doom(G, T, sprites, sounds, objects, params, sky, palette, switches
               sequence=list(sprites.sequence), sequenceMap=list(sprites.sequenceMap))
     if switches:
         append_switch_sequences(sq, sp.switch_sequences(switches))
+    if G.get("anims"):
+        append_switch_sequences(sq, anim_sequences(G["anims"]))
     mobile = G.get("mobile") or {}
     walls = [dict(w) for w in G["walls"]]
     # Murs sans face ni cellule (portails invisibles, firstFace == -1) : l'Emitter y laisse

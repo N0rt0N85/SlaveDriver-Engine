@@ -264,6 +264,15 @@ def light_of(level):
     return max(0, min(16, int(round((32 - lvl) * 16.0 / 32.0))))
 
 
+# Flats animes de Doom, dans l'ordre des images (p_spec.c animdefs ; SWATER, RROCK et SLIME
+# n'existent qu'a partir de Doom II : une famille absente du WAD n'est jamais utilisee).
+ANIM_FLATS = [["NUKAGE1", "NUKAGE2", "NUKAGE3"], ["FWATER1", "FWATER2", "FWATER3", "FWATER4"],
+              ["SWATER1", "SWATER2", "SWATER3", "SWATER4"], ["LAVA1", "LAVA2", "LAVA3", "LAVA4"],
+              ["BLOOD1", "BLOOD2", "BLOOD3"], ["RROCK05", "RROCK06", "RROCK07", "RROCK08"],
+              ["SLIME01", "SLIME02", "SLIME03", "SLIME04"], ["SLIME05", "SLIME06", "SLIME07", "SLIME08"],
+              ["SLIME09", "SLIME10", "SLIME11", "SLIME12"]]
+
+
 class DoomConverter:
     def __init__(self, M, sizes, cap_cells=CAP_CELLS, mobile=None, switch_lines=None, uwin=None):
         """`mobile` : {secteur Doom: MobileTag} (--mobile) ; `switch_lines` : {linedef: dict(channel,
@@ -289,6 +298,8 @@ class DoomConverter:
         self.uwin = uwin
         self.uwin_use = defaultdict(lambda: [0.0, set(), None])
         self.door_tex = set()                 # textures posees en FACE de porte (linteau mobile)
+        self.anim_keys = []                   # [[cle de tuile de chaque image]] par famille animee
+        self.anims = []                       # idem en index de tuile, apres compaction
         # Polygones ETIQUETES + frontieres exactes : voir tools/doom2ps/adjacency.py. La
         # reciprocite des portails y est vraie par construction, ce qui supprime l'echantillonnage
         # de voisinage de la 1re version (58 portails a sens unique, 31 trous, MESURE sur E1M1).
@@ -400,7 +411,7 @@ class DoomConverter:
                 return sg
         return None
 
-    def seg_near(self, leaf, P, Q, tol=1.5):
+    def seg_near(self, leaf, P, Q, tol=1.5, other=None):
         """Seg de `leaf` dont le LINEDEF porte l'arete PQ a `tol` pres, pour une arete sans voisin
         ni seg exact. seg_on_edge exige la MEME droite canonique ; or une feuille peut etre bornee
         par la droite d'un NOEUD tiree d'un seg que le nodebuilder a arrondi (5 % des segs ne sont
@@ -414,10 +425,19 @@ class DoomConverter:
         # puis les linedefs a UNE face du meme secteur Doom : le seg peut appartenir a une feuille
         # voisine ecartee hors carte (E1M1 : 2 bords de 1 et 9 u contre l'eclat 161)
         sec = self.leaf_sector[leaf]
-        cands += [M["segs"][0]._replace(line=i, side=0) for i, ld in enumerate(M["linedefs"])
-                  if ld.left < 0 and M["sidedefs"][ld.right].sector == sec]
+        for i, ld in enumerate(M["linedefs"]):
+            if M["sidedefs"][ld.right].sector == sec:
+                cands.append(M["segs"][0]._replace(line=i, side=0))
+            elif ld.left >= 0 and M["sidedefs"][ld.left].sector == sec:
+                cands.append(M["segs"][0]._replace(line=i, side=1))
         for sg in cands:
             ld = M["linedefs"][sg.line]
+            if other is not None:
+                # voisine d'un autre secteur : le linedef doit SEPARER les deux secteurs, sinon on
+                # prend un linedef presque colineaire d'a cote (mur fantome de 44 u, feuille 159)
+                so = ld.left if sg.side == 0 else ld.right
+                if so < 0 or M["sidedefs"][so].sector != other:
+                    continue
             (ax, ay), (bx, by) = V[ld.v1], V[ld.v2]
             L = math.hypot(bx - ax, by - ay)
             if L < 1:
@@ -622,10 +642,6 @@ class DoomConverter:
         M = self.M
         sg = self.seg_on_edge(leaf, tag, ta, tb)
         nbi = self.remap.get(nb, -1) if nb is not None and nb >= 0 else -1
-        if sg is None and nbi < 0:
-            sg = self.seg_near(leaf, P, Q)
-            if sg is not None:
-                self.stats["bords_rattrapes_par_linedef"] += 1
 
         # ROLES MOBILES (--mobile). `ms` = ce secteur bouge, `mn` = le voisin bouge. Porte : tout
         # ce dont le HAUT est le plafond de la porte monte (murs de la porte, portails, et le bas
@@ -641,6 +657,16 @@ class DoomConverter:
         # deux feuilles du MEME secteur Doom : rien ne les separe quand il bouge
         same = (nb is not None and nb >= 0 and nb in self.remap
                 and self.leaf_sector[nb] == self.leaf_sector[leaf])
+        # Sans seg exact, l'arete n'est une corde que si la voisine est du MEME secteur Doom. Sinon
+        # c'est un linedef que seg_on_edge a rate (droite de noeud arrondie) : bord de carte ->
+        # mur invisible (23 sur E1M1), secteur voisin -> portail pleine hauteur SANS contremarche
+        # ni linteau (8 sur E1M1 : les tranches du chemin au-dessus du nukage, flanc d'ascenseur).
+        if sg is None and not same:
+            sg = self.seg_near(leaf, P, Q, other=self.leaf_sector[nb] if nbi >= 0 else None)
+            if sg is not None:
+                self.stats["bords_rattrapes_par_linedef"] += 1
+            elif nbi >= 0:
+                self.stats["corde_entre_secteurs_sans_linedef"] += 1
 
         def own(bot_, top_):
             if ms is None:
@@ -880,12 +906,29 @@ class DoomConverter:
                 tuiles |= ts
         return pris
 
+    def anim_flat_keys(self):
+        """Flats ANIMES de Doom (p_spec.c animdefs, 8 tics par image) : des qu'une face porte une
+        image d'une famille, on fabrique les tuiles de TOUTES ses images. Le moteur les fait
+        tourner via markAnimTiles (PIC.C:129) : une sequence OT_ANM* dont les chunks sont ces
+        tuiles, mapPic redirige chacune vers l'image courante (make_e1m1.anim_sequences)."""
+        used = {self.picnames[k[0]][1] for k in self.em.tiles
+                if self.picnames[k[0]][0] == "flat"}
+        for fam in ANIM_FLATS:
+            if used & set(fam):
+                keys = [(self.picnum("flat", nm), 0, 0, 1, 1) for nm in fam]
+                for k in keys:
+                    self.em.tile(k)
+                self.anim_keys.append(keys)
+                self.stats["familles_animees"] += 1
+
     def build(self):
         for li in self.keep:
             self.emit_leaf(li)
         self.post_flags()
+        self.anim_flat_keys()
         if self.mobile or self.switch_lines:
             self.finalize_mobile()
+        self.anims = [[self.em._tile_index[k] for k in fam] for fam in self.anim_keys]
         return self.em
 
     # -- mobile : interrupteurs et compaction des tuiles -----------------------------------
@@ -951,7 +994,8 @@ class DoomConverter:
                 self.stats["interrupteur_sans_mur"] += 1
         # la tuile ON n'est referencee que par les chunks de la sequence d'interrupteur : a garder
         remap = self.compact_tiles(extra={s["tile_on"] for s in self.switches}
-                                   | {s["tile_off"] for s in self.switches})
+                                   | {s["tile_off"] for s in self.switches}
+                                   | {self.em._tile_index[k] for fam in self.anim_keys for k in fam})
         for s in self.switches:
             s["tile_off"] = remap[s["tile_off"]]
             s["tile_on"] = remap[s["tile_on"]]
@@ -1205,7 +1249,7 @@ def main(argv=None):
                stats=dict(conv.stats), criteres=crit, tiles=em.tiles,
                picnames=conv.picnames,
                sectors=em.sectors, walls=em.walls, vertices=em.vertices, faces=em.faces,
-               texture=em.texture, vertexLight=em.vertexLight)
+               texture=em.texture, vertexLight=em.vertexLight, anims=conv.anims)
     if tags is not None:
         order = [tags[s] for s in sorted(tags)]
         pbs, pbv, pbw, pb_index = push_blocks(conv, order)

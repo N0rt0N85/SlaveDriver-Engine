@@ -7,14 +7,14 @@ Tests (SPEC_CONVERTER section 7, `verif_static.py`) :
   3. loadStaticSounds / loadSoundSet SOUND.C:231-241 : `int 8`, 8 shorts ([3] == 6), `int 20`, puis
      20 x (int size, rate 0x7000, bps 8, loop -1) + PCM, size pair, soundTop < 512 Ko (SOUND.C:218-219)
   4. loadWeaponTiles PIC.C:709 = loadTileSet : `int n`, n x (flags 0x6A, palNm, size > 0, RLE) ; chaque
-     RLE decode exactement 4 096 pixels en consommant `size` octets (PIC.C:299-315) ; n == --tiles (95)
+     RLE decode exactement 4 096 pixels en consommant `size` octets (PIC.C:299-315) ; n == --tiles (96 : l'ombre + 95)
   5. loadWeaponSequences SEQUENCE.C:92-132 : `int size` == 12 + 8 f + 8 c + 2 s, 90 sequences,
      wSequence[0] == 0, croissante, terminale == nmFrames, frame terminale.chunkIndex == nmChunks,
      pads 0, sound -1, flags 0, chunk.tile < n ; fin de fichier exacte
   + (--ids, --wad) : pour chaque etat 1..89 dont le lump `sprite+lettre+0` est dans le WAD ET dans les
      familles decoupees, wseq(state) non vide ; les autres vides.
 
-Usage : python tools\\doom2ps\\verif_static.py [STATIC.DAT] [--tiles 95] [--ids ...] [--wad ...]
+Usage : python tools\\doom2ps\\verif_static.py [STATIC.DAT] [--tiles 96] [--ids ...] [--wad ...]
 Sortie 0 = tout vert ; sinon la premiere assertion qui tombe.
 """
 from __future__ import annotations
@@ -81,7 +81,7 @@ def static_summary(data):
                 wseq_bytes=(size + 3) & ~3)
 
 
-def verify(data, tiles_expected=95, ids=None, wad=None, families=None):
+def verify(data, tiles_expected=96, ids=None, wad=None, families=None):
     r = Reader(data)
     rep = {}
     # 1
@@ -164,7 +164,7 @@ def verify(data, tiles_expected=95, ids=None, wad=None, families=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("dat", nargs="?", default=DEFAULT_DAT)
-    ap.add_argument("--tiles", type=int, default=95, help="n attendu (95 ; 48 avec --e1m1-weapons)")
+    ap.add_argument("--tiles", type=int, default=96, help="n attendu (96 = ombre + 95 ; 49 avec --e1m1-weapons)")
     ap.add_argument("--ids", default=wad2static.DEFAULT_IDS)
     ap.add_argument("--wad", default=wad2static.DEFAULT_WAD)
     ap.add_argument("--e1m1-weapons", action="store_true")
@@ -177,7 +177,7 @@ def main(argv=None):
         ids = json.load(open(a.ids))
         wad = wadmod.Wad(a.wad)
     fams = wad2static.E1M1_FAMILIES if a.e1m1_weapons else wad2static.WEAPON_FAMILIES
-    rep = verify(data, 48 if a.e1m1_weapons else a.tiles, ids, wad, fams)
+    rep = verify(data, 49 if a.e1m1_weapons else a.tiles, ids, wad, fams)
     assert sum(rep["blocks"]) == rep["total"]
     print("%s : %d o, blocs %s : OK" % (a.dat, rep["total"], rep["blocks"]))
     print("ecran %s ; sons %s ; tuiles %s" % (rep["screen"], rep["sounds"], rep["tiles"]))

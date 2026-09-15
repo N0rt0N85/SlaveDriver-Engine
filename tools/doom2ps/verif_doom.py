@@ -376,7 +376,14 @@ def main(argv=None):
                         break
                     ts.append(t)
                 if ok:
-                    couvert.append((min(ts), max(ts), math.sqrt(L2)))
+                    # portion du MUR couverte : les extremites du segment projetees sur le mur.
+                    # (Avant : ts, parametre le long du SEGMENT -- un long linedef qui couvre tout
+                    # un mur court ne comptait que pour longueur_mur / longueur_segment.)
+                    wx, wz = qx - px, qz - pz
+                    W2 = (wx * wx + wz * wz) or 1.0
+                    ua = ((ax - px) * wx + (ay - pz) * wz) / W2
+                    ub = ((bx - px) * wx + (by - pz) * wz) / W2
+                    couvert.append((min(ua, ub), max(ua, ub), math.sqrt(L2)))
             if not couvert:
                 return False
             # union des portions couvertes, exprimee en fraction du mur
@@ -614,6 +621,30 @@ def main(argv=None):
     put("aucun mur plein invisible (hors ciel)", not ghost,
         f"{len(ghost)} murs, ex. {ghost[:4]}" if ghost else "0")
 
+    # 17. AUCUN PORTAIL PLEINE HAUTEUR VERS UNE FEUILLE PLUS HAUTE OU PLUS BASSE. Un portail qui
+    #     couvre exactement [sol, plafond] de sa feuille alors que la voisine a un autre sol ou un
+    #     autre plafond n'a ni contremarche ni linteau : on voit au travers (tranches du chemin
+    #     au-dessus du nukage, disque du 15-09 : 8 portails).
+    def flat_y(si, up):
+        for wi in range(S[si]["firstWall"], S[si]["lastWall"] + 1):
+            if (W[wi]["normal"][1] > 0) if up else (W[wi]["normal"][1] < 0):
+                return V[W[wi]["v"][0]]["y"]
+        return None
+    pleins = []
+    for si, s_ in enumerate(S):
+        for wi in range(s_["firstWall"], s_["lastWall"] + 1):
+            n = W[wi]["nextSector"]
+            if n < 0 or W[wi]["normal"][1] != 0:
+                continue
+            ys = [V[i]["y"] for i in W[wi]["v"]]
+            f0, c0, f1, c1 = flat_y(si, 1), flat_y(si, 0), flat_y(n, 1), flat_y(n, 0)
+            if None in (f0, c0, f1, c1) or (f0, c0) == (f1, c1):
+                continue
+            if min(ys) == f0 and max(ys) == c0 and (f1 > f0 or c1 < c0):
+                pleins.append((si, wi, n))
+    put("aucun portail pleine hauteur vers une feuille plus haute / plus basse", not pleins,
+        f"{len(pleins)} portails, ex. {pleins[:4]}" if pleins else "0")
+
     print(f"\n  {len(OK)} OK, {len(FAIL)} echec(s)" + (f" : {FAIL}" if FAIL else ""))
     return 1 if FAIL else 0
 
@@ -680,8 +711,21 @@ def tail_checks(a, L, S, W, V, F, tex, obj, p, M):
         tested, problems = wad2sprites.check_reachable(ss, ids, present)
         put("sequences atteignables non vides, chunks -> tuiles 0x6A", not problems,
             f"{tested} (MT, etat, vue) testes" + (f", defauts {problems[:3]}" if problems else ""))
-        put("sequenceMap[172..203] < 0 (markAnimTiles)",
-            all(sq["sequenceMap"][i] < 0 for i in range(172, 204)))
+        # 172..191 : types d'animation retail, jamais poses ; 192..203 (OT_ANM1..12) : les flats
+        # animes de Doom, dont chaque chunk doit pointer une tuile de GEOMETRIE (prefixe 0x32)
+        anim_bad = []
+        for i in range(192, 204):
+            b = sq["sequenceMap"][i]
+            if b < 0:
+                continue
+            for fr in range(sq["sequence"][b], sq["sequence"][b + 1]):
+                for c in range(sq["frames"][fr]["chunkIndex"], sq["frames"][fr + 1]["chunkIndex"]):
+                    if not (0 <= sq["chunks"][c]["tile"] < G):
+                        anim_bad.append((i, c))
+        n_anim = sum(1 for i in range(192, 204) if sq["sequenceMap"][i] >= 0)
+        put("sequenceMap[172..191] < 0, animations 192..203 -> tuiles de geometrie (markAnimTiles)",
+            all(sq["sequenceMap"][i] < 0 for i in range(172, 192)) and not anim_bad,
+            f"{n_anim} famille(s) animee(s)" + (f", defauts {anim_bad[:3]}" if anim_bad else ""))
         put("sequenceMap[163..171] : -2 sauf les OT_SW poses",
             all(sq["sequenceMap"][i] == -2 for i in range(163, 172) if not (168 <= i <= 171)))
         fam = sum(1 for i in range(138) if sq["sequenceMap"][i] != -2)
