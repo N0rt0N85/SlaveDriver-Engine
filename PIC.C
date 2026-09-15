@@ -9,7 +9,7 @@
 #include <sega_per.h>
 #include <sega_dma.h>
 #include <string.h>
-
+#include "gameparams.h"
 #include "pic.h"
 #include "util.h"
 #include "spr.h"
@@ -35,7 +35,7 @@
 #define MAXNMPICS 1000
 #endif
 
-static int frameCount;
+static int frameCount; CFG_PIC_DECL
 
 #define MAXNMVDP2PICS 50
 struct _vdp2PicData
@@ -261,7 +261,7 @@ static void map(Pic *p)
  assert(p->class>=0 && p->class<=NMCLASSES);
  /* find the oldest slot in the apropriate array */
  oldest=-1;
- oldTime=frameCount+1;
+ oldTime=CFG_PIC_NONE;
  array=classType[(int)p->class].slots;
 
 #ifndef NDEBUG
@@ -269,8 +269,8 @@ static void map(Pic *p)
     assert(*s!=p);
 #endif
  for (s=array;*s;s++)
-    if (!((*s)->flags & PICFLAG_LOCKED) && (*s)->lastUse<oldTime)
-       {oldTime=(*s)->lastUse;
+    if (!((*s)->flags & PICFLAG_LOCKED) && CFG_PIC_AGE(*s)<oldTime)
+       {oldTime=CFG_PIC_AGE(*s);
 	oldest=s-array;
        }
  if (s-array<classType[(int)p->class].nmSlots)
@@ -445,7 +445,7 @@ int mapPic(int picNm)
  assert(p->class != TILEVDP);
  if (p->charNm==-1)
     map(p);
- p->lastUse=frameCount;
+ CFG_PIC_SEQ(p) p->lastUse=frameCount;
  assert(p->charNm>=0);
  return p->charNm;
 }

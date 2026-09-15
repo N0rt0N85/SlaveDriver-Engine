@@ -148,6 +148,12 @@ char *doom_levelName(int lNm);                       /* DOOM_GAME.C, doomLevelNa
 #define CFG_LIFT_STOP_SND    3                       /* AI.C:4674: ST_PUSHBLOCK+3 = PSTOP       */
 void doom_pbBlockBits(int pb);                       /* DOOM_GAME.C                             */
 #define CFG_LIFT_MOVED(o)    doom_pbBlockBits((o)->pbNum)   /* AI.C:4670: lift portals follow the floor */
+void doom_spriteLeaves(void);                        /* WALLS.C (end): the leaf that draws each sprite */
+extern Sprite *doomDrawHead[];
+extern Sprite *doomDrawNext[];
+#define CFG_SPRITE_LEAVES()  doom_spriteLeaves()     /* WALLS.C:2415, once the draw order is known */
+#define CFG_SPR_FIRST(s)     doomDrawHead[s]         /* WALLS.C:2593 drawSprites                */
+#define CFG_SPR_NEXT(o)      doomDrawNext[(o)-sprites]
 #define CFG_LEVEL_NAME(l)    doom_levelName(l)       /* SRUINS.C:2510 (BIGMAP.C levelGraph)     */
 #define CFG_PLAY_INTRO()                             /* INITMAIN.C:617: no LOGOS.PCS/OPEN.MOV   */
 /* player / weapons (SPEC_PLAYER sections 1-2, 5; DOOM_PLAYER.C, DOOM_WEAPON.C) */
@@ -188,6 +194,9 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_LIFT_RESET(o)
 #define CFG_LIFT_STOP_SND    1
 #define CFG_LIFT_MOVED(o)
+#define CFG_SPRITE_LEAVES()
+#define CFG_SPR_FIRST(s)     sectorSpriteList[s]
+#define CFG_SPR_NEXT(o)      (o)->next
 #define CFG_LEVEL_NAME(l)    getLevelName(l)
 #define CFG_PLAY_INTRO()     playIntro()
 #define CFG_CONTROL(in,ch,p)   controlInput(in,ch)
@@ -258,6 +267,12 @@ extern int mapOn;                                    /* SRUINS.C:85             
 #define CFG_DRAW_MESSAGE()
 #define CFG_DRAW_STATBAR(f)    drawStatBar(f)
 #define CFG_DRAW_AIRMETER(f)   drawAirMeter(f)
+#endif
+
+/* VDP1 VRAM slots per pic class, in PIC.H order (TILE16BPP walls, TILE8BPP sprites, TILEVDP,
+   TILESMALL16BPP, TILESMALL8BPP) -- gameparams key PIC_SLOTS, PowerSlave's split by default. */
+#ifndef GP_PIC_SLOTS
+#define GP_PIC_SLOTS 28,31,1,10,12
 #endif
 
 #ifdef GP_CROUCH_BUTTON_WEPDN

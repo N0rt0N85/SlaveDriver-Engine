@@ -605,6 +605,15 @@ def main(argv=None):
     put("aucune face degeneree", not degen,
         f"{len(degen)} faces a moins de 3 sommets, ex. {degen[:4]}" if degen else f"{len(F)} faces")
 
+    # 16. AUCUN MUR PLEIN INVISIBLE (hors ciel). Un mur plein INVISIBLE ne peint rien et l'on voit
+    #     le noir au travers : 23 sur le disque du 15-09, tous sur un linedef a une face que
+    #     seg_on_edge n'avait pas reconnu (flanc de l'ascenseur, linedef 269).
+    ghost = [(si, wi) for si, s_ in enumerate(S) for wi in range(s_["firstWall"], s_["lastWall"] + 1)
+             if W[wi]["nextSector"] < 0 and W[wi]["normal"][1] == 0
+             and (W[wi]["flags"] & 0x02) and not (W[wi]["flags"] & 0x40)]
+    put("aucun mur plein invisible (hors ciel)", not ghost,
+        f"{len(ghost)} murs, ex. {ghost[:4]}" if ghost else "0")
+
     print(f"\n  {len(OK)} OK, {len(FAIL)} echec(s)" + (f" : {FAIL}" if FAIL else ""))
     return 1 if FAIL else 0
 

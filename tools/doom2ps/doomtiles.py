@@ -113,7 +113,7 @@ class TileMaker:
         self._tex[name] = (w, h, bytes(px))
         return self._tex[name]
 
-    def tile_from_wall(self, name, cu, cv, voff=0):
+    def tile_from_wall(self, name, cu, cv, voff=0, uoff=0):
         """64x64 indices : la texture echantillonnee sur UNE cellule de cu x cv unites monde.
         Le bouclage (`% w`, `% h`) rend la formule correcte dans les deux sens : une texture plus
         petite que la cellule se repete, une plus grande se sous-echantillonne.
@@ -128,7 +128,7 @@ class TileMaker:
             row = sy * w
             orow = y * CELL
             for x in range(CELL):
-                sx = int(x * cu / CELL) % w
+                sx = int(x * cu / CELL + uoff) % w     # uoff : colonne au bord gauche (cle uwin)
                 out[orow + x] = self.fix(px[row + sx])
         return bytes(out)
 
@@ -177,9 +177,12 @@ def main(argv=None):
             else:
                 cv = max(CELL_MIN_V, min(CELL_MAX_V, int(h)))
                 voff = 0
-            tiles.append(tm.tile_from_wall(name, cu, cv, voff))
+            uoff = 0
+            if len(key) >= 9:                     # + fenetre (cu, u0) : mur plus etroit que la texture
+                cu, uoff = key[7], key[8]
+            tiles.append(tm.tile_from_wall(name, cu, cv, voff, uoff))
             detail.append(dict(pic=pic, kind=kind, name=name, w=w, h=h,
-                               cu=cu, cv=cv, voff=voff))
+                               cu=cu, cv=cv, voff=voff, uoff=uoff))
 
     exact = sum(1 for d in detail if abs(d["cu"] - d["w"]) < 1)
     out = dict(format="doom2ps/e4-tiles v1",

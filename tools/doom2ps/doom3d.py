@@ -265,7 +265,7 @@ def light_of(level):
 
 
 class DoomConverter:
-    def __init__(self, M, sizes, cap_cells=CAP_CELLS, mobile=None, switch_lines=None):
+    def __init__(self, M, sizes, cap_cells=CAP_CELLS, mobile=None, switch_lines=None, uwin=None):
         """`mobile` : {secteur Doom: MobileTag} (--mobile) ; `switch_lines` : {linedef: dict(channel,
         special)} des interrupteurs S dont il faut isoler la tuile (doom_specials.specials_of)."""
         self.M = M
@@ -284,6 +284,11 @@ class DoomConverter:
         self._secret_ids = set()
         self.switch_hits = defaultdict(list)  # linedef -> [dict(leaf, walls, name, bot, top, P, Q)]
         self.switches = []                    # finalize_mobile : objets OT_SW1..4 a emettre
+        # fenetres horizontales (wall_tex) : `uwin` = {(linedef, cote)} autorises, None = tous,
+        # en notant pour chacun [gain, {tuiles}] -- le 1er passage de main, voir choisir_fenetres
+        self.uwin = uwin
+        self.uwin_use = defaultdict(lambda: [0.0, set(), None])
+        self.door_tex = set()                 # textures posees en FACE de porte (linteau mobile)
         # Polygones ETIQUETES + frontieres exactes : voir tools/doom2ps/adjacency.py. La
         # reciprocite des portails y est vraie par construction, ce qui supprime l'echantillonnage
         # de voisinage de la 1re version (58 portails a sens unique, 31 trous, MESURE sur E1M1).
@@ -337,7 +342,7 @@ class DoomConverter:
     def tex_h(self, name):
         return self.sizes.get(name, (64, 128))[1] or 128
 
-    def wall_tex(self, name, hauteur=None, voff=0):
+    def wall_tex(self, name, hauteur=None, voff=0, cadre=None):
         """Descripteur de placage E4.1c : la cellule porte la HAUTEUR REELLE du mur.
 
         E4.1b posait cv = hauteur de la texture, en comptant sur `tile_counts` pour tomber juste.
@@ -366,9 +371,19 @@ class DoomConverter:
             cv = max(1.0, H / float(th))
         else:
             cv = float(max(CELL_MIN_V, min(CELL_MAX_V, int(h))))
-        return dict(mode="wall", pic=p, cu=cu, cv=cv, ncx=1, ncy=1,
-                    ox=0, oz=0, dx=1, dz=0, yref=0, pu=0, pv=0, flipx=False, flipy=False,
-                    keyed_cell=True, voff=int(voff) % h), p
+        d = dict(mode="wall", pic=p, cu=cu, cv=cv, ncx=1, ncy=1,
+                 ox=0, oz=0, dx=1, dz=0, yref=0, pu=0, pv=0, flipx=False, flipy=False,
+                 keyed_cell=True, voff=int(voff) % h)
+        if cadre is not None and cadre[6] < w - 0.5 and (self.uwin is None or cadre[7] in self.uwin):
+            # LINEDEF plus ETROIT que la texture : une cellule de toute la longueur, dont la tuile
+            # porte seulement les colonnes que Doom y montre (Emitter.cell_tile, cle `uwin`).
+            # Sinon la texture entiere s'ecrase dans le mur -- porte de sortie d'E1M1. Tester le
+            # linedef et non le morceau : les feuilles du BSP coupent les longs linedefs en
+            # morceaux plus courts que leur texture, et fenetrer chacun MESURE 145 -> 223 tuiles.
+            sx, sy, dx, dz, xoff, L, ll, ident = cadre
+            d.update(cu=L, ox=sx, oz=sy, dx=dx, dz=dz, uwin=True, uoff=xoff, uw=int(w),
+                     uwin_id=ident, squash=w / ll)
+        return d, p
 
     def flat_tex(self, name):
         p = self.picnum("flat", name)
@@ -383,6 +398,35 @@ class DoomConverter:
         for (sg, s0, s1) in self.segidx.get(leaf, {}).get(tag, ()):
             if s0 - 0.01 <= lo and hi <= s1 + 0.01:
                 return sg
+        return None
+
+    def seg_near(self, leaf, P, Q, tol=1.5):
+        """Seg de `leaf` dont le LINEDEF porte l'arete PQ a `tol` pres, pour une arete sans voisin
+        ni seg exact. seg_on_edge exige la MEME droite canonique ; or une feuille peut etre bornee
+        par la droite d'un NOEUD tiree d'un seg que le nodebuilder a arrondi (5 % des segs ne sont
+        pas sur leur linedef) : l'arete longe alors un linedef a une face a < 1 u sans le
+        reconnaitre, et sortait en bord de carte INVISIBLE. MESURE E1M1 : 23 murs pleins
+        invisibles, tous a <= 0,8 u d'un linedef a une face (dont le flanc de l'ascenseur 269)."""
+        M = self.M
+        V = M["vertices"]
+        ss = M["subsectors"][leaf]
+        cands = [M["segs"][k] for k in range(ss.first, ss.first + ss.count)]
+        # puis les linedefs a UNE face du meme secteur Doom : le seg peut appartenir a une feuille
+        # voisine ecartee hors carte (E1M1 : 2 bords de 1 et 9 u contre l'eclat 161)
+        sec = self.leaf_sector[leaf]
+        cands += [M["segs"][0]._replace(line=i, side=0) for i, ld in enumerate(M["linedefs"])
+                  if ld.left < 0 and M["sidedefs"][ld.right].sector == sec]
+        for sg in cands:
+            ld = M["linedefs"][sg.line]
+            (ax, ay), (bx, by) = V[ld.v1], V[ld.v2]
+            L = math.hypot(bx - ax, by - ay)
+            if L < 1:
+                continue
+            ux, uy = (bx - ax) / L, (by - ay) / L
+            if all(abs((X[0] - ax) * uy - (X[1] - ay) * ux) <= tol for X in (P, Q)):
+                t = sorted((X[0] - ax) * ux + (X[1] - ay) * uy for X in (P, Q))
+                if t[0] >= -tol and t[1] <= L + tol:
+                    return sg
         return None
 
     # -- emission ------------------------------------------------------------------------
@@ -418,6 +462,15 @@ class DoomConverter:
         idx = self.em.add_wall(quad, next_sector=next_sector, picnum=picnum,
                                invisible=invisible, blocked=(next_sector < 0), light=light,
                                cap_cells=self.cap, stats=self.stats, tex=tex)
+        if tex is not None and tex.get("uwin"):
+            rec = self.uwin_use[tex["uwin_id"]]
+            rec[0] += (top - bot) * math.dist(P, Q) * (tex["squash"] - 1.0)
+            rec[2] = self.picnames[tex["pic"]][1]
+            for wi in idx:
+                w = self.em.walls[wi]
+                if w["flags"] & 0x01:
+                    for c in range(w["tileLength"] * w["tileHeight"]):
+                        rec[1].add(self.em.texture[w["textures"] + 2 * c + 1])
         if open_height and not invisible:
             self._rekey_height(idx, open_height)
         for (tag, role) in (mob or ()):
@@ -474,7 +527,7 @@ class DoomConverter:
                 t = em.texture[w["textures"] + 2 * c + 1]
                 key = tuple(em.tiles[t])
                 if len(key) >= 7:
-                    key = key[:5] + (round(float(open_h), 2), key[6])
+                    key = key[:5] + (round(float(open_h), 2),) + key[6:]
                     em.texture[w["textures"] + 2 * c + 1] = em.tile(key)
         self.stats["cellules_rekeyees_ouvert"] += 1
 
@@ -569,6 +622,10 @@ class DoomConverter:
         M = self.M
         sg = self.seg_on_edge(leaf, tag, ta, tb)
         nbi = self.remap.get(nb, -1) if nb is not None and nb >= 0 else -1
+        if sg is None and nbi < 0:
+            sg = self.seg_near(leaf, P, Q)
+            if sg is not None:
+                self.stats["bords_rattrapes_par_linedef"] += 1
 
         # ROLES MOBILES (--mobile). `ms` = ce secteur bouge, `mn` = le voisin bouge. Porte : tout
         # ce dont le HAUT est le plafond de la porte monte (murs de la porte, portails, et le bas
@@ -610,6 +667,13 @@ class DoomConverter:
         op_i = ld.left if sg.side == 0 else ld.right
         side = M["sidedefs"][sd_i] if sd_i >= 0 else None
         other = M["sidedefs"][op_i] if op_i >= 0 else None
+        # CALAGE HORIZONTAL (r_segs.c) : colonne = xoff du sidedef + distance le long du linedef
+        # depuis son debut VU DE CE COTE (v1 pour la face droite, v2 pour la gauche).
+        a_, b_ = (ld.v1, ld.v2) if sg.side == 0 else (ld.v2, ld.v1)
+        (sx_, sy_), (ex_, ey_) = M["vertices"][a_], M["vertices"][b_]
+        ll_ = math.hypot(ex_ - sx_, ey_ - sy_) or 1.0
+        cadre = (sx_, sy_, (ex_ - sx_) / ll_, (ey_ - sy_) / ll_, side.xoff if side else 0,
+                 math.dist(P, Q), ll_, (sg.line, sg.side))
 
         # CALAGE VERTICAL DE DOOM (r_segs.c). `*texturemid` est la hauteur monde de la ligne 0
         # de la texture ; la ligne qui tombe en haut d'une section vaut donc `mid - sommet`, plus
@@ -648,7 +712,7 @@ class DoomConverter:
             # une face : `mid` = plafond (defaut) ou sol + h (DONTPEGBOTTOM) ; v = ligne au sommet
             mid = (fh + h) if pegbot else ch
             v = ((mid - top_) % h) + yoff
-            tex, pic = self.wall_tex(name, top_ - bot_, v)
+            tex, pic = self.wall_tex(name, top_ - bot_, v, cadre)
             idx = self.emit_wall(P, Q, bot_, top_, next_sector=-1, tex=tex, picnum=pic,
                                  light=light, invisible=False, centre=cen, mob=mob)
             self._note_switch(sg, leaf, idx, name, fh, ch, P, Q)
@@ -679,7 +743,7 @@ class DoomConverter:
             h = self.tex_h(name)
             hb = min(nfh, ch)
             v = ((ch - hb) % h if pegbot else 0) + yoff
-            tex, pic = self.wall_tex(name, hb - ms.lower, v)
+            tex, pic = self.wall_tex(name, hb - ms.lower, v, cadre)
             idx = self.emit_wall(P, Q, ms.lower, hb, next_sector=-1, tex=tex, picnum=pic,
                                  light=light, invisible=False, centre=cen, mob=None)
             self._note_switch(sg, leaf, idx, name, ms.lower, hb, P, Q)
@@ -690,7 +754,7 @@ class DoomConverter:
             hb = min(nfh, ch)
             # bas : `mid` = sol du voisin (defaut) ou plafond de devant (DONTPEGBOTTOM)
             v = ((ch - hb) % h if pegbot else 0) + yoff
-            tex, pic = self.wall_tex(name, hb - fh, v)
+            tex, pic = self.wall_tex(name, hb - fh, v, cadre)
             mob = own(fh, hb)
             if mn_lift and hb == nfh:
                 # plate-forme voisine plus haute que nous : Doom ancre la texture a SON sol, qui
@@ -708,6 +772,8 @@ class DoomConverter:
                 h = self.tex_h(name)
                 hb = max(nch, fh)
                 top_ = ch
+                if mn_door and hb == nch:
+                    self.door_tex.add(name)
                 if mn_door and hb == nch and ms is None and not self.sky(sec):
                     # FACE DE PORTE : la recette retail, une dalle rigide qui monte avec la porte
                     # (4 coins mobiles). Doom ancre ce `upper` au plafond de la porte (defaut), il
@@ -725,7 +791,7 @@ class DoomConverter:
                 # haut : `mid` = plafond de devant (DONTPEGTOP) ou plafond du voisin + h (defaut)
                 mid = ch if pegtop else hb + h
                 v = ((mid - top_) % h) + yoff
-                tex, pic = self.wall_tex(name, top_ - hb, v)
+                tex, pic = self.wall_tex(name, top_ - hb, v, cadre)
                 idx = self.emit_wall(P, Q, hb, top_, next_sector=-1, tex=tex, picnum=pic,
                                      light=light, invisible=False, centre=cen, mob=mob)
                 self._note_switch(sg, leaf, idx, name, hb, top_, P, Q)
@@ -767,7 +833,7 @@ class DoomConverter:
                 side.lower if side and side.lower != "-" else "BROWN1")
             h = self.tex_h(name)
             v = ((h - (ch - fh)) % h if pegbot else 0) + yoff
-            tex, pic = self.wall_tex(name, ch - fh, v)
+            tex, pic = self.wall_tex(name, ch - fh, v, cadre)
             idx = self.emit_wall(P, Q, fh, ch, next_sector=-1, tex=tex, picnum=pic,
                                  light=light, invisible=False, centre=cen, mob=own(fh, ch))
             self._note_switch(sg, leaf, idx, name, fh, ch, P, Q)
@@ -791,6 +857,28 @@ class DoomConverter:
                 if s["floorLevel"] - S[w["nextSector"]]["floorLevel"] > PLAYER_STEP_HEIGHT:
                     w["flags"] |= 0x800                 # CLIFFBNDRY : chute > 24 (monstres)
                     self.stats["cliffbndry"] += 1
+
+    def choisir_fenetres(self, budget):
+        """Les linedefs a fenetrer, par gain (aire x ecrasement evite) par tuile NOUVELLE, tant que
+        l'ensemble des tuiles fenetrees tient dans `budget`. Chaque fenetre est une tuile a elle :
+        tout fenetrer MESURE 145 -> 187 tuiles sur E1M1, plus que l'index d'une tuile de
+        geometrie ne le permet (unsigned char, + tileBase 95 <= 255) -- et autant de plus dans le
+        cache VDP1 de la vue.
+        Les TEXTURES DE PORTE passent d'abord, hors budget : Doom les dessine au texel pres pour
+        leur cadre, et c'est la que l'ecrasement se voit (le testeur : la porte de sortie d'E1M1,
+        EXITDOOR 128 sur 64 u, et ses montants de 24 u) -- alors que leur petite aire les classe
+        loin derriere de grands murs a peine ecrases (x 1,33)."""
+        pris, tuiles = set(), set()
+        for k, (gain, ts, name) in self.uwin_use.items():
+            if name in self.door_tex:
+                pris.add(k)
+                tuiles |= ts
+        for k, (gain, ts, name) in sorted(self.uwin_use.items(),
+                                          key=lambda kv: -kv[1][0] / max(1, len(kv[1][1]))):
+            if k not in pris and len(tuiles | ts) <= budget:
+                pris.add(k)
+                tuiles |= ts
+        return pris
 
     def build(self):
         for li in self.keep:
@@ -1029,6 +1117,8 @@ def main(argv=None):
     ap.add_argument("--mobile", action="store_true",
                     help="portes FERMEES + course, push blocks, interrupteurs (SPEC_CONVERTER 5.1) ; "
                          "la sortie gagne une cle `mobile`")
+    ap.add_argument("--uwin-budget", type=int, default=12,
+                    help="tuiles accordees aux linedefs plus etroits que leur texture (choisir_fenetres)")
     ap.add_argument("--static-doors", action="store_true",
                     help="portes ouvertes en dur (open_doors, controle visuel) -- le defaut sans --mobile")
     a = ap.parse_args(argv)
@@ -1056,17 +1146,31 @@ def main(argv=None):
             print(f"    secteur {d['sector']:3d} {d['kind']:13s} course {d['lower']} .. {d['upper']}"
                   f" ({d['upper'] - d['lower']} u)")
         switch_lines = {s["line"]: s for s in specials.sswitch}
-        conv = DoomConverter(M, sizes, a.cap_cells, mobile=tags, switch_lines=switch_lines)
+        def mk(u=None):
+            nonlocal tags                       # un MobileTag accumule les murs de SON passage
+            tags = {d["sector"]: MobileTag(d["sector"], d["kind"], d["lower"], d["upper"])
+                    for d in specials.doors + specials.lifts + specials.floors}
+            return DoomConverter(M, sizes, a.cap_cells, mobile=tags, switch_lines=switch_lines,
+                                 uwin=u)
     else:
         nportes = open_doors(M)
         if nportes:
             print(f"  {nportes} portes ouvertes (plafond = plus bas plafond voisin - 4, "
                   f"regle de EV_VerticalDoor)")
-        conv = DoomConverter(M, sizes, a.cap_cells)
+        def mk(u=None):
+            return DoomConverter(M, sizes, a.cap_cells, uwin=u)
+    conv = mk()
     vides = len(M["subsectors"]) - len(conv.keep)
     if vides:
         print(f"  {vides} feuilles degenerees ecartees")
     em = conv.build()
+    if conv.uwin_use:
+        # 2e passage : seulement les fenetres que le budget de tuiles accorde
+        pris = conv.choisir_fenetres(a.uwin_budget)
+        print(f"  fenetres horizontales : {len(pris)}/{len(conv.uwin_use)} faces de linedef, "
+              f"budget {a.uwin_budget} tuiles : {sorted(pris)}")
+        conv = mk(pris)
+        em = conv.build()
     print(f"  {len(em.sectors)} secteurs, {len(em.walls)} murs, {len(em.vertices)} sommets, "
           f"{len(em.faces)} faces, {len(em.texture)} octets de texture, "
           f"{len(em.vertexLight)} lumieres, {len(em.tiles)} tuiles distinctes")

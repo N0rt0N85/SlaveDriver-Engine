@@ -382,6 +382,13 @@ class Emitter:
             # sur une repetition de la texture, comme en E4.1b. Mettre aussi la largeur faisait
             # passer E1M1 de 112 a 295 tuiles (1,2 Mo) sans rien corriger de plus.
             key = key + (round(cell[1], 2), int(tex.get("voff", 0)))
+            if tex.get("uwin"):
+                # Doom, mur plus ETROIT que sa texture : Doom n'en montre que les colonnes
+                # [u, u + L), on fabrique la tuile pour elles au lieu d'ecraser la texture entiere
+                # dans la cellule (E1M1 : EXITDOOR, 128 de large, sur la face de 64 de la porte de
+                # sortie). u = colonne au bord v0 de la cellule, texture en boucle.
+                u0 = (u - cell[0] / 2.0 + tex["uoff"]) % tex["uw"]
+                key = key + (round(cell[0], 2), round(u0, 2))
         return self.tile(key), pat
 
     def push_vertices(self, pts, light=0):

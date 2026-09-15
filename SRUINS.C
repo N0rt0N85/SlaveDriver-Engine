@@ -1900,7 +1900,7 @@ int runLevel(char *filename,int levelNm)
  initPicSystem(4,((int []){28,30,1,10,12,30,-1}));
 #else
  i=initFonts(CFG_FONT_BASE,CFG_FONT_MASK);
- initPicSystem(i,((int []){28,31,1,10,12,-1}));
+ initPicSystem(i,((int []){GP_PIC_SLOTS,-1}));
 #endif
  dPrint("ert!\n");
  CFG_REDRAW_STATBAR();

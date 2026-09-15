@@ -11,8 +11,8 @@
  *
  * VDP1 VRAM ledger (EZ_initSprSystem(1448,4,1224): chars from 112 448): STBAR 10 240 + keys 3 x 64
  * + face 768 + fonts 2 176 + 1 472 + 640 (32-byte rounded, measured on doom_art.h) = 15 488, against
- * 22 464 for stat_bar 13 440 + compasses 1 920 + brianFont 7 104; + tiles 389 120 (initPicSystem
- * {28,31,1,10,12}) = 517 056 / 524 288: 7 232 bytes free -- no 8 bpp slot has to be given up.
+ * 22 464 for stat_bar 13 440 + compasses 1 920 + brianFont 7 104; + tiles 389 120 (PIC_SLOTS
+ * {32,31,1,0,0}, params/doom.cfg) = 517 056 / 524 288: 7 232 bytes free -- no 8 bpp slot given up.
  */
 #include <sega_spr.h>
 #include <sega_scl.h>

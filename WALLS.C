@@ -2412,7 +2412,7 @@ void drawWalls(MthMatrix *view)
  for (i=0;i<updateListSize;i++)
     updateList[i]=drawList[updateListSize-i-1];
 
- popProfile();
+ CFG_SPRITE_LEAVES(); popProfile();
 
  if (slaveSize>updateListSize-1)
     slaveSize=updateListSize-1;
@@ -2590,7 +2590,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
  assert(sector>=0 && sector<level_nmSectors);
 
  assert(camera->sequence==-1);
- for (o=sectorSpriteList[sector];nmDraw<100 && o;o=o->next)
+ for (o=CFG_SPR_FIRST(sector);nmDraw<100 && o;o=CFG_SPR_NEXT(o))
     if (o->sequence!=-1 && !(o->flags & SPRITEFLAG_INVISIBLE))
        drawList[nmDraw++]=o;
 
@@ -2860,3 +2860,86 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 void initWallRenderer(void)
 {lightInit();
 }
+
+#ifdef GP_GAME_DOOM
+/* Which leaf draws a sprite (CFG_SPRITE_LEAVES, CFG_SPR_FIRST/NEXT).  The painter draws a sprite
+   right after the leaf holding its centre, and every leaf drawn later paints over it.  A Doom map
+   is cut into many small BSP leaves (E1M1: 237), so a monster standing near a leaf boundary has
+   half its billboard over the neighbour; when that neighbour is drawn later, its FLOOR covers the
+   monster up to the horizon -- the monster looks sunk or squat.  Doom draws every floor before
+   any sprite, so a floor never hides one.  Here a sprite is drawn with the LATEST-drawn visible
+   leaf it touches: its own, or a neighbour across a portal less than one radius away, its centre
+   in front of the portal.  updateList[0] is drawn last (the master draws from the top, the slave
+   the rest, WALLS.C:2422-2436).
+   Only across a FLUSH portal: same floor and same ceiling on both sides, no step, no lintel --
+   a BSP chord through one room.  Moving the sprite after a leaf also stops that leaf's WALLS
+   from covering it; across a doorway or a window the jambs and the lintel belong to the
+   neighbour and stand in front of the monster (seen on console: monster parts over a wall). */
+static int doomFlatY(int s,int up)
+{int f;
+ for (f=level_sector[s].firstWall;f<=level_sector[s].lastWall;f++)
+    if (up? level_wall[f].normal[1]>0: level_wall[f].normal[1]<0)
+       return level_vertex[level_wall[f].v[0]].y;
+ return 0x7fff;                                      /* no face: a sky ceiling */
+}
+
+/* portal w of leaf s into n: bottom = both floors, top = both ceilings */
+static int doomFlush(int s,int n,int w)
+{int ceil=doomFlatY(s,0),bot=level_vertex[level_wall[w].v[2]].y;
+ return bot==doomFlatY(s,1) && bot==doomFlatY(n,1) && ceil==doomFlatY(n,0) &&
+	(ceil==0x7fff || level_vertex[level_wall[w].v[1]].y==ceil);
+}
+#define DOOM_MAXDRAWSPRITES 450                      /* SPRITE.C:12 MAXNMSPRITES */
+Sprite *doomDrawHead[MAXNMSECTORS];
+Sprite *doomDrawNext[DOOM_MAXDRAWSPRITES];
+static short doomDrawRank[MAXNMSECTORS];             /* updateList index + 1, 0 = not drawn */
+static short doomRanked[MAXNMSECTORS];
+static int doomNmRanked;
+
+void doom_spriteLeaves(void)
+{int i,s,t,n,w;
+ Sprite *o;
+ MthXyz p;
+ Fixed32 d,c;
+ for (i=0;i<doomNmRanked;i++)
+    {doomDrawRank[doomRanked[i]]=0;
+     doomDrawHead[doomRanked[i]]=NULL;
+    }
+ doomNmRanked=updateListSize;
+ for (i=0;i<updateListSize;i++)
+    {s=updateList[i]-sectorDraw;
+     doomRanked[i]=(short)s;
+     doomDrawRank[s]=(short)(i+1);
+    }
+ for (i=0;i<updateListSize;i++)
+    {s=doomRanked[i];
+     for (o=sectorSpriteList[s];o;o=o->next)
+	{t=s;
+	 for (w=level_sector[s].firstWall;w<=level_sector[s].lastWall;w++)
+	    {n=level_wall[w].nextSector;
+	     if (n==-1)
+		break;                          /* portals come first (SPRITE.C:412) */
+	     if (!doomDrawRank[n] || doomDrawRank[n]>=doomDrawRank[t])
+		continue;
+	     if (F(level_vertex[level_wall[w].v[2]].y)>=o->pos.y+o->radius ||
+		 F(level_vertex[level_wall[w].v[1]].y)<=o->pos.y-o->radius)
+		continue;                       /* portal above or below the body */
+	     getVertex(level_wall[w].v[0],&p);
+	     d=MTH_Mul(o->pos.x-p.x,level_wall[w].normal[0])+
+	       MTH_Mul(o->pos.z-p.z,level_wall[w].normal[2]);
+	     if (d>=o->radius)
+		continue;
+	     c=MTH_Mul(p.x-o->pos.x,level_wall[w].normal[2])+
+	       MTH_Mul(o->pos.z-p.z,level_wall[w].normal[0]);
+	     if (c<0 || c>F(level_wall[w].pixelLength))
+		continue;                       /* beside the portal, not across it */
+	     if (doomFlush(s,n,w))
+			t=n;
+	    }
+	 assert(o-sprites>=0 && o-sprites<DOOM_MAXDRAWSPRITES);
+	 doomDrawNext[o-sprites]=doomDrawHead[t];
+	 doomDrawHead[t]=o;
+	}
+    }
+}
+#endif
