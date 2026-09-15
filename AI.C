@@ -4667,7 +4667,7 @@ void elevator_func(Object *_this,int msg,int param1,int param2)
 		   {pbObject_moveTo((PushBlockObject *)this,0); CFG_LIFT_RESET(this);
 		    wait=1;
 		   }
-		if (wait)
+		CFG_LIFT_MOVED(this); if (wait)
 		   {this->state=AI_ELEVATOR_WAIT;
 		    stopAllSound((int)this);
 		    pushBlockMakeSound((PushBlockObject *)this,

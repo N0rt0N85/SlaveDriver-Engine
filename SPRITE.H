@@ -146,6 +146,8 @@ char *doom_levelName(int lNm);                       /* DOOM_GAME.C, doomLevelNa
 #define CFG_SPRITE_NEARCLIP  F(10)                   /* WALLS.C:2701                            */
 #define CFG_LIFT_RESET(o)    if ((o)->channel!=-1) signalAllObjects(SIGNAL_SWITCHRESET,(o)->channel,0)  /* AI.C:4667 */
 #define CFG_LIFT_STOP_SND    3                       /* AI.C:4674: ST_PUSHBLOCK+3 = PSTOP       */
+void doom_pbBlockBits(int pb);                       /* DOOM_GAME.C                             */
+#define CFG_LIFT_MOVED(o)    doom_pbBlockBits((o)->pbNum)   /* AI.C:4670: lift portals follow the floor */
 #define CFG_LEVEL_NAME(l)    doom_levelName(l)       /* SRUINS.C:2510 (BIGMAP.C levelGraph)     */
 #define CFG_PLAY_INTRO()                             /* INITMAIN.C:617: no LOGOS.PCS/OPEN.MOV   */
 /* player / weapons (SPEC_PLAYER sections 1-2, 5; DOOM_PLAYER.C, DOOM_WEAPON.C) */
@@ -185,6 +187,7 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_SPRITE_NEARCLIP  F(32)
 #define CFG_LIFT_RESET(o)
 #define CFG_LIFT_STOP_SND    1
+#define CFG_LIFT_MOVED(o)
 #define CFG_LEVEL_NAME(l)    getLevelName(l)
 #define CFG_PLAY_INTRO()     playIntro()
 #define CFG_CONTROL(in,ch,p)   controlInput(in,ch)

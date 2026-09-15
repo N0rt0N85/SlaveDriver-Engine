@@ -146,10 +146,13 @@ def split_convex(poly, axis, c, src_edges=None):
         P, Q = poly[k], poly[(k + 1) % n]
         s = P[2]
         sp, sq = P[axis] - c, Q[axis] - c
+        # P SUR la coupe : dans le morceau que l'arete d'origine quitte, l'arete sortante de P est
+        # la coupe elle-meme (src None). Garder `s` y faisait calculer le croisement suivant sur la
+        # mauvaise droite (MESURE E1M1 : 112 coupes refusees, faces de 128-181 u -- tuile etiree).
         if sp <= 0:
-            lo.append(P)
+            lo.append(P if (sp < 0 or sq <= 0) else (P[0], P[1], None))
         if sp >= 0:
-            hi.append(P)
+            hi.append(P if (sp > 0 or sq >= 0) else (P[0], P[1], None))
         if (sp < 0 < sq) or (sq < 0 < sp):
             if src_edges is not None and s is not None:
                 A, B = src_edges[s]                    # arete d'origine : croisement exact
@@ -567,7 +570,8 @@ class Emitter:
             self.walls.append(w)
             return [len(self.walls) - 1]
 
-        cells = self._grid_cells(poly_xz, stats)
+        cells = self._grid_cells(poly_xz, stats,
+                                 grille=bool(tex is not None and tex.get("doom_flat")))
         pts, faces, index = [], [], {}
         for cell in cells:
             cxm = sum(p[0] for p in cell) / float(len(cell))
@@ -626,7 +630,7 @@ class Emitter:
                 stats["plats_hors_budget_slave"] += 1
         return [len(self.walls) - 1]
 
-    def _grid_cells(self, poly_xz, stats=None):
+    def _grid_cells(self, poly_xz, stats=None, grille=False):
         """Decoupe le polygone convexe pour que chaque face tienne dans une tuile de 64 u.
 
         On ne pave PAS avec une grille globale : une coupe deplace le point de croisement sur le
@@ -638,8 +642,17 @@ class Emitter:
         Regle (la meme qu'en E2.5b) : on coupe sur la ligne de grille, SAUF quand la coupe n'est pas
         representable. Le test est exact : les aires sont entieres (area2), donc on compare
         area2(gauche) + area2(droite) a area2(entier) et on refuse la coupe si l'ecart depasse le
-        seuil. On essaie alors l'autre axe, puis on garde le polygone entier."""
+        seuil. On essaie alors l'autre axe, puis on garde le polygone entier.
+
+        `grille` (flat Doom) : on coupe sur TOUTE ligne de la grille de 64 qui traverse le
+        polygone, pas seulement tant qu'il depasse 64 u. Un flat Doom est cale sur cette grille
+        (R_DrawSpan, `x & 63`) : une face de 60 u a cheval sur x = 64 portait une tuile entiere
+        decalee sur deux cellules (MESURE E1M1 : 150 faces sur 3 039). Chaque face tient alors
+        dans UNE cellule : les cellules pleines sont exactes, seule la cellule du bord s'ecrase."""
         src_edges = [(poly_xz[k], poly_xz[(k + 1) % len(poly_xz)]) for k in range(len(poly_xz))]
+
+        def traverse(lo, hi):
+            return (int(lo // TILESIZE) + 1) * TILESIZE < hi
         out = []
         todo = [[(p[0], p[1], k) for k, p in enumerate(poly_xz)]]
         guard = 0
@@ -654,21 +667,28 @@ class Emitter:
             xs = [p[0] for p in poly]
             zs = [p[1] for p in poly]
             dx, dz = max(xs) - min(xs), max(zs) - min(zs)
-            if dx <= TILESIZE and dz <= TILESIZE:
+            if grille:
+                fini = not (traverse(min(xs), max(xs)) or traverse(min(zs), max(zs)))
+            else:
+                fini = dx <= TILESIZE and dz <= TILESIZE
+            if fini:
                 out.append(poly)
                 continue
             axes = [0, 1] if dx >= dz else [1, 0]
             cut = None
             for ax in axes:
                 lo, hi = (min(xs), max(xs)) if ax == 0 else (min(zs), max(zs))
-                if hi - lo <= TILESIZE:
+                if (not traverse(lo, hi)) if grille else (hi - lo <= TILESIZE):
                     continue
                 c = self._cut_line(lo, hi)
                 a, b = split_convex(poly, ax, c, src_edges)
                 if len(a) < 3 or len(b) < 3:
                     continue
                 err = abs(area2(a) + area2(b) - area2(poly)) / 2.0
-                if err > max(0.5, 0.01 * abs(area2(poly)) / 2.0):
+                # grille : une bande de 12 u sur 128 le long d'un mur refusait sa coupe (tuile
+                # etiree x2) pour un ecart d'arrondi invisible -- on tolere 1/4 u sur l'etendue.
+                tol = 0.25 * max(dx, dz) if grille else 0.0
+                if err > max(0.5, 0.01 * abs(area2(poly)) / 2.0, tol):
                     if stats is not None:
                         stats["coupes_refusees"] += 1
                     continue
@@ -724,13 +744,29 @@ def oriente_face_doom(pts):
     zs = [q[1] for q in pts]
     x0, x1, z0, z1 = min(xs), max(xs), min(zs), max(zs)
     coins = [(x0, z1), (x1, z1), (x1, z0), (x0, z0)]          # NO, NE, SE, SO
-    if len(pts) == 3:
-        return [min(pts, key=lambda q: (q[0] - c[0]) ** 2 + (q[1] - c[1]) ** 2) for c in coins]
     cx = sum(xs) / float(len(pts))
     cz = sum(zs) / float(len(pts))
     o = sorted(pts, key=lambda q: -math.atan2(q[1] - cz, q[0] - cx))
-    k = min(range(len(o)), key=lambda i: (o[i][0] - x0) ** 2 + (o[i][1] - z1) ** 2)
-    return o[k:] + o[:k]
+    # Candidats = toutes les rotations de l'ordre HORAIRE (jamais de miroir), et pour un triangle
+    # toutes les facons de doubler un sommet en gardant les trois dans l'ordre cyclique -- la 1re
+    # version associait chaque coin au sommet le plus proche et un triangle fin pouvait PERDRE un
+    # sommet : face ecrasee en ligne, trou ou l'on voit le ciel VDP2 (20 faces degenerees sur le
+    # disque du 14-09, dont la 898/909 du secteur 84 capturee par le testeur).
+    # On garde le candidat le plus proche des quatre coins NO, NE, SE, SO de la cellule. Un carre
+    # entier donne 0 et ne change pas ; une face PARTIELLE ne se cale plus sur « le sommet le plus
+    # proche du NO », qui la faisait partir en biais le long d'un mur diagonal (face 889 du secteur
+    # 84 : ecart 9 177 contre 3 673 pour la bonne rotation).
+    n = len(o)
+    rots = [o[k:] + o[:k] for k in range(n)]
+    if n == 3:
+        cands = [c for r in rots for c in ([r[0], r[1], r[2], r[2]], [r[0], r[1], r[1], r[2]],
+                                           [r[0], r[0], r[1], r[2]])]
+    elif n == 4:
+        cands = rots
+    else:
+        return rots[min(range(n), key=lambda k: (o[k][0] - x0) ** 2 + (o[k][1] - z1) ** 2)]
+    return list(min(cands, key=lambda c: sum((c[i][0] - coins[i][0]) ** 2
+                                             + (c[i][1] - coins[i][1]) ** 2 for i in range(4))))
 
 
 def shade_to_light(shade):

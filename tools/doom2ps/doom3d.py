@@ -65,6 +65,14 @@ WORLD_LIMIT = 16000         # assert(camera->pos.x < F(16000)) WALLS.C:1605-1606
 # quand `opening < hauteur de MT_PLAYER`, soit 56. Elle est aussi tres au-dessus des 2 x 16 = 32
 # de la sphere de `params/doom.cfg`, donc ce qui est autorise passe physiquement.
 PLAYER_FIT_HEIGHT = 56.0
+# WALLFLAG_BLOCKED (0x100, que seul le joueur porte : SPRITEFLAG_BBLOCKED, AI.C:47) sur un portail
+# dont le bas est a plus de 24 u (MAXSTEPMOVE, params/doom.cfg PLAYER_STEP) au-dessus du sol de SA
+# feuille. Le test de marche du moteur (bumpFloor, SPRITE.C:369) ne suffit pas : la sphere du joueur
+# est centree sur l'oeil (41 u) et ROULE par-dessus toute arete plus basse que son centre
+# (bumpWall, SPRITE.C:200-267), donc un rebord de fenetre de 25 a 40 u se franchissait. Les
+# portails d'un ascenseur sont recalcules en marche par doom_pbBlockBits (DOOM_GAME.C).
+PLAYER_STEP_HEIGHT = 24.0
+WALLFLAG_BLOCKED = 0x100
 
 # ----------------------------------------------------------------------------------------
 # geometrie MOBILE (--mobile) : portes fermees + course, push blocks (SPEC_CONVERTER 5.1)
@@ -774,6 +782,9 @@ class DoomConverter:
                 if 1.0 < h < PLAYER_FIT_HEIGHT:
                     w["flags"] |= 0x1000                # SHORTOPENING
                     self.stats["shortopening"] += 1
+                if min(ys) - s["floorLevel"] > PLAYER_STEP_HEIGHT:
+                    w["flags"] |= WALLFLAG_BLOCKED      # marche > 24 : voir PLAYER_STEP_HEIGHT
+                    self.stats["marche_haute"] += 1
                 if s["floorLevel"] - S[w["nextSector"]]["floorLevel"] > 320:
                     w["flags"] |= 0x800                 # CLIFFBNDRY
                     self.stats["cliffbndry"] += 1

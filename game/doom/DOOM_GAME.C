@@ -24,6 +24,41 @@ typedef char doomMobjInfoIs44_[(sizeof(DoomMobjInfo)==44)?1:-1];
 unsigned char doomSectorDamage[MAXNMSECTORS];
 int doomLevelTime;
 
+/* A moving lift's portals (AI.C:4670 CFG_LIFT_MOVED, every frame it moves).  doom2ps sets, for
+   the level as loaded, SHORTOPENING (opening < 56) and BLOCKED (portal bottom more than 24 over
+   the floor of its own sector: Doom's step, player only); nothing in the engine touches them when
+   an elevator moves -- setDoorBlockBits is doors only -- so a lift that came down left an
+   invisible wall (E1M1: the shotgun room behind sector 59, 8 u open while it is up).  Both rules
+   are re-read here from the vertices, the floor from its own flat, as bumpFloor does. */
+void doom_pbBlockBits(int pb)
+{int i,w,s,lo,hi,f,bot;
+ for (i=level_pushBlock[pb].startWall;i<=level_pushBlock[pb].endWall;i++)
+    {w=level_PBWall[i];
+     if (level_wall[w].nextSector==-1 || level_wall[w].normal[1]!=0)
+	continue;
+     lo=0; hi=level_nmSectors-1;         /* the sector owning w: contiguous, ascending ranges */
+     while (lo<hi)
+	{s=(lo+hi+1)>>1;
+	 if (level_sector[s].firstWall<=w) lo=s; else hi=s-1;
+	}
+     s=lo;
+     assert(level_sector[s].firstWall<=w && w<=level_sector[s].lastWall);
+     for (f=level_sector[s].firstWall;f<=level_sector[s].lastWall;f++)
+	if (level_wall[f].normal[1]>0)
+	   break;
+     bot=level_vertex[level_wall[w].v[2]].y;
+     if (level_vertex[level_wall[w].v[1]].y-bot<CFG_DOOR_FIT)
+	level_wall[w].flags|=WALLFLAG_SHORTOPENING;
+     else
+	level_wall[w].flags&=~WALLFLAG_SHORTOPENING;
+     if (f<=level_sector[s].lastWall &&
+	 bot-level_vertex[level_wall[f].v[0]].y>GP_PLAYER_STEP)
+	level_wall[w].flags|=WALLFLAG_BLOCKED;
+     else
+	level_wall[w].flags&=~WALLFLAG_BLOCKED;
+    }
+}
+
 /* contract section 9: 8.3 names at the disc root ('+'), bounded by DOOM_NMLEVELS; the last one
    exits to the intro (exit_func).  make_e1m1.py checks these against cd_doom/. */
 const char *doomLevelNames[DOOM_NMLEVELS]=

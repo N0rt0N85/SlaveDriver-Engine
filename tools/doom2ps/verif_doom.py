@@ -587,6 +587,22 @@ def main(argv=None):
     #        lecteur verifie), croise avec doom_ids.json, le WAD et STATIC.DAT.
     tail_checks(a, L, S, W, V, F, tex, obj, p, M)
 
+    # 15. AUCUNE FACE DEGENEREE. Une face de moins de 3 sommets distincts ne peint rien : son aire
+    #     manque, et l'on voit le ciel VDP2 a travers (trous triangulaires du disque du 14-09).
+    degen = []
+    for si, s_ in enumerate(S):
+        for wi in range(s_["firstWall"], s_["lastWall"] + 1):
+            w = W[wi]
+            if w["firstFace"] < 0:
+                continue
+            b = w["firstVertex"]
+            for fi in range(w["firstFace"], w["lastFace"] + 1):
+                q = {(V[b + i]["x"], V[b + i]["y"], V[b + i]["z"]) for i in F[fi]["v"]}
+                if len(q) < 3:
+                    degen.append((si, fi))
+    put("aucune face degeneree", not degen,
+        f"{len(degen)} faces a moins de 3 sommets, ex. {degen[:4]}" if degen else f"{len(F)} faces")
+
     print(f"\n  {len(OK)} OK, {len(FAIL)} echec(s)" + (f" : {FAIL}" if FAIL else ""))
     return 1 if FAIL else 0
 
