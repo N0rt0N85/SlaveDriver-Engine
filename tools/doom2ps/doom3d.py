@@ -1283,6 +1283,106 @@ DOOR_SPECIALS = {1, 2, 3, 4, 16, 26, 27, 28, 29, 31, 32, 33, 34, 46, 61, 63, 75,
                  133, 135, 137}
 
 
+EPS_PENOMBRE = 8.0            # u : au-dela, une bande n'est plus une penombre mais une piece
+
+
+def _perimetre_aire(M, si):
+    """(perimetre, aire) du secteur si, reconstitues depuis ses linedefs. Un ANNEAU (contour
+    exterieur et contour interieur, d'orientations opposees) rend bien l'aire de la seule bande."""
+    V, L, SD = M["vertices"], M["linedefs"], M["sidedefs"]
+    per = deux_a = 0.0
+    for ld in L:
+        a = ld.right >= 0 and SD[ld.right].sector == si
+        b = ld.left >= 0 and SD[ld.left].sector == si
+        if not (a or b):
+            continue
+        (x1, y1), (x2, y2) = V[ld.v1], V[ld.v2]
+        per += math.hypot(x2 - x1, y2 - y1)
+        deux_a += ((1 if a else 0) - (1 if b else 0)) * (x1 * y2 - x2 * y1)
+    return per, abs(deux_a) / 2.0
+
+
+def dissoudre_penombres(M, eps=EPS_PENOMBRE):
+    """Rend a sa piece toute BANDE MINCE qui n'en differe QUE par la lumiere.
+
+    LA CAUSE EXACTE de la « bordure a texture ecrasee » de la salle tech. Les dalles eclairees sont
+    un LUMINAIRE (secteurs Doom 10 et 12, plafond 96, TLITE6_5, deja cale sur la grille) entoure
+    d'une PENOMBRE de 8 u (secteurs 9 et 11) identique a la piece (secteur 7) sur TOUT sauf la
+    lumiere. Le carre de 64 qui contient cette bande contient DEUX secteurs Doom -- or `sols_pleins`
+    n'accorde le debord qu'a un carre tenant dans UN SEUL secteur. Debord refuse, la bande peint donc
+    sa cellule de 8 u en y ECRASANT la tuile entiere 8 fois. Rendre la bande au secteur 7 remet le
+    carre dans un seul secteur : le debord DEJA EN PLACE le peint entier et exact, sans regle
+    nouvelle et sans tuile de plus.
+
+    On ne DEPLACE aucun sommet et on ne SUPPRIME aucun linedef -- seul le secteur des sidedefs
+    change. Le BSP du WAD reste donc exact et la partition ne bouge pas. (Caler les sommets sur la
+    grille a ete essaye : les segs bougent, les plans de noeud non, MESURE 10 murs pleins INVISIBLES.)
+
+    Le discriminant est l'EPAISSEUR, pas la ressemblance. MESURE E1M1 : 5 paires de secteurs
+    adjacents ne different que par la lumiere, mais 3 sont de vraies pieces (21 504, 62 920 et
+    59 821 u2, la derniere portant un SPECIAL) -- les fondre aplatirait l'eclairage du niveau. Un
+    anneau de largeur w a une aire de w x perimetre / 2, donc `2*aire/perimetre` vaut exactement 8,0
+    pour les deux cadres et bien plus pour une piece. MESURE DU CORPUS (200 cartes Doom, 37 683
+    secteurs ; 6 cartes Duke) : eps 8 -> 346 secteurs (0,014 % de l'aire de sol), eps 16 -> 795
+    (0,064 %), eps 32 -> 1 182 (0,192 %). Aucune rupture naturelle dans la distribution (1,8 a 1 263,
+    mediane 29,7) : le seuil est une DECISION, prise a 8 parce que sous 8 u la bande porte sa tuile
+    ecrasee >= 8 fois, donc sous ce que le moteur sait representer.
+
+    ⚠ NE PAS plafonner par l'ecart de lumiere : essaye a 64, ce plafond ecartait les DEUX cadres
+    d'E1M1 (255 contre 128 = 127), c'est-a-dire le cas qui motive la regle. La luminosite n'a rien a
+    voir avec la REPRESENTABILITE.
+    ⚠ COUT ASSUME : l'anneau de 8 u prend la lumiere de la piece (vertexLight 16 -> 10), donc le halo
+    clair autour des dalles disparait ; les dalles elles-memes restent a 255. C'est le prix de
+    l'exactitude, et il est VISIBLE -- le testeur l'a remarque de lui-meme.
+    ⚠ NE RIEN AJOUTER D'AUTRE ICI. Avalement des cellules minces, « un carre un proprietaire » et
+    election d'un proprietaire ont tous les trois ete essayes le 16-09 : chacun fait RENONCER un
+    morceau a un carre que personne ne repeint ensuite en entier -> TROUS (jusqu'a 3 760 u2, sol et
+    plafond a 0 %, on voit a travers). Le debord de cette base peint le carre depuis CHAQUE morceau
+    qui le touche : c'est redondant, mais c'est ce qui le rend sans trou.
+    Retourne [(fondu, receveur, epaisseur)]."""
+    S, L, SD = M["sectors"], M["linedefs"], M["sidedefs"]
+
+    def meme(a, b):
+        return (a.floorh == b.floorh and a.ceilh == b.ceilh and a.floorpic == b.floorpic
+                and a.ceilpic == b.ceilpic and a.special == b.special and a.tag == b.tag)
+
+    declencheur = set()                   # un secteur touche par un linedef a effet ne se fond pas
+    for ld in L:
+        if ld.special or ld.tag:
+            for sd in (ld.right, ld.left):
+                if sd >= 0:
+                    declencheur.add(SD[sd].sector)
+    cand = defaultdict(set)
+    for ld in L:
+        if ld.right < 0 or ld.left < 0:
+            continue
+        x, y = SD[ld.right].sector, SD[ld.left].sector
+        if x == y or S[x].light == S[y].light or not meme(S[x], S[y]):
+            continue
+        cand[x].add(y)
+        cand[y].add(x)
+    fondus, pris = [], set()
+    for si in sorted(cand):
+        if si in declencheur or S[si].special or S[si].tag or si in pris:
+            continue
+        per, aire = _perimetre_aire(M, si)
+        if per <= 0 or 2.0 * aire / per > eps:
+            continue                      # une vraie piece, pas une bande
+        # Tous les receveurs possibles sont DEJA equivalents en texture (`meme` impose le meme flat
+        # et le meme calage, un flat Doom etant ancre sur la grille du MONDE). C'est en amont que le
+        # LUMINAIRE est ecarte : son plafond differe, il n'est donc jamais candidat. Reste a
+        # departager par la taille, le plus grand voisin completant le plus de carres.
+        rec = max(cand[si], key=lambda k: _perimetre_aire(M, k)[1])
+        if rec in pris:
+            continue
+        for k, sd in enumerate(SD):
+            if sd.sector == si:
+                SD[k] = sd._replace(sector=rec)
+        pris.add(si)
+        fondus.append((si, rec, round(2.0 * aire / per, 1)))
+    return fondus
+
+
 def open_doors(M):
     """Ouvre les portes de Doom, qui sont FERMEES dans la geometrie statique du WAD.
 
@@ -1344,6 +1444,7 @@ def main(argv=None):
 
     W = wadmod.Wad(a.wad)
     M = wadmod.read_map(W, a.map)
+    fondus = dissoudre_penombres(M)       # make_e1m1.build_objects fond LES MEMES
     sizes = {nm: (t["width"], t["height"]) for nm, t in W.textures().items()}
     print(f"doom2ps E3 : {a.map} de {os.path.basename(a.wad)} -- "
           f"{len(M['sectors'])} secteurs Doom, {len(M['subsectors'])} feuilles BSP, "

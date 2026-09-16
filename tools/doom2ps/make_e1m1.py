@@ -340,6 +340,7 @@ def main(argv=None):
     ids = ensure_ids(a.ids)
     W = wadmod.Wad(a.wad)
     M = wadmod.read_map(W, a.map)
+    doom3d.dissoudre_penombres(M)          # MEME carte que run_geometry (doom3d.main les fond aussi)
 
     log("== 2. geometrie %s (doom3d.py %s)" % (a.map, "--static-doors" if a.static_doors else "--mobile"))
     G = run_geometry(a.wad, a.map, geom_path, a.static_doors, a.partition)
