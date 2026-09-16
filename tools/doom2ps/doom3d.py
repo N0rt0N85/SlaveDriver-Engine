@@ -269,6 +269,33 @@ def light_of(level):
 # make_e1m1 recree un DoomConverter pour placer les objets, il doit decouper exactement pareil.
 PARTITION = "bsp"
 
+# OPTIMISATIONS DE NIVEAU, toutes actives par defaut, debrayables par --optim. Chacune MODIFIE la
+# geometrie au-dela d'une simple conversion : qui edite ses cartes a la main doit pouvoir les couper
+# une par une pour retrouver exactement ce qu'il a dessine. La liste des actives est recopiee dans
+# le JSON de sortie (`source.optim`), donc un build dit toujours ce qu'il s'est autorise.
+#   penombres : rend a sa piece toute bande de moins de 8 u qui n'en differe que par la lumiere
+#               (dissoudre_penombres) -- la bande perd sa lumiere propre
+#   avalement : une coupe de cellule qui ne laisserait qu'une echarde ne se fait pas, la voisine
+#               s'etend sur le residu (geom3d._grid_cells) -- etirement borne a x1,25
+OPTIMS = ("penombres", "avalement")
+OPTIM_ACTIFS = set(OPTIMS)
+
+
+def lire_optim(s):
+    """`all`, `none`, ou une liste de noms d'OPTIMS. Un nom inconnu est une ERREUR : une faute de
+    frappe qui couperait silencieusement une regle serait pire que pas d'option du tout."""
+    s = (s or "all").strip().lower()
+    if s in ("all", "toutes"):
+        return set(OPTIMS)
+    if s in ("none", "aucune"):
+        return set()
+    noms = {x.strip() for x in s.split(",") if x.strip()}
+    inconnus = noms - set(OPTIMS)
+    if inconnus:
+        raise SystemExit("--optim : %s inconnu(s) ; connus : %s"
+                         % (", ".join(sorted(inconnus)), ", ".join(OPTIMS)))
+    return noms
+
 # Flats animes de Doom, dans l'ordre des images (p_spec.c animdefs ; SWATER, RROCK et SLIME
 # n'existent qu'a partir de Doom II : une famille absente du WAD n'est jamais utilisee).
 ANIM_FLATS = [["NUKAGE1", "NUKAGE2", "NUKAGE3"], ["FWATER1", "FWATER2", "FWATER3", "FWATER4"],
@@ -286,6 +313,8 @@ class DoomConverter:
         self.M = M
         self.bsp = Bsp(M)
         self.em = Emitter()
+        if "avalement" not in OPTIM_ACTIFS:
+            self.em.eps_avale = 0.0           # --optim : l'auteur refuse l'avalement des echardes
         self.cap = cap_cells
         self.sizes = sizes                    # {nom de texture: (w, h)}
         self.pic = {}                         # ("tex"|"flat", nom) -> picnum
@@ -1340,6 +1369,8 @@ def dissoudre_penombres(M, eps=EPS_PENOMBRE):
     plafond a 0 %, on voit a travers). Le debord de cette base peint le carre depuis CHAQUE morceau
     qui le touche : c'est redondant, mais c'est ce qui le rend sans trou.
     Retourne [(fondu, receveur, epaisseur)]."""
+    if "penombres" not in OPTIM_ACTIFS:
+        return []
     S, L, SD = M["sectors"], M["linedefs"], M["sidedefs"]
 
     def meme(a, b):
@@ -1436,11 +1467,16 @@ def main(argv=None):
                     help="tuiles accordees aux linedefs plus etroits que leur texture (choisir_fenetres)")
     ap.add_argument("--static-doors", action="store_true",
                     help="portes ouvertes en dur (open_doors, controle visuel) -- le defaut sans --mobile")
+    ap.add_argument("--optim", default="all",
+                    help="optimisations de NIVEAU, toutes actives par defaut : `all`, `none`, ou une "
+                         "liste parmi %s. Elles modifient la geometrie ; les couper rend exactement "
+                         "la carte dessinee." % ", ".join(OPTIMS))
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
-    global PARTITION
+    global PARTITION, OPTIM_ACTIFS
     if a.partition:
         PARTITION = a.partition          # module : build_objects (make_e1m1) doit decouper pareil
+    OPTIM_ACTIFS = lire_optim(a.optim)   # idem : make_e1m1 recree un DoomConverter
 
     W = wadmod.Wad(a.wad)
     M = wadmod.read_map(W, a.map)
@@ -1515,7 +1551,7 @@ def main(argv=None):
                                                        angle_doom=st.angle, angle_lev=angle,
                                                        feuille=lf))
     out = dict(format="doom2ps/e3-geom3d v1",
-               source=dict(wad=os.path.basename(a.wad), map=a.map),
+               source=dict(wad=os.path.basename(a.wad), map=a.map, optim=sorted(OPTIM_ACTIFS)),
                conventions=dict(repere="X = x_doom, Y = z_doom, Z = y_doom (1:1)",
                                 morceaux="feuilles du BSP du WAD",
                                 tuile=f"TILESIZE {TILESIZE}",

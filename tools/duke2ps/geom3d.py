@@ -59,6 +59,7 @@ OUT_DEFAULT = os.path.join(ROOT, "build", "duke2ps", "e1l1_geom3d.json")
 GX = 8            # unites Build par unite Saturn en X/Z
 GY = 128          # unites Build par unite Saturn en Y
 TILESIZE = 64     # SLEVEL.H:126
+EPS_AVALE = 8.0   # u : residu en deca duquel une coupe ne se fait pas (voir _grid_cells)
 MAXVPERWALL = 700 # WALLS.C:1207 (strict : lastVertex-firstVertex < 700)
 MAX_SLAVE = 1300  # MAXNMSLAVEPOLYS (WALLS.C:1336)
 SLAVE_MARGIN = 50 # WALLS.C:1374
@@ -320,6 +321,10 @@ class Emitter:
     """Accumule sommets, faces, textures et lumieres dans les tableaux du .LEV."""
 
     def __init__(self):
+        # Avalement des echardes (voir _grid_cells). Reglable par l'appelant : le convertisseur Doom
+        # le met a 0 quand l'auteur refuse cette optimisation (doom3d, --optim). Duke et PowerSlave
+        # n'emettent jamais avec `grille`, donc la valeur ne les concerne pas.
+        self.eps_avale = EPS_AVALE
         self.vertices = []      # {x,y,z,light,pad}
         self.faces = []         # {v[4] LOCAUX au mur, tile, pad}
         self.texture = []       # unsigned char, 2 par cellule : [motif, tuile]
@@ -672,9 +677,18 @@ class Emitter:
         decalee sur deux cellules (MESURE E1M1 : 150 faces sur 3 039). Chaque face tient alors
         dans UNE cellule : les cellules pleines sont exactes, seule la cellule du bord s'ecrase."""
         src_edges = [(poly_xz[k], poly_xz[(k + 1) % len(poly_xz)]) for k in range(len(poly_xz))]
+        # AVALEMENT (flat Doom seulement) : une coupe qui ne laisserait qu'une ECHARDE d'un cote --
+        # moins de EPS_AVALE -- ne se fait pas, et la cellule voisine s'etend sur le residu. Une
+        # echarde porte la tuile ENTIERE ecrasee au moins 8 fois, donc sous ce que le moteur sait
+        # representer ; l'avaler coute un etirement borne par (64 + 2*eps)/64 = x1,25 sur sa voisine
+        # (le residu peut tomber des DEUX cotes), contre x8 et plus si on la garde. MESURE E1M1 :
+        # 178 echardes -> 42, et les faces baissent avec elles.
+        # A eps = 0 les deux expressions redonnent EXACTEMENT les anciennes : Duke et PowerSlave, qui
+        # n'emettent jamais avec `grille`, ne bougent pas d'un octet.
+        eps = self.eps_avale if grille else 0.0
 
         def traverse(lo, hi):
-            return (int(lo // TILESIZE) + 1) * TILESIZE < hi
+            return (int((lo + eps) // TILESIZE) + 1) * TILESIZE < hi - eps
         out = []
         todo = [[(p[0], p[1], k) for k, p in enumerate(poly_xz)]]
         guard = 0
@@ -702,7 +716,7 @@ class Emitter:
                 lo, hi = (min(xs), max(xs)) if ax == 0 else (min(zs), max(zs))
                 if (not traverse(lo, hi)) if grille else (hi - lo <= TILESIZE):
                     continue
-                c = self._cut_line(lo, hi)
+                c = self._cut_line(lo, hi, eps)
                 a, b = split_convex(poly, ax, c, src_edges)
                 if len(a) < 3 or len(b) < 3:
                     continue
@@ -726,13 +740,15 @@ class Emitter:
                 if len(p) >= 3 and abs(area2(p)) > 0]
 
     @staticmethod
-    def _cut_line(lo, hi):
-        """Ligne de grille de 64 u la plus proche du milieu de [lo, hi] (strictement interieure)."""
+    def _cut_line(lo, hi, eps=0.0):
+        """Ligne de grille de 64 u la plus proche du milieu de [lo, hi] (strictement interieure).
+
+        `eps` (avalement, voir _grid_cells) ecarte les lignes qui ne laisseraient qu'une echarde."""
         mid = (lo + hi) / 2.0
         c = int(round(mid / TILESIZE)) * TILESIZE
-        if c <= lo or c >= hi:
-            c = (int(lo) // TILESIZE + 1) * TILESIZE
-        if c <= lo or c >= hi:
+        if c <= lo + eps or c >= hi - eps:
+            c = (int(lo + eps) // TILESIZE + 1) * TILESIZE
+        if c <= lo + eps or c >= hi - eps:
             c = int((lo + hi) // 2)
         return c
 

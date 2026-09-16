@@ -85,10 +85,12 @@ def ensure_ids(ids_path):
     return t2o.load_ids(ids_path)
 
 
-def run_geometry(wad_path, mapname, geom_path, static_doors=False, partition=None):
+def run_geometry(wad_path, mapname, geom_path, static_doors=False, partition=None, optim=None):
     argv = ["--wad", wad_path, "--map", mapname, "--out", geom_path]
     if partition:
         argv += ["--partition", partition]     # doom3d.PARTITION : build_objects decoupe pareil
+    if optim:
+        argv += ["--optim", optim]             # doom3d.OPTIM_ACTIFS : build_objects fond pareil
     if static_doors:
         argv.append("--static-doors")
     else:
@@ -323,6 +325,8 @@ def main(argv=None):
     ap.add_argument("--no-verify", action="store_true")
     ap.add_argument("--partition", choices=("grid", "bsp"), default=None,
                     help="morceaux convexes (doom3d --partition) ; defaut bsp")
+    ap.add_argument("--optim", default=None,
+                    help="optimisations de niveau (doom3d --optim) : all, none, ou une liste")
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -340,10 +344,11 @@ def main(argv=None):
     ids = ensure_ids(a.ids)
     W = wadmod.Wad(a.wad)
     M = wadmod.read_map(W, a.map)
+    doom3d.OPTIM_ACTIFS = doom3d.lire_optim(a.optim)   # AVANT de fondre : run_geometry le refera
     doom3d.dissoudre_penombres(M)          # MEME carte que run_geometry (doom3d.main les fond aussi)
 
     log("== 2. geometrie %s (doom3d.py %s)" % (a.map, "--static-doors" if a.static_doors else "--mobile"))
-    G = run_geometry(a.wad, a.map, geom_path, a.static_doors, a.partition)
+    G = run_geometry(a.wad, a.map, geom_path, a.static_doors, a.partition, a.optim)
     n_geo = len(G["tiles"])
 
     log("== 3. tuiles de geometrie (doomtiles.py)")
