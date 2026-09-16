@@ -539,10 +539,12 @@ class Emitter:
 
     # -- sols et plafonds ----------------------------------------------------------------
     def add_flat(self, poly_xz, height_at, *, is_floor, picnum, parallax, light=0, stats=None,
-                 tex=None):
+                 tex=None, pleins=None):
         """Emet LE sol (is_floor=True) ou LE plafond du secteur. MESURE : chacun des 8 408 secteurs
         retail a exactement UN mur de normale +Y et UN de normale -Y.
-        `height_at(x, z) -> y` donne la hauteur du plan (constante, ou pente)."""
+        `height_at(x, z) -> y` donne la hauteur du plan (constante, ou pente).
+        `pleins` (flat Doom) : cellules (gx, gy) de la grille ou l'on pose le CARRE ENTIER meme si
+        le polygone n'en couvre qu'une partie -- voir DoomConverter.plafonds_pleins."""
         xs = [p[0] for p in poly_xz]
         zs = [p[1] for p in poly_xz]
         x0, x1, z0, z1 = min(xs), max(xs), min(zs), max(zs)
@@ -580,6 +582,7 @@ class Emitter:
         cells = self._grid_cells(poly_xz, stats,
                                  grille=bool(tex is not None and tex.get("doom_flat")))
         pts, faces, index = [], [], {}
+        faits = set()
         for cell in cells:
             cxm = sum(p[0] for p in cell) / float(len(cell))
             czm = sum(p[1] for p in cell) / float(len(cell))
@@ -592,6 +595,18 @@ class Emitter:
                     pts.append((x, height_at(x, z), z, light))
                 return index[k]
 
+            if pleins:
+                g = (int(math.floor(cxm / TILESIZE)), int(math.floor(czm / TILESIZE)))
+                if g in pleins:
+                    if g not in faits:
+                        faits.add(g)
+                        x0c, z0c = g[0] * TILESIZE, g[1] * TILESIZE
+                        sq = [(x0c, z0c), (x0c + TILESIZE, z0c), (x0c + TILESIZE, z0c + TILESIZE),
+                              (x0c, z0c + TILESIZE)]
+                        faces.append(([idx(x, z) for (x, z) in oriente_face_doom(sq)], t))
+                        if stats is not None and abs(area2(cell)) < 2 * TILESIZE * TILESIZE - 1:
+                            stats["plats_carres_debordants"] += 1
+                    continue
             if tex is not None and tex.get("doom_flat"):
                 # Flat Doom : sommets colineaires retires (sinon un carre plein part en un quad
                 # plus un triangle, chacun portant la tuile ENTIERE), puis chaque face orientee

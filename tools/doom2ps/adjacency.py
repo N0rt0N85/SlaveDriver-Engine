@@ -164,10 +164,12 @@ def leaf_polygons(M, margin=16):
     return polys
 
 
-def build(M, margin=16, tol=1e-4):
+def build(M, margin=16, tol=1e-4, polys=None):
     """-> (polys, boundary) ; boundary[leaf] = [(P, Q, tag, t0, t1, voisin_ou_-1), ...] en ENTIERS,
-    dans l'ordre du polygone, avec la reciprocite garantie."""
-    polys = leaf_polygons(M, margin)
+    dans l'ordre du polygone, avec la reciprocite garantie. `polys` : anneaux etiquetes deja faits
+    (gridparts.partition) ; par defaut les feuilles du BSP."""
+    if polys is None:
+        polys = leaf_polygons(M, margin)
 
     # GARDE-FOU. Tout le reste repose sur l'etiquette : elle sert de cle de regroupement, et
     # `point_at(tag, t)` RECONSTRUIT les sommets depuis elle. Une arete dont l'etiquette ne decrit

@@ -98,9 +98,14 @@ def weapon_lumps(wad, families):
     return [n for n in rle8.sprite_lumps(wad) if n[:4] in fams]
 
 
-def shadow_disc(value=1):
-    """64 x 64 indices : disque plein centre (rayon 32), 0 = transparent autour."""
-    return bytes(value if (x - 31.5) ** 2 + (y - 31.5) ** 2 <= 32 * 32 else 0
+SHADOW_RADIUS = 21.3                  # texels ; 32 = le disque retail, jugé trop large (testeur, -1/3)
+
+
+def shadow_disc(value=1, r=SHADOW_RADIUS):
+    """64 x 64 indices : disque plein centre de rayon `r`, 0 = transparent autour. drawSprites
+    etire toujours la tuile entiere sur 48 u x l'echelle (WALLS.C:2751) : le rayon du disque dans
+    la tuile regle donc la taille de l'ombre sans toucher au moteur."""
+    return bytes(value if (x - 31.5) ** 2 + (y - 31.5) ** 2 <= r * r else 0
                  for y in range(64) for x in range(64))
 
 

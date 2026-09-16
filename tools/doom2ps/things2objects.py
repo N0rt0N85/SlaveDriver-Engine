@@ -80,7 +80,7 @@ def things_to_objects(M, conv, ids, *, skill=3, floor_levels=None):
                  notsingle=0, ambush=0, unknown=[])
 
     def sector_of(t):
-        lf = conv.bsp.leaf_at(t.x, t.y)
+        lf = conv.leaf_at(t.x, t.y)
         if lf not in conv.remap:
             raise SystemExit("thing type %d en (%d, %d) tombe sur la feuille %d, écartée de la "
                              "carte" % (t.type, t.x, t.y, lf))

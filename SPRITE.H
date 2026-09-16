@@ -183,6 +183,8 @@ extern int doomViewBob;                              /* DOOM_PLAYER.C: P_CalcHei
 #define CFG_PROF_END()         popProfile()
 extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, the slave's share   */
 #define CFG_STATUS_SECTOR()    drawStringf(-158,-80,1,"sector:%d vis:%d sl:%d/%d",camera->s,updateListSize,slaveSize+1,nmSlavePolys)   /* SRUINS.C:2220 */
+#define CFG_LIGHTRADIUS        181                               /* WALLS.C:480: dynamic light reach (tester 16-09: 256 too wide) */
+#define CFG_LIGHTSHIFT         10                                /* WALLS.C:677, 720: 181^2>>10 = 31, the full peak of 256^2>>11 */
 #else
 #define CFG_TIC_ADD(v)       (v)
 #define CFG_TIC_UNIT         2
@@ -197,6 +199,8 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_SPRITE_LEAVES()
 #define CFG_SPR_FIRST(s)     sectorSpriteList[s]
 #define CFG_SPR_NEXT(o)      (o)->next
+#define CFG_LIGHTRADIUS      256
+#define CFG_LIGHTSHIFT       11
 #define CFG_LEVEL_NAME(l)    getLevelName(l)
 #define CFG_PLAY_INTRO()     playIntro()
 #define CFG_CONTROL(in,ch,p)   controlInput(in,ch)

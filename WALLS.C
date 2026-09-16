@@ -477,7 +477,7 @@ void stepWater(void)
 #define LIGHT
 #define BETTERLIGHT 0
 #define MAXNMLIGHTSOURCES 15
-#define LIGHTRADIUS 256
+#define LIGHTRADIUS CFG_LIGHTRADIUS
 
 static Sprite *lightSource[MAXNMLIGHTSOURCES];
 static int nmLights,delayNmLights;
@@ -674,7 +674,7 @@ unsigned short getLight(char vlight,
 	light=(light*(wallLightDist[i]/dist))>>16;
      else
 #else
-	light=light>>11;
+	light=light>>CFG_LIGHTSHIFT;
 #endif
      if (light-lColor[i][0]>0)
 	r+=light-lColor[i][0];
@@ -717,7 +717,7 @@ unsigned short sgetLight(char vlight,
 	light=(light*(swallLightDist[i]/dist))>>16;
      else
 #else
-	light=light>>11;
+	light=light>>CFG_LIGHTSHIFT;
 #endif
      if (light-lColor[i][0]>0)
 	r+=light-lColor[i][0];
@@ -2889,6 +2889,10 @@ static int doomFlush(int s,int n,int w)
  return bot==doomFlatY(s,1) && bot==doomFlatY(n,1) && ceil==doomFlatY(n,0) &&
 	(ceil==0x7fff || level_vertex[level_wall[w].v[1]].y==ceil);
 }
+/* The reach is one radius PLUS the spill: a leaf paints whole 64-unit squares of floor over its
+   neighbour when both are the same Doom sector (doom3d.sols_pleins), so a monster up to a cell
+   away from the chord can be covered too. */
+#define DOOM_FLOOR_SPILL F(64)
 #define DOOM_MAXDRAWSPRITES 450                      /* SPRITE.C:12 MAXNMSPRITES */
 Sprite *doomDrawHead[MAXNMSECTORS];
 Sprite *doomDrawNext[DOOM_MAXDRAWSPRITES];
@@ -2927,7 +2931,7 @@ void doom_spriteLeaves(void)
 	     getVertex(level_wall[w].v[0],&p);
 	     d=MTH_Mul(o->pos.x-p.x,level_wall[w].normal[0])+
 	       MTH_Mul(o->pos.z-p.z,level_wall[w].normal[2]);
-	     if (d>=o->radius)
+	     if (d>=o->radius+DOOM_FLOOR_SPILL)
 		continue;
 	     c=MTH_Mul(p.x-o->pos.x,level_wall[w].normal[2])+
 	       MTH_Mul(o->pos.z-p.z,level_wall[w].normal[0]);

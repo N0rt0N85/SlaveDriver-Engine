@@ -85,8 +85,10 @@ def ensure_ids(ids_path):
     return t2o.load_ids(ids_path)
 
 
-def run_geometry(wad_path, mapname, geom_path, static_doors=False):
+def run_geometry(wad_path, mapname, geom_path, static_doors=False, partition=None):
     argv = ["--wad", wad_path, "--map", mapname, "--out", geom_path]
+    if partition:
+        argv += ["--partition", partition]     # doom3d.PARTITION : build_objects decoupe pareil
     if static_doors:
         argv.append("--static-doors")
     else:
@@ -319,6 +321,8 @@ def main(argv=None):
     ap.add_argument("--retail", default=DEFAULT_RETAIL, help=".LEV retail donnant la table K du ciel")
     ap.add_argument("--build-dir", default=BUILD_DIR, help="JSON intermediaires")
     ap.add_argument("--no-verify", action="store_true")
+    ap.add_argument("--partition", choices=("grid", "bsp"), default=None,
+                    help="morceaux convexes (doom3d --partition) ; defaut bsp")
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -338,7 +342,7 @@ def main(argv=None):
     M = wadmod.read_map(W, a.map)
 
     log("== 2. geometrie %s (doom3d.py %s)" % (a.map, "--static-doors" if a.static_doors else "--mobile"))
-    G = run_geometry(a.wad, a.map, geom_path, a.static_doors)
+    G = run_geometry(a.wad, a.map, geom_path, a.static_doors, a.partition)
     n_geo = len(G["tiles"])
 
     log("== 3. tuiles de geometrie (doomtiles.py)")

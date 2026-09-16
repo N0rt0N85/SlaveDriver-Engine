@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools", "duke2ps"))
 
 import wad as wadmod                                   # noqa: E402
 import adjacency                                       # noqa: E402
+import gridparts                                       # noqa: E402
 import doom_specials as sp                             # noqa: E402
 from geom3d import (Emitter, TILESIZE, CAP_CELLS, plane_of, area2,     # noqa: E402
                     CELL_MIN_U, CELL_MAX_U, CELL_MIN_V, CELL_MAX_V, SECTOR_LIGHT,
@@ -264,6 +265,10 @@ def light_of(level):
     return max(0, min(16, int(round((32 - lvl) * 16.0 / 32.0))))
 
 
+# Decoupe en morceaux convexes, "grid" ou "bsp" (DoomConverter, gridparts.py). Global de module :
+# make_e1m1 recree un DoomConverter pour placer les objets, il doit decouper exactement pareil.
+PARTITION = "bsp"
+
 # Flats animes de Doom, dans l'ordre des images (p_spec.c animdefs ; SWATER, RROCK et SLIME
 # n'existent qu'a partir de Doom II : une famille absente du WAD n'est jamais utilisee).
 ANIM_FLATS = [["NUKAGE1", "NUKAGE2", "NUKAGE3"], ["FWATER1", "FWATER2", "FWATER3", "FWATER4"],
@@ -274,7 +279,8 @@ ANIM_FLATS = [["NUKAGE1", "NUKAGE2", "NUKAGE3"], ["FWATER1", "FWATER2", "FWATER3
 
 
 class DoomConverter:
-    def __init__(self, M, sizes, cap_cells=CAP_CELLS, mobile=None, switch_lines=None, uwin=None):
+    def __init__(self, M, sizes, cap_cells=CAP_CELLS, mobile=None, switch_lines=None, uwin=None,
+                 partition=None):
         """`mobile` : {secteur Doom: MobileTag} (--mobile) ; `switch_lines` : {linedef: dict(channel,
         special)} des interrupteurs S dont il faut isoler la tuile (doom_specials.specials_of)."""
         self.M = M
@@ -303,22 +309,39 @@ class DoomConverter:
         # Polygones ETIQUETES + frontieres exactes : voir tools/doom2ps/adjacency.py. La
         # reciprocite des portails y est vraie par construction, ce qui supprime l'echantillonnage
         # de voisinage de la 1re version (58 portails a sens unique, 31 trous, MESURE sur E1M1).
-        self.fpolys, self.boundary = adjacency.build(M)
+        sub_sector = []
+        for si, ss in enumerate(M["subsectors"]):
+            sg = M["segs"][ss.first]
+            ld = M["linedefs"][sg.line]
+            sd = ld.right if sg.side == 0 else ld.left
+            sub_sector.append(M["sidedefs"][sd].sector if sd >= 0 else 0)
+        # « Feuille » = un morceau convexe du .LEV. PARTITION "grid" (defaut) : les feuilles du BSP
+        # recoupees sur la grille de 64 puis refusionnees par secteur (gridparts.py) -- un carre
+        # plein n'est jamais coupe. "bsp" : les feuilles du BSP telles quelles. `members` = les
+        # feuilles BSP d'origine de chaque morceau (leurs segs, et leaf_at).
+        self.partition = partition or PARTITION
+        if self.partition == "grid":
+            parts = gridparts.partition(M, adjacency.leaf_polygons(M), sub_sector, self._ring_in_map)
+            self.fpolys, self.boundary = adjacency.build(M, polys=[r for r, _, _ in parts])
+            self.leaf_sector = [s for _, s, _ in parts]
+            self.members = [m for _, _, m in parts]
+        else:
+            self.fpolys, self.boundary = adjacency.build(M)
+            self.leaf_sector = sub_sector
+            self.members = [[si] for si in range(len(sub_sector))]
+        self._pieces_of_leaf = defaultdict(list)
+        for li, m in enumerate(self.members):
+            for si in m:
+                self._pieces_of_leaf[si].append(li)
         self.polys = {}
         for li, edges in self.boundary.items():
             ring = [P for (P, Q, tag, ta, tb, nb, nother) in edges]
             if len(ring) >= 3:
                 self.polys[li] = ring
-        self.leaf_sector = []
-        for si, ss in enumerate(M["subsectors"]):
-            sg = M["segs"][ss.first]
-            ld = M["linedefs"][sg.line]
-            sd = ld.right if sg.side == 0 else ld.left
-            self.leaf_sector.append(M["sidedefs"][sd].sector if sd >= 0 else 0)
         # index des segs par feuille et par ligne canonique : dit EXACTEMENT si une sous-arete
         # est portee par un linedef (donc texturee) ou si c'est une corde de partition.
         V = M["vertices"]
-        self.segidx = {}
+        sub_segs = {}
         for si, ss in enumerate(M["subsectors"]):
             d = {}
             for k in range(ss.first, ss.first + ss.count):
@@ -331,7 +354,14 @@ class DoomConverter:
                 t0 = adjacency.param(key, ax, ay)
                 t1 = adjacency.param(key, bx, by)
                 d.setdefault(key, []).append((sg, min(t0, t1), max(t0, t1)))
-            self.segidx[si] = d
+            sub_segs[si] = d
+        self.segidx = {}
+        for li, m in enumerate(self.members):
+            d = {}
+            for si in m:
+                for key, lst in sub_segs[si].items():
+                    d.setdefault(key, []).extend(lst)
+            self.segidx[li] = d
         # feuille -> index de secteur .LEV (identite : une feuille = un secteur gen 1)
         # Les feuilles HORS CARTE ne sont pas converties. Le BSP de Doom partitionne tout le plan,
         # donc une feuille peut deborder dans le vide au-dela des murs a une face ; elle y coute un
@@ -420,8 +450,9 @@ class DoomConverter:
         invisibles, tous a <= 0,8 u d'un linedef a une face (dont le flanc de l'ascenseur 269)."""
         M = self.M
         V = M["vertices"]
-        ss = M["subsectors"][leaf]
-        cands = [M["segs"][k] for k in range(ss.first, ss.first + ss.count)]
+        cands = [M["segs"][k] for si in self.members[leaf]
+                 for k in range(M["subsectors"][si].first,
+                                M["subsectors"][si].first + M["subsectors"][si].count)]
         # puis les linedefs a UNE face du meme secteur Doom : le seg peut appartenir a une feuille
         # voisine ecartee hors carte (E1M1 : 2 bords de 1 et 9 u contre l'eclat 161)
         sec = self.leaf_sector[leaf]
@@ -556,8 +587,141 @@ class DoomConverter:
             self.switch_hits[sg.line].append(dict(leaf=leaf, walls=[self.em.walls[i] for i in idx],
                                                   name=name, bot=bot, top=top, P=P, Q=Q))
 
+    def leaf_at(self, x, y):
+        """Le morceau qui contient (x, y) : la feuille du BSP, puis celui de ses morceaux dont
+        l'anneau (convexe) contient le point."""
+        lf = self.bsp.leaf_at(x, y)
+        cands = self._pieces_of_leaf.get(lf, [])
+
+        def ecart(li):                    # pire depassement hors du convexe, 0 = dedans
+            r = self.fpolys[li]
+            o = 1.0 if gridparts.area2(r) > 0 else -1.0
+            n = len(r)
+            pire = 0.0
+            for i in range(n):
+                ex, ey = r[(i + 1) % n][0] - r[i][0], r[(i + 1) % n][1] - r[i][1]
+                L = math.hypot(ex, ey) or 1.0
+                cr = (ex * (y - r[i][1]) - ey * (x - r[i][0])) * o / L
+                pire = max(pire, -cr)
+            return pire
+        for li in cands:
+            if ecart(li) <= 1e-6:
+                return li
+        # la feuille du BSP et nos anneaux different d'un arrondi : on prend le morceau (de tout
+        # le niveau, en gardant la carte) qui contient le point, sinon le plus proche
+        tous = [li for li in range(len(self.fpolys)) if li in self.polys]
+        return min(cands + tous, key=ecart) if (cands or tous) else -1
+
+    def plafonds_pleins(self):
+        return self._cellules_pleines(True)
+
+    def sols_pleins(self):
+        """Idem au SOL, mais un carre ne passe que s'il est dans UN SEUL secteur Doom.
+
+        Un plafond continu couvre des sols de hauteurs differentes (les marches) ; un SOL qui
+        deborde chez un voisin de meme hauteur, lui, passe DERRIERE un monstre debout dessus quand
+        le voisin est peint apres (c'est le bug « monstres enfonces », WALLS.C doom_spriteLeaves).
+        On se limite donc aux cordes INTERNES d'un secteur Doom -- la ou doom_spriteLeaves sait
+        deja rendre un sprite a la feuille peinte en dernier -- et la portee de ce rattrapage est
+        portee au debord (64 u)."""
+        return self._cellules_pleines(False)
+
+    def _cellules_pleines(self, up):
+        """Cellules de 64 dont chaque morceau qui y touche peint le CARRE ENTIER de son plafond.
+
+        Un morceau est convexe ; une piece de Doom ne l'est pas, et ses marches la coupent en
+        secteurs de sols differents sous UN MEME plafond. Chaque morceau recevait sa part de
+        cellule, tuile entiere etiree dedans (« triangles » du testeur, 16-09). MESURE E1M1 : 7,6 %
+        de l'aire des plafonds dans des carres coupes par un secteur de MEME plafond, 2 % par une
+        corde du meme secteur -- et 51 % pour la salle aux marches (secteur Doom 60).
+        Condition : le carre est couvert en entier par des secteurs de meme (hauteur, flat,
+        lumiere), ni ciel ni mobile, et aucun linedef a une face, a texture du milieu ou entre
+        deux plafonds differents ne le traverse. Le debord est alors COPLANAIRE a un vrai plafond de
+        Doom : un rayon parti d'un oeil sous le plafond qui atteint ce plan y rencontre ce plafond,
+        rien sous le plan ne peut etre derriere, et RECTCLIP borne chaque copie a la fenetre de son
+        morceau -- chacun peint le meme carre, visible des qu'un des deux l'est."""
+        cache = getattr(self, "_pleins", None)
+        if cache is None:
+            cache = self._pleins = {}
+        if up in cache:
+            return cache[up]
+        M, T = self.M, TILESIZE
+        S, SD, DV = M["sectors"], M["sidedefs"], M["vertices"]
+
+        def cle(s):
+            sec = S[s]
+            if s in self.mobile or (up and self.sky(sec)):
+                return None
+            return (sec.ceilh, sec.ceilpic, sec.light) if up else s
+
+        def rect(ring, x0, x1, y0, y1):
+            p = [(q[0], q[1]) for q in ring]
+            for ax, c, sg in ((0, x0, 1), (0, x1, -1), (1, y0, 1), (1, y1, -1)):
+                out = []
+                for i in range(len(p)):
+                    a, b = p[i - 1], p[i]
+                    ia, ib = (a[ax] - c) * sg >= 0, (b[ax] - c) * sg >= 0
+                    if ia != ib:
+                        t = (c - a[ax]) / float(b[ax] - a[ax])
+                        out.append((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])))
+                    if ib:
+                        out.append(b)
+                p = out
+                if len(p) < 3:
+                    return []
+            return p
+
+        aire = defaultdict(lambda: defaultdict(float))
+        for li in self.keep:
+            ring, k = self.polys[li], cle(self.leaf_sector[li])
+            xs, ys = [q[0] for q in ring], [q[1] for q in ring]
+            for gx in range(int(math.floor(min(xs) / T)), int(math.ceil(max(xs) / T))):
+                for gy in range(int(math.floor(min(ys) / T)), int(math.ceil(max(ys) / T))):
+                    c = rect(ring, gx * T, gx * T + T, gy * T, gy * T + T)
+                    if c:
+                        aire[(gx, gy)][k] += abs(area2(c)) / 2.0
+        pleins = set()
+        for g, d in aire.items():
+            k, a = max(d.items(), key=lambda kv: kv[1])
+            if k is not None and a >= T * T - 1 and sum(d.values()) - a < 0.5:
+                pleins.add(g)
+        for ld in M["linedefs"]:
+            ss = [SD[i] for i in (ld.right, ld.left) if i >= 0]
+            if (len(ss) == 2 and cle(ss[0].sector) is not None
+                    and cle(ss[0].sector) == cle(ss[1].sector)
+                    and all(sd.middle in ("-", "") for sd in ss)):
+                continue
+            (ax, ay), (bx, by) = DV[ld.v1], DV[ld.v2]
+            for gx in range(int(math.floor(min(ax, bx) / T)), int(math.floor(max(ax, bx) / T)) + 1):
+                for gy in range(int(math.floor(min(ay, by) / T)), int(math.floor(max(ay, by) / T)) + 1):
+                    if (gx, gy) not in pleins:
+                        continue
+                    # Liang-Barsky : le milieu du morceau de segment dans le carre est STRICTEMENT
+                    # interieur ssi le linedef traverse le carre (et ne le longe pas sur un bord)
+                    t0, t1 = 0.0, 1.0
+                    for p_, q_ in ((-(bx - ax), ax - gx * T), (bx - ax, gx * T + T - ax),
+                                   (-(by - ay), ay - gy * T), (by - ay, gy * T + T - ay)):
+                        if p_ == 0:
+                            if q_ < 0:
+                                t0, t1 = 1.0, 0.0
+                        elif p_ < 0:
+                            t0 = max(t0, q_ / float(p_))
+                        else:
+                            t1 = min(t1, q_ / float(p_))
+                    if t1 <= t0:
+                        continue
+                    tm = (t0 + t1) / 2.0
+                    mx, my = ax + tm * (bx - ax), ay + tm * (by - ay)
+                    if gx * T + 1e-6 < mx < gx * T + T - 1e-6 and gy * T + 1e-6 < my < gy * T + T - 1e-6:
+                        pleins.discard((gx, gy))
+        self.stats["cellules_%s_pleines" % ("plafond" if up else "sol")] = len(pleins)
+        cache[up] = pleins
+        return pleins
+
     def _dans_la_carte(self, li):
-        ring = self.polys[li]
+        return self._ring_in_map(self.polys[li], count=True)
+
+    def _ring_in_map(self, ring, count=False):
         cx = sum(p[0] for p in ring) / float(len(ring))
         cy = sum(p[1] for p in ring) / float(len(ring))
         DV, LD = self.M["vertices"], self.M["linedefs"]
@@ -570,7 +734,8 @@ class DoomConverter:
             if ax + (cy - ay) / float(by - ay) * (bx - ax) > cx:
                 n += 1
         if n % 2 == 0:
-            self.stats["feuilles_hors_carte"] += 1
+            if count:
+                self.stats["feuilles_hors_carte"] += 1
             return False
         return True
 
@@ -594,14 +759,16 @@ class DoomConverter:
         ms = self.mobile.get(self.leaf_sector[leaf])
         ftex, fpic = self.flat_tex(sec.floorpic)
         fidx = self.em.add_flat(pxz, lambda x, z: fh, is_floor=True, picnum=fpic,
-                                parallax=False, light=light, stats=self.stats, tex=ftex)
+                                parallax=False, light=light, stats=self.stats, tex=ftex,
+                                pleins=self.sols_pleins())
         if self.sky(sec):
             cidx = self.em.add_flat(pxz, lambda x, z: ch, is_floor=False, picnum=0,
                                     parallax=True, light=light, stats=self.stats, tex=None)
         else:
             ctex, cpic = self.flat_tex(sec.ceilpic)
             cidx = self.em.add_flat(pxz, lambda x, z: ch, is_floor=False, picnum=cpic,
-                                    parallax=False, light=light, stats=self.stats, tex=ctex)
+                                    parallax=False, light=light, stats=self.stats, tex=ctex,
+                                    pleins=self.plafonds_pleins())
         if ms is not None:
             # porte : le plafond monte ; ascenseur / sol : le sol descend
             self._tag_flat(cidx if ms.kind == "door" else fidx, ms)
@@ -1161,12 +1328,19 @@ def main(argv=None):
     ap.add_argument("--mobile", action="store_true",
                     help="portes FERMEES + course, push blocks, interrupteurs (SPEC_CONVERTER 5.1) ; "
                          "la sortie gagne une cle `mobile`")
+    ap.add_argument("--partition", choices=("grid", "bsp"), default=None,
+                    help="morceaux convexes : bsp = feuilles du BSP telles quelles (defaut ; MESURE "
+                         "console 16-09 : jusqu'a 15 ms de moins que grid, et le debord de carres "
+                         "entiers lui rend les memes sols exacts) ; grid = BSP recoupe sur la grille de 64")
     ap.add_argument("--uwin-budget", type=int, default=12,
                     help="tuiles accordees aux linedefs plus etroits que leur texture (choisir_fenetres)")
     ap.add_argument("--static-doors", action="store_true",
                     help="portes ouvertes en dur (open_doors, controle visuel) -- le defaut sans --mobile")
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
+    global PARTITION
+    if a.partition:
+        PARTITION = a.partition          # module : build_objects (make_e1m1) doit decouper pareil
 
     W = wadmod.Wad(a.wad)
     M = wadmod.read_map(W, a.map)
@@ -1204,9 +1378,8 @@ def main(argv=None):
         def mk(u=None):
             return DoomConverter(M, sizes, a.cap_cells, uwin=u)
     conv = mk()
-    vides = len(M["subsectors"]) - len(conv.keep)
-    if vides:
-        print(f"  {vides} feuilles degenerees ecartees")
+    print(f"  decoupe {conv.partition} : {len(conv.keep)} morceaux convexes pour "
+          f"{len(M['subsectors'])} feuilles BSP")
     em = conv.build()
     if conv.uwin_use:
         # 2e passage : seulement les fenetres que le budget de tuiles accorde
@@ -1225,7 +1398,7 @@ def main(argv=None):
     st = next((t for t in M["things"] if t.type == 1), None)
     if st is None:
         raise SystemExit("pas de depart joueur (thing type 1)")
-    lf = conv.bsp.leaf_at(st.x, st.y)
+    lf = conv.leaf_at(st.x, st.y)
     sect = conv.remap.get(lf, 0)
     # assemble.py recalcule px, pz depuis build_xy : px = bx // 8, pz = -(by // 8)
     build_xy = [int(st.x) * 8, -int(st.y) * 8]
@@ -1249,7 +1422,8 @@ def main(argv=None):
                stats=dict(conv.stats), criteres=crit, tiles=em.tiles,
                picnames=conv.picnames,
                sectors=em.sectors, walls=em.walls, vertices=em.vertices, faces=em.faces,
-               texture=em.texture, vertexLight=em.vertexLight, anims=conv.anims)
+               texture=em.texture, vertexLight=em.vertexLight, anims=conv.anims,
+               doom_sector=[conv.leaf_sector[li] for li in conv.keep])
     if tags is not None:
         order = [tags[s] for s in sorted(tags)]
         pbs, pbv, pbw, pb_index = push_blocks(conv, order)

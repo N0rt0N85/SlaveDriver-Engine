@@ -10,6 +10,7 @@
 #include "util.h"
 #include "level.h"
 #include "sprite.h"
+#include "walls.h"
 #include "object.h"
 #include "ai.h"
 #include "aicommon.h"
@@ -209,7 +210,9 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
      case SIGNAL_OBJECTDESTROYED:
 	if ((Object *)param1==_this)
 	   {if (this->sprite)
-	       freeSprite(this->sprite);
+	       {removeLight(this->sprite);   /* no-op without a light; else the list keeps a freed sprite */
+		freeSprite(this->sprite);
+	       }
 	    this->sprite=NULL;
 	   }
 	else if ((Object *)param1==this->target)
@@ -615,6 +618,11 @@ Object *doom_spawnMissile(DoomActor *src,Object *dest,int mt)
  if (info->seesound)
     doom_sound(th->sprite,info->seesound);
  th->target=(Object *)src;                     /* where it came from */
+ if (mt==MT_TROOPSHOT)
+    addLight(th->sprite,0,12,31);   /* the engine's dynamic light (WALLS.C:501, getLight :679):
+				       each channel gets (LIGHTRADIUS^2 - d^2)>>CFG_LIGHTSHIFT minus
+				       its value, so 0 = full, 31 = none -- red, half green, no blue:
+				       orange.  Doom's radius is 181 (SPRITE.H), full intensity */
  th->sprite->vel.x=MTH_Mul(F(info->speed),MTH_Cos(an));
  th->sprite->vel.z=MTH_Mul(F(info->speed),MTH_Sin(an));
  dist=f(doom_approxDist2(ds->pos.x-src->sprite->pos.x,ds->pos.z-src->sprite->pos.z));
