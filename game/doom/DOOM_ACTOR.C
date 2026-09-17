@@ -195,6 +195,10 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
 				    velocity; an awake one keeps colliding (a closing door meets it) */
 	else
 	   this->collide=moveSprite(this->sprite);
+	/* L'eclair de bouche s'eteint tout seul.  A poser AVANT doom_setState, qui peut passer
+	   l'acteur en S_NULL et liberer le sprite sous la lumiere. */
+	if (this->flashTics && !--this->flashTics && this->sprite)
+	   removeLight(this->sprite);
 	if (this->tics>0)
 	   {if (--this->tics==0)
 	       doom_setState(this,doomStates[this->state].nextstate);
@@ -343,7 +347,7 @@ DoomActor *doom_spawn(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
  this->chD2=DI_NODIR;
  this->chOld=DI_NODIR;
  this->chFlags=0;
- this->pad3=0;
+ this->flashTics=0;
  doomSetSpawnState(this,info->spawnstate);
  return this;
 }
@@ -742,6 +746,15 @@ int doom_lineAttack(DoomActor *src,int yaw,int damage)
  int hitSec,code,pitch;
  assert(src);
  assert(src->sprite);
+ /* Eclair de bouche.  Le moteur porte deja cette lumiere -- c'est celle de la boule de feu de
+    l'imp (doom_spawnMissile) ; ici elle se pose sur le TIREUR et s'eteint seule deux tics plus
+    tard (game_actor_func).  Doom n'a pas de lumiere dynamique : les images de tir y sont
+    seulement marquees "fullbright", ce qui n'eclaire rien autour.  C'est donc un AJOUT.
+    Le garde sur flashTics evite un second addLight sur le meme sprite quand un chaingunner
+    tire plusieurs tics de suite : la liste de lumieres ne supporte pas le doublon. */
+ if (!src->flashTics)
+    addLight(src->sprite,0,2,12);   /* 0 = canal plein, 31 = canal absent : blanc chaud */
+ src->flashTics=2;
  info=&doomMobjInfo[src->mt];
  eye=src->sprite->pos;
  eye.y=eye.y-src->sprite->radius+F(info->height/2+8);

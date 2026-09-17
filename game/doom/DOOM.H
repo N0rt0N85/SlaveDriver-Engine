@@ -70,7 +70,8 @@ typedef struct
  unsigned char movedir,dirCur,nDir;     /* A_Chase (section 3.2): current try index, count        */
  char dirTry[8];                        /* doom_newChaseDir candidates, Doom order                 */
  unsigned char chStage,chD1,chD2,chOld; /* lazy candidate stages: the list grows (and draws P_Random) only when the previous candidates failed */
- unsigned char chFlags,pad3;            /* chFlags bit 0: |dz| > |dx| when the list was started    */
+ unsigned char chFlags,flashTics;       /* chFlags bit 0: |dz| > |dx| when the list was started    */
+					/* flashTics: tics left on the muzzle light (DOOM_ACTOR.C)  */
  unsigned short mflags;                 /* DF_*                                                    */
  Object *target;                        /* monster: target; missile: shooter -- cleared on DESTROYED */
  int collide;                           /* last moveSprite result, consumed by A_Chase             */
