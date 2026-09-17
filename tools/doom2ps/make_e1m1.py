@@ -85,12 +85,17 @@ def ensure_ids(ids_path):
     return t2o.load_ids(ids_path)
 
 
-def run_geometry(wad_path, mapname, geom_path, static_doors=False, partition=None, optim=None):
+def run_geometry(wad_path, mapname, geom_path, static_doors=False, partition=None, optim=None,
+                 diag_fusion=False, cap_canal=None):
     argv = ["--wad", wad_path, "--map", mapname, "--out", geom_path]
     if partition:
         argv += ["--partition", partition]     # doom3d.PARTITION : build_objects decoupe pareil
     if optim:
         argv += ["--optim", optim]             # doom3d.OPTIM_ACTIFS : build_objects fond pareil
+    if cap_canal is not None:
+        argv += ["--cap-canal", str(cap_canal)]   # doom3d.CAP_CANAL : idem
+    if diag_fusion:
+        argv.append("--diag-fusion")           # disque de diagnostic, jamais un disque livre
     if static_doors:
         argv.append("--static-doors")
     else:
@@ -242,7 +247,10 @@ def assemble_doom(G, T, sprites, sounds, objects, params, sky, palette, switches
         PBVert=[dict(p) for p in mobile.get("PBVert", [])],
         waveVert=[], waveFace=[],
         PBWall=list(mobile.get("PBWall", [])),
-        texture=list(G["texture"]), vertexLight=list(G["vertexLight"]), cutPlane=[])
+        texture=list(G["texture"]), vertexLight=list(G["vertexLight"]),
+        # Plans de coupe : rendent au peintre l'ordre que la fusion des feuilles lui prend
+        # (doom3d.plans_de_coupe). Liste vide quand aucune fusion n'a eu lieu.
+        cutPlane=[list(r) for r in (G.get("cutPlane") or [])])
     snd = dict(map=list(sounds["map"]),
                sounds=[dict(rate=s["rate"], bps=s["bps"], loopStart=s["loopStart"], pcm=s["pcm"])
                        for s in sounds["sounds"]])
@@ -327,6 +335,11 @@ def main(argv=None):
                     help="morceaux convexes (doom3d --partition) ; defaut bsp")
     ap.add_argument("--optim", default=None,
                     help="optimisations de niveau (doom3d --optim) : all, none, ou une liste")
+    ap.add_argument("--cap-canal", type=int, default=None,
+                    help="avec --optim fusion : secteurs par canal de plans de coupe "
+                         "(doom3d --cap-canal ; defaut %d)" % doom3d.CAP_CANAL)
+    ap.add_argument("--diag-fusion", action="store_true",
+                    help="DIAGNOSTIC (doom3d --diag-fusion) : damier sur les feuilles fusionnees")
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -348,7 +361,8 @@ def main(argv=None):
     doom3d.dissoudre_penombres(M)          # MEME carte que run_geometry (doom3d.main les fond aussi)
 
     log("== 2. geometrie %s (doom3d.py %s)" % (a.map, "--static-doors" if a.static_doors else "--mobile"))
-    G = run_geometry(a.wad, a.map, geom_path, a.static_doors, a.partition, a.optim)
+    G = run_geometry(a.wad, a.map, geom_path, a.static_doors, a.partition, a.optim, a.diag_fusion,
+                     a.cap_canal)
     n_geo = len(G["tiles"])
 
     log("== 3. tuiles de geometrie (doomtiles.py)")

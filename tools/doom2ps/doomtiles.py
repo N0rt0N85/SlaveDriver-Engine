@@ -85,6 +85,22 @@ class TileMaker:
         """Compose une texture de mur -> (w, h, bytes des indices)."""
         if name in self._tex:
             return self._tex[name]
+        if name == "ZZFUSION":
+            # Peinture de DIAGNOSTIC (doom3d --diag-fusion). Le damier du repli ci-dessous est
+            # sombre, donc invisible dans une piece sombre -- exactement la ou le defaut se voit.
+            # Celui-ci prend les deux entrees les plus criardes de la palette DU WAD, calculees et
+            # non devinees : la plus claire, et la plus proche du magenta (une couleur que Doom
+            # n'utilise nulle part). Cases de 16 px : lisible meme de loin sur une capture.
+            blanc = max(range(1, 255), key=lambda i: sum(self.pal[i]))
+            mag = min(range(1, 255), key=lambda i: (self.pal[i][0] - 255) ** 2
+                      + self.pal[i][1] ** 2 + (self.pal[i][2] - 255) ** 2)
+            w = h = 64
+            px = bytearray(w * h)
+            for y in range(h):
+                for x in range(w):
+                    px[y * w + x] = mag if ((x >> 4) ^ (y >> 4)) & 1 else blanc
+            self._tex[name] = (w, h, bytes(px))
+            return self._tex[name]
         td = self.texdefs.get(name)
         if td is None:                                  # nom inconnu : damier sombre
             w = h = 64

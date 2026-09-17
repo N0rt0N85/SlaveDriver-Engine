@@ -213,7 +213,9 @@ def main(argv=None):
         objectParams=list(params),
         pushBlocks=[], PBVert=[], waveVert=[], waveFace=[], PBWall=[],
         texture=texture, vertexLight=list(G["vertexLight"]),
-        cutPlane=[],
+        # Plans de coupe : le convertisseur Doom s'en sert pour rendre au peintre l'ordre que la
+        # fusion des feuilles lui prend (doom3d.plans_de_coupe). Duke n'en emet pas.
+        cutPlane=G.get("cutPlane") or [],
     )
 
     data = lev_write.write_lev(model, strict=False)

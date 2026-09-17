@@ -42,7 +42,7 @@ import gridparts                                       # noqa: E402
 import doom_specials as sp                             # noqa: E402
 from geom3d import (Emitter, TILESIZE, CAP_CELLS, plane_of, area2,     # noqa: E402
                     CELL_MIN_U, CELL_MAX_U, CELL_MIN_V, CELL_MAX_V, SECTOR_LIGHT,
-                    CELL_HARD_MAX)
+                    CELL_HARD_MAX, lire_optims)
 
 SKYFLAT = "F_SKY1"
 EPS = 1e-6
@@ -269,32 +269,187 @@ def light_of(level):
 # make_e1m1 recree un DoomConverter pour placer les objets, il doit decouper exactement pareil.
 PARTITION = "bsp"
 
-# OPTIMISATIONS DE NIVEAU, toutes actives par defaut, debrayables par --optim. Chacune MODIFIE la
-# geometrie au-dela d'une simple conversion : qui edite ses cartes a la main doit pouvoir les couper
-# une par une pour retrouver exactement ce qu'il a dessine. La liste des actives est recopiee dans
-# le JSON de sortie (`source.optim`), donc un build dit toujours ce qu'il s'est autorise.
+# OPTIMISATIONS DE NIVEAU, debrayables une par une par --optim. Chacune MODIFIE la geometrie au-dela
+# d'une simple conversion : qui edite ses cartes a la main doit pouvoir les couper une par une pour
+# retrouver exactement ce qu'il a dessine. La liste des actives est recopiee dans le JSON de sortie
+# (`source.optim`), donc un build dit toujours ce qu'il s'est autorise.
 #   penombres : rend a sa piece toute bande de moins de 8 u qui n'en differe que par la lumiere
 #               (dissoudre_penombres) -- la bande perd sa lumiere propre
 #   avalement : une coupe de cellule qui ne laisserait qu'une echarde ne se fait pas, la voisine
 #               s'etend sur le residu (geom3d._grid_cells) -- etirement borne a x1,25
-OPTIMS = ("penombres", "avalement")
-OPTIM_ACTIFS = set(OPTIMS)
+#   fusion    : recolle deux feuilles du BSP d'un meme secteur Doom quand leur union est convexe
+#               (gridparts.partition, g=None) -- elle DETRUIT des cordes du BSP, voir ci-dessous
+#
+# `fusion` n'est PAS dans le defaut, et ne le sera pas : c'est la seule des trois qui enleve de
+# l'information au moteur. Les cordes du BSP ne portent aucune texture, mais elles portent l'ORDRE
+# DU PEINTRE : `buildTree` (WALLS.C:2128) refait a chaque image un graphe « s apres adjoin » a
+# partir des portails tournes vers l'oeil, et quand ce graphe BOUCLE il le casse au hasard -- son
+# propre commentaire dit « this doesn't happen normally » puis « NOTE: this breaks the tree structure
+# somewhat » (WALLS.C:2368-2385). Un obstacle au milieu d'une piece entoure l'oeil d'un ANNEAU de
+# secteurs : A cache B qui cache C qui cache A, aucun ordre lineaire n'existe. MESURE console 16-09
+# (E1M1, salle tech) : la 1re version peignait les bandes haute et basse du mur du fond PAR-DESSUS
+# le U qui les cache, selon le point de vue ; l'A/B avec `--optim penombres,avalement` etait propre.
+# Deux gardes la rendent sure, toutes deux dans gridparts.partition : `troue()` refuse une piece
+# percee, et `--cap-canal` refuse une piece qui demanderait un canal de plans de coupe plus gros que
+# le plus gros que Lobotomy ait livre. MESURE console 17-09 : le defaut ne se reproduit plus, pour
+# -7,2 % de secteurs et -4,8 % de murs (219/1796 contre 236/1886). Elle reste optionnelle parce
+# qu'elle est destructrice : qui edite ses cartes a la main doit l'allumer en connaissance de cause.
+OPTIMS = ("penombres", "avalement", "fusion")
+OPTIM_DEFAUT = ("penombres", "avalement")
+OPTIM_ACTIFS = set(OPTIM_DEFAUT)
+
+# Plafond de secteurs par canal de plans de coupe, quand `fusion` est active (gridparts.CAP_CANAL
+# documente le chiffre). Global de module, comme PARTITION : make_e1m1 recree un DoomConverter pour
+# placer les objets, il doit decouper exactement pareil.
+CAP_CANAL = gridparts.CAP_CANAL
 
 
 def lire_optim(s):
-    """`all`, `none`, ou une liste de noms d'OPTIMS. Un nom inconnu est une ERREUR : une faute de
-    frappe qui couperait silencieusement une regle serait pire que pas d'option du tout."""
-    s = (s or "all").strip().lower()
-    if s in ("all", "toutes"):
-        return set(OPTIMS)
-    if s in ("none", "aucune"):
-        return set()
-    noms = {x.strip() for x in s.split(",") if x.strip()}
-    inconnus = noms - set(OPTIMS)
-    if inconnus:
-        raise SystemExit("--optim : %s inconnu(s) ; connus : %s"
-                         % (", ".join(sorted(inconnus)), ", ".join(OPTIMS)))
-    return noms
+    """`defaut`, `all`, `none`, ou une liste d'OPTIMS (lecteur commun avec le convertisseur Duke)."""
+    return lire_optims(s, OPTIMS, OPTIM_DEFAUT)
+
+
+MAXCUTSECTORS = 128        # SLEVEL.H:172 ; plafond DUR, pour tout le niveau
+SECFLAG_CUTSORT = 2        # SLEVEL.H:175
+
+
+def plans_de_coupe(conv):
+    """Rend au peintre l'ordre que la fusion lui a pris, avec le mecanisme PREVU PAR LE MOTEUR.
+
+    `sortLeafList` (WALLS.C:2178-2226) corrige son tri par distance paire par paire : pour deux
+    secteurs du MEME `cutChannel`, `level_cutPlane[cutIndex_1][cutIndex_2]` designe un MUR (de l'un
+    ou de l'autre, bit 0x80) et le cote de son plan ou se trouve la camera decide qui passe devant.
+    C'est un plan separateur par paire -- l'equivalent d'un BSP, tabule au lieu d'etre un arbre.
+    MESURE sur les 24 .LEV retail : 129 secteurs marques sur 8 408 (1,5 %), dans 13 niveaux ;
+    THOTH en a 82 sur 37 canaux ; la matrice est DENSE (entrees definies = n^2 exactement).
+
+    Sans ca, recoller des feuilles casse l'ordre : un obstacle au milieu d'une piece entoure l'oeil
+    d'un ANNEAU, aucun ordre lineaire n'existe, et le moteur casse la boucle au hasard (WALLS.C:2368
+    « this doesn't happen normally »).
+
+    Ce qu'on marque : toutes les feuilles des secteurs Doom ou une fusion a eu lieu, un canal par
+    secteur Doom. Deux polygones convexes disjoints admettent TOUJOURS une droite separatrice portee
+    par une arete de l'un des deux (axe separateur, en 2D), donc la table est toujours remplissable.
+    -> (matrice [n][MAXCUTSECTORS], paires sans plan, pire depassement en u)."""
+    em = conv.em
+    fusionnes = {conv.leaf_sector[li] for li, m in enumerate(conv.members)
+                 if len(m) > 1 and li in conv.remap}
+    if not fusionnes:
+        return [], 0, 0.0
+    canal = {sec: i for i, sec in enumerate(sorted(fusionnes))}
+    membres = defaultdict(list)                 # secteur Doom -> [secteurs .LEV]
+    for li, sec in enumerate(conv.leaf_sector):
+        if sec in canal and li in conv.remap:
+            membres[sec].append(conv.remap[li])
+    ordre = [s for sec in sorted(canal) for s in sorted(membres[sec])]
+    if len(ordre) > MAXCUTSECTORS:
+        raise SystemExit("plans de coupe : %d secteurs a trier, plafond %d (SLEVEL.H:172)"
+                         % (len(ordre), MAXCUTSECTORS))
+    idx = {s: i for i, s in enumerate(ordre)}
+    for sec, liste in membres.items():
+        for s in liste:
+            em.sectors[s]["flags"] |= SECFLAG_CUTSORT
+            em.sectors[s]["cutIndex"] = idx[s]
+            em.sectors[s]["cutChannel"] = canal[sec]
+
+    V = em.vertices
+
+    def murs(s):
+        """(offset depuis firstWall, normale XZ, point du plan) des murs VERTICAUX du secteur."""
+        f = em.sectors[s]["firstWall"]
+        out = []
+        for wi in range(f, em.sectors[s]["lastWall"] + 1):
+            w = em.walls[wi]
+            if w["normal"][1] != 0 or wi - f >= 0x80:
+                continue
+            p = V[w["v"][0]]
+            out.append((wi - f, w["normal"][0] / 65536.0, w["normal"][2] / 65536.0,
+                        p["x"], p["z"]))
+        return out
+
+    def sommets(s):
+        return [(V[i]["x"], V[i]["z"])
+                for wi in range(em.sectors[s]["firstWall"], em.sectors[s]["lastWall"] + 1)
+                if em.walls[wi]["normal"][1] == 0 for i in em.walls[wi]["v"]]
+
+    mur_de = {s: murs(s) for s in ordre}
+    pts_de = {s: sommets(s) for s in ordre}
+
+    def separateur(a, b):
+        """Le mur de `a` dont le plan laisse le MIEUX tout `b` du cote exterieur -> (offset, pire
+        depassement en u). La normale du .LEV pointe vers l'interieur du secteur (critere
+        normales_vers_interieur).
+
+        On minimise le depassement au lieu d'exiger zero : deux morceaux qui se touchent par une
+        arete courte sont presque TANGENTS au plan de cette arete, et l'arrondi des normales en
+        16.16 fait basculer le signe (MESURE : secteurs 148/153 d'E1M1, depassement 0,8 u sur une
+        arete de 8 u). Ca reste juste : le moteur ne teste que la CAMERA contre ce plan, jamais les
+        sommets -- le plan doit dire de quel cote on est, pas separer au sens strict."""
+        best = None
+        for off, nx, nz, px, pz in mur_de[a]:
+            d = max(nx * (x - px) + nz * (z - pz) for x, z in pts_de[b])
+            if best is None or d < best[1]:
+                best = (off, d)
+        return best
+
+    M = [[99] * MAXCUTSECTORS for _ in ordre]
+    pire = 0.0
+    for sec, liste in membres.items():
+        ls = sorted(liste)
+        for k, a in enumerate(ls):
+            for b in ls[k + 1:]:
+                i, j = idx[a], idx[b]
+                oa, da = separateur(a, b) or (None, 1e18)
+                ob, db = separateur(b, a) or (None, 1e18)
+                if da <= db and oa is not None:     # le mur est dans a
+                    M[i][j] = oa                    # ligne i : a est s1, le mur est dans s1
+                    M[j][i] = 0x80 | oa             # ligne j : a est s2, d'ou le bit 0x80
+                    pire = max(pire, da)
+                elif ob is not None:                # le mur est dans b
+                    M[i][j] = 0x80 | ob
+                    M[j][i] = ob
+                    pire = max(pire, db)
+    # une entree 99 lue ferait sauter `assert(plane!=99)` (WALLS.C:2197) : on verifie qu'il n'en
+    # reste aucune dans une paire du MEME canal, seules paires que le moteur lit.
+    sans = sum(1 for sec, liste in membres.items() for a in liste for b in liste
+               if a != b and M[idx[a]][idx[b]] == 99)
+    return M, sans, pire
+
+
+# Nom de texture RESERVE : aucun WAD n'en contient, et doomtiles lui fabrique un damier criard.
+DIAG_TEX = "ZZFUSION"
+
+
+def peindre_fusions(conv):
+    """--diag-fusion : repeint en damier tous les murs VERTICAUX des feuilles nees d'une fusion.
+
+    Instrument, pas optimisation. Il repond a UNE question, celle qu'aucune sonde statique n'a su
+    trancher : le mur fautif appartient-il a une feuille fusionnee, ou le voit-on A TRAVERS une
+    feuille fusionnee ? Une capture y repond d'un coup d'oeil.
+    On laisse les sols et les plafonds intacts : repeindre un sol masquerait le mur qu'on cherche."""
+    em = conv.em
+    t = em.tile((conv.picnum("tex", DIAG_TEX), 0, 0, 1, 1))
+    n = 0
+    for li, membres in enumerate(conv.members):
+        if len(membres) < 2 or li not in conv.remap:
+            continue
+        s = em.sectors[conv.remap[li]]
+        for wi in range(s["firstWall"], s["lastWall"] + 1):
+            w = em.walls[wi]
+            nc = w["tileLength"] * w["tileHeight"]
+            if w["normal"][1] != 0 or nc <= 0:
+                continue
+            # On AJOUTE un bloc de cellules et on y pointe le mur, au lieu d'ecraser le sien : deux
+            # murs qui portent la meme texture PARTAGENT leur bloc, et ecraser en place repeignait
+            # des murs qu'on n'avait pas choisis (MESURE : 533 murs touches pour 265 demandes).
+            o = len(em.texture)
+            for _ in range(nc):
+                em.texture.append(0)               # motif 0 : aucun miroir
+                em.texture.append(t)
+            w["textures"] = o
+            n += 1
+    return n
+
 
 # Flats animes de Doom, dans l'ordre des images (p_spec.c animdefs ; SWATER, RROCK et SLIME
 # n'existent qu'a partir de Doom II : une famille absente du WAD n'est jamais utilisee).
@@ -349,8 +504,16 @@ class DoomConverter:
         # plein n'est jamais coupe. "bsp" : les feuilles du BSP telles quelles. `members` = les
         # feuilles BSP d'origine de chaque morceau (leurs segs, et leaf_at).
         self.partition = partition or PARTITION
-        if self.partition == "grid":
-            parts = gridparts.partition(M, adjacency.leaf_polygons(M), sub_sector, self._ring_in_map)
+        # `fusion` (--optim) : recoller deux feuilles voisines d'un MEME secteur Doom quand leur
+        # union reste convexe. Chaque morceau que le BSP laisse coute un secteur, ses murs et une
+        # visite du renderer -- mais ses cordes ne sont PAS libres pour autant : elles portent
+        # l'ordre de dessin du peintre, et c'est `troue()` + `cap` qui rendent la fusion sure
+        # (gridparts.partition, et l'entete OPTIMS ci-dessus pour toute l'histoire).
+        fusionner = self.partition == "grid" or "fusion" in OPTIM_ACTIFS
+        if fusionner:
+            rings = adjacency.leaf_polygons(M)
+            parts = gridparts.partition(M, rings, sub_sector, self._ring_in_map,
+                                        g=64 if self.partition == "grid" else None, cap=CAP_CANAL)
             self.fpolys, self.boundary = adjacency.build(M, polys=[r for r, _, _ in parts])
             self.leaf_sector = [s for _, s, _ in parts]
             self.members = [m for _, _, m in parts]
@@ -1450,6 +1613,7 @@ def open_doors(M):
 
 
 def main(argv=None):
+    global PARTITION, OPTIM_ACTIFS, CAP_CANAL   # make_e1m1 recree un DoomConverter : memes choix
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--wad", default=os.path.join(os.path.dirname(ROOT), "Mimas", "cd", "data",
                                                   "DOOM1.WAD"))
@@ -1467,16 +1631,25 @@ def main(argv=None):
                     help="tuiles accordees aux linedefs plus etroits que leur texture (choisir_fenetres)")
     ap.add_argument("--static-doors", action="store_true",
                     help="portes ouvertes en dur (open_doors, controle visuel) -- le defaut sans --mobile")
-    ap.add_argument("--optim", default="all",
-                    help="optimisations de NIVEAU, toutes actives par defaut : `all`, `none`, ou une "
-                         "liste parmi %s. Elles modifient la geometrie ; les couper rend exactement "
-                         "la carte dessinee." % ", ".join(OPTIMS))
+    ap.add_argument("--diag-fusion", action="store_true",
+                    help="DIAGNOSTIC : repeint en damier les murs des feuilles nees d'une fusion "
+                         "(se combine avec --optim all). Ne jamais livrer un disque avec ca.")
+    ap.add_argument("--optim", default="defaut",
+                    help="optimisations de NIVEAU : `defaut` (= %s), `all` (= %s), `none`, ou une "
+                         "liste. Elles modifient la geometrie ; `none` rend exactement la carte "
+                         "dessinee." % (", ".join(OPTIM_DEFAUT), ", ".join(OPTIMS)))
+    ap.add_argument("--cap-canal", type=int, default=CAP_CANAL,
+                    help="avec `--optim fusion` : secteurs qu'on s'autorise dans un canal de plans "
+                         "de coupe (defaut %d = le maximum de tout le jeu retail ; le plafond DUR "
+                         "du moteur est MAXCUTSECTORS=%d pour le niveau entier). Plus haut = plus "
+                         "de fusions, mais le tri du moteur est une insertion en une passe."
+                         % (CAP_CANAL, MAXCUTSECTORS))
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
-    global PARTITION, OPTIM_ACTIFS
     if a.partition:
         PARTITION = a.partition          # module : build_objects (make_e1m1) doit decouper pareil
     OPTIM_ACTIFS = lire_optim(a.optim)   # idem : make_e1m1 recree un DoomConverter
+    CAP_CANAL = a.cap_canal              # idem
 
     W = wadmod.Wad(a.wad)
     M = wadmod.read_map(W, a.map)
@@ -1525,6 +1698,17 @@ def main(argv=None):
               f"budget {a.uwin_budget} tuiles : {sorted(pris)}")
         conv = mk(pris)
         em = conv.build()
+    cutplane, sans_plan, pire_plan = plans_de_coupe(conv)
+    if cutplane:
+        canaux = Counter(s["cutChannel"] for s in em.sectors if s["flags"] & SECFLAG_CUTSORT)
+        print(f"  plans de coupe : {len(cutplane)} secteurs tries par plan "
+              f"(plafond {MAXCUTSECTORS}), {len(canaux)} canaux, le plus gros de "
+              f"{max(canaux.values())} (--cap-canal {CAP_CANAL}), "
+              f"pire depassement {pire_plan:.2f} u"
+              + (f" -- {sans_plan} PAIRE(S) SANS PLAN, LE MOTEUR LIRAIT 99" if sans_plan else ""))
+    if a.diag_fusion:
+        print(f"  DIAGNOSTIC : {peindre_fusions(conv)} murs repeints en damier "
+              f"(feuilles nees d'une fusion)")
     print(f"  {len(em.sectors)} secteurs, {len(em.walls)} murs, {len(em.vertices)} sommets, "
           f"{len(em.faces)} faces, {len(em.texture)} octets de texture, "
           f"{len(em.vertexLight)} lumieres, {len(em.tiles)} tuiles distinctes")
@@ -1559,6 +1743,7 @@ def main(argv=None):
                stats=dict(conv.stats), criteres=crit, tiles=em.tiles,
                picnames=conv.picnames,
                sectors=em.sectors, walls=em.walls, vertices=em.vertices, faces=em.faces,
+               cutPlane=cutplane,
                texture=em.texture, vertexLight=em.vertexLight, anims=conv.anims,
                doom_sector=[conv.leaf_sector[li] for li in conv.keep])
     if tags is not None:

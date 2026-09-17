@@ -24,6 +24,13 @@ from collections import defaultdict
 import adjacency as A
 
 EPS = 1e-6
+# Secteurs par canal de plans de coupe -- DEFAUT de `--cap-canal` (doom3d), que l'auteur d'une carte
+# choisit. MESURE sur les 24 .LEV retail : 56 canaux, 129 secteurs, moyenne 2,3, et le MAXIMUM de
+# tout le jeu est 7 (SELPATH, SLAVCAMP). Le tri du moteur est une insertion en UNE passe
+# (WALLS.C:2178-2226) : exact sur deux secteurs, arbitraire au-dela de quelques-uns -- MESURE console
+# 16-09 : avec des canaux de 19, les murs interieurs du U de la salle tech devenaient transparents.
+# On ne sort pas de l'enveloppe que Lobotomy a validee.
+CAP_CANAL = 7
 
 
 def area2(ring):
@@ -201,17 +208,82 @@ def on_linedef(u, v, lds, tol=1.5):
     return False
 
 
-def partition(M, leaf_rings, leaf_sector, keep, g=64):
+def troue(rings):
+    """La reunion de ces anneaux entoure-t-elle un TROU ?
+
+    Un obstacle au milieu d'une piece (le U de la salle tech d'E1M1) fait de la piece un ANNEAU, et
+    un anneau n'admet AUCUN ordre de peintre : A cache B cache C cache A. Les cordes du BSP coupent
+    l'anneau ; les enlever rend l'ordre indecidable et le moteur casse la boucle au hasard
+    (WALLS.C:2368). On refuse donc de fusionner la.
+
+    Test exact : une arete interieure a la reunion apparait dans les DEUX sens ; les autres forment
+    le contour. On compte ses boucles fermees et on les compare au nombre de morceaux CONNEXES.
+    Une piece d'un seul tenant et sans trou a exactement une boucle par morceau connexe ; chaque
+    trou en ajoute une."""
+    dirs = set()
+    for r in rings:
+        for u, v, _ in edges(r):
+            dirs.add((u, v))
+    bord = {(u, v) for (u, v) in dirs if (v, u) not in dirs}
+    suiv = defaultdict(list)
+    for u, v in bord:
+        suiv[u].append(v)
+    vus, boucles = set(), 0
+    for depart in list(suiv):
+        if depart in vus:
+            continue
+        boucles += 1
+        u = depart
+        for _ in range(len(bord) + 1):
+            if u in vus or u not in suiv:
+                break
+            vus.add(u)
+            u = suiv[u][0]
+    # morceaux connexes : deux anneaux qui partagent une arete (en sens inverse)
+    parent = list(range(len(rings)))
+
+    def trouve(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    proprio = {}
+    for k, r in enumerate(rings):
+        for u, v, _ in edges(r):
+            proprio[(u, v)] = k
+    for (u, v), k in proprio.items():
+        o = proprio.get((v, u))
+        if o is not None:
+            a, b = trouve(k), trouve(o)
+            if a != b:
+                parent[a] = b
+    composantes = len({trouve(k) for k in range(len(rings))})
+    return boucles > composantes
+
+
+def partition(M, leaf_rings, leaf_sector, keep, g=64, cap=CAP_CANAL):
     """-> [(anneau etiquete, secteur Doom, [feuilles d'origine])], ordre deterministe.
 
-    `leaf_rings` = adjacency.leaf_polygons(M) ; `keep(ring)` ecarte les feuilles hors carte."""
+    `leaf_rings` = adjacency.leaf_polygons(M) ; `keep(ring)` ecarte les feuilles hors carte.
+
+    `g = None` : PAS de decoupe prealable sur la grille -- on recolle directement les feuilles du
+    BSP. Chaque morceau que le BSP laisse coute un secteur, ses murs et une visite du renderer ; mais
+    ses cordes ne sont PAS gratuites pour autant, elles portent l'ordre du peintre (voir troue() et
+    doom3d.plans_de_coupe). D'ou les deux gardes, actives dans ce seul mode : on refuse une piece
+    percee d'un trou, et une piece qui demanderait un canal de plus de `cap` secteurs. La phase par
+    cellule n'a alors plus de sens et saute.
+
+    Se restreindre aux deux enfants d'un MEME noeud du BSP serait sur SANS garde -- le noeud devient
+    une feuille et tous les plans ancetres separent encore le resultat du reste de la carte. Mais
+    MESURE sur E1M1 : 0 feuille sur 236 y gagne (deux enfants d'un noeud sont rarement d'un meme
+    secteur Doom), contre 17 pour le recollage glouton ci-dessous. Cette classe-la ne vaut rien."""
     DV = M["vertices"]
     lds = [(DV[l.v1][0], DV[l.v1][1], DV[l.v2][0], DV[l.v2][1]) for l in M["linedefs"]]
     pieces = []                                # dict(ring, sector, members)
     for li, ring in enumerate(leaf_rings):
         if not ring or len(ring) < 3 or not keep(ring):
             continue
-        for p in split_grid(clean(ring), g):
+        for p in (split_grid(clean(ring), g) if g else [clean(ring)]):
             pieces.append(dict(ring=p, sector=leaf_sector[li], members={li}))
     if not pieces:
         return []
@@ -224,6 +296,12 @@ def partition(M, leaf_rings, leaf_sector, keep, g=64):
     for sec in sorted(bysec):
         grp = bysec[sec]
         rings = split_tjunctions([p["ring"] for p in grp])
+        if g is None and troue(rings):
+            # Piece percee d'un trou : ses morceaux forment un anneau, aucun ordre de peintre
+            # n'existe (voir troue()). On la laisse telle que le BSP l'a coupee.
+            result.extend((simplify(r), sec, sorted(p["members"]))
+                          for r, p in zip(rings, grp))
+            continue
         cur = {k: dict(ring=r, members=set(p["members"]), area=abs(area2(r)))
                for k, (r, p) in enumerate(zip(rings, grp))}
         nid = len(cur)
@@ -231,12 +309,12 @@ def partition(M, leaf_rings, leaf_sector, keep, g=64):
         for p in cur.values():
             r = p["ring"]
             p["cell"] = (math.floor(sum(q[0] for q in r) / len(r) / g),
-                         math.floor(sum(q[1] for q in r) / len(r) / g))
+                         math.floor(sum(q[1] for q in r) / len(r) / g)) if g else 0
         # 1re phase : on ne fusionne que DANS une cellule, pour reconstituer d'abord chaque carre ;
         # 2e phase : entre cellules. Sans cela la plus grande union passait d'abord, une moitie de
         # carre etait absorbee par un grand voisin et l'autre moitie ne pouvait plus la rejoindre
         # (union non convexe) -- MESURE : 13,4 % des sols et 20,9 % des plafonds restaient coupes.
-        for phase in (0, 1):
+        for phase in ((0, 1) if g else (1,)):
           while True:
             owner = {}
             for pid, p in cur.items():
@@ -274,7 +352,16 @@ def partition(M, leaf_rings, leaf_sector, keep, g=64):
                 merged = True
             if not merged:
                 break
-        for p in cur.values():
+        finaux = list(cur.values())
+        if (g is None and len(finaux) > cap
+                and any(len(p["members"]) > 1 for p in finaux)):
+            # Fusionner ici obligerait a trier plus de `cap` secteurs dans un seul canal de plans
+            # de coupe, et ce tri est une insertion EN UNE PASSE (WALLS.C:2178) : exact a deux,
+            # arbitraire au-dela de quelques-uns. On reste sur la decoupe du BSP.
+            result.extend((simplify(r), sec, sorted(p["members"]))
+                          for r, p in zip(rings, grp))
+            continue
+        for p in finaux:
             result.append((simplify(p["ring"]), sec, sorted(p["members"])))
     result.sort(key=lambda e: (e[2][0], min(q[1] for q in e[0]), min(q[0] for q in e[0])))
     return result
