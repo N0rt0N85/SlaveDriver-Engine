@@ -1142,6 +1142,98 @@ extern unsigned char fogTable[256];
    q[2].x=(V)[row2+w].x;        q[2].y=(V)[row2+w].y; \
    q[3].x=(V)[row2+runStart].x; q[3].y=(V)[row2+runStart].y
 
+/* --- SOUDURE DES BANDES DE MAILLAGE ----------------------------------------------------------
+   C'est la ou est l'image : sur E1M1, 437 murs de maillage portent 3019 faces contre 851
+   cellules pour les 565 murs en grille, et a l'ecran le maillage fait 87 a 90 % des cellules.
+   Ce sont les sols et les plafonds -- verifie, tous leurs sommets sont a la meme hauteur.
+
+   Les faces consecutives d'un maillage forment une BANDE dans 46 % des cas : l'arete (v3,v2) de
+   l'une est l'arete (v0,v1) de la suivante (819 jointures), ou le contraire (585).  Une suite de
+   faces noires prises dans une bande se replie donc en un seul quadrilatere.
+
+   Contrairement a la grille de mur, la colinearite n'est PAS acquise ici : rien ne dit que le
+   convertisseur ait aligne la bande.  On ne la suppose donc pas, on la MESURE, a l'ecran, sur le
+   quad final : chaque sommet saute doit tomber a moins d'un pixel de l'arete qui le remplace.  Si
+   un seul manque, la bande entiere est abandonnee et les faces repartent une a une.  C'est la
+   condition que le proprietaire a posee -- tant que ca ne cree pas de trou -- rendue verifiable
+   au lieu d'etre pariee. */
+static int faceIsBlack(int f,struct vCalc *V)
+{return !(V[level_face[f].v[0]].light|V[level_face[f].v[1]].light|
+	  V[level_face[f].v[2]].light|V[level_face[f].v[3]].light);
+}
+
+/* |produit vectoriel| <= max(|dx|,|dy|) : "a moins d'un pixel et demi de la droite (a,b)", sans
+   racine carree ni division. */
+static int nearSegment(XyInt *a,XyInt *b,int px,int py)
+{int dx=b->x-a->x,dy=b->y-a->y,m,n;
+ int cr=dx*(py-a->y)-dy*(px-a->x);
+ if (cr<0) cr=-cr;
+ m=(dx<0)?-dx:dx;
+ n=(dy<0)?-dy:dy;
+ if (n>m) m=n;
+ return cr<=m;
+}
+#define LODVXY(Q,V,I) {(Q).x=(V)[I].x; (Q).y=(V)[I].y;}
+
+/* Etend une bande de faces noires depuis f, remplit q[] avec le quad soude, et retourne le
+   dernier indice de la bande -- f lui-meme si rien ne se soude. */
+static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q)
+{int g,dir,j;
+ unsigned short *a,*c;
+ if (f>=wall->lastFace)
+    {g=f; dir=0;}
+ else
+    {a=level_face[f].v; c=level_face[f+1].v;
+     if (a[3]==c[0] && a[2]==c[1])
+	dir=1;                     /* la bande avance dans le sens v0 -> v3 */
+     else if (a[0]==c[1] && a[3]==c[2])
+	dir=2;                     /* ... dans l'autre sens */
+     else
+	dir=0;
+     g=f;
+     while (dir && g<wall->lastFace)
+	{a=level_face[g].v; c=level_face[g+1].v;
+	 if (!faceIsBlack(g+1,V))
+	    break;
+	 if (dir==1 ? !(a[3]==c[0] && a[2]==c[1])
+		    : !(a[0]==c[1] && a[3]==c[2]))
+	    break;
+	 g++;
+	}
+    }
+ if (g==f)
+    dir=0;
+ if (dir==1)
+    {LODVXY(q[0],V,level_face[f].v[0]);
+     LODVXY(q[1],V,level_face[f].v[1]);
+     LODVXY(q[2],V,level_face[g].v[2]);
+     LODVXY(q[3],V,level_face[g].v[3]);
+     for (j=f;j<g;j++)   /* les sommets sautes sont les aretes partagees */
+	if (!nearSegment(q+0,q+3,V[level_face[j].v[3]].x,V[level_face[j].v[3]].y) ||
+	    !nearSegment(q+1,q+2,V[level_face[j].v[2]].x,V[level_face[j].v[2]].y))
+	   {dir=0; break;}
+    }
+ else
+    if (dir==2)
+       {LODVXY(q[0],V,level_face[g].v[0]);
+	LODVXY(q[1],V,level_face[f].v[1]);
+	LODVXY(q[2],V,level_face[f].v[2]);
+	LODVXY(q[3],V,level_face[g].v[3]);
+	for (j=f;j<g;j++)
+	   if (!nearSegment(q+0,q+1,V[level_face[j].v[0]].x,V[level_face[j].v[0]].y) ||
+	       !nearSegment(q+3,q+2,V[level_face[j].v[3]].x,V[level_face[j].v[3]].y))
+	      {dir=0; break;}
+       }
+ if (!dir)
+    {LODVXY(q[0],V,level_face[f].v[0]);
+     LODVXY(q[1],V,level_face[f].v[1]);
+     LODVXY(q[2],V,level_face[f].v[2]);
+     LODVXY(q[3],V,level_face[f].v[3]);
+     return f;
+    }
+ return g;
+}
+
 static int wallIsBlack(sWallType *w,MthXyz *coords,int nmLit,int wavy)
 {int i,fog,n,base,maxl;
  if (!lodEnable || nmLit || wavy)
@@ -1457,9 +1549,16 @@ void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
      assert(getPicClass(level_face[f].tile)==TILE16BPP);
      nmMeshPolys++;
      if (CELLISBLACK(gtable))
-	{EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_MESH,poly,NULL);
-	 nmPolys++;
-	 lodFlat++;
+	{XyInt q[4];
+	 int g=weldFaceStrip(wall,f,vCalc,q);
+	 if (clip_visible(q,s))
+	    {EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_MESH,q,NULL);
+	     nmPolys++;
+	     lodFlat++;
+	    }
+	 lodCells+=g-f;
+	 nmMeshPolys+=g-f;
+	 f=g;
 	 continue;
 	}
 #if 0
@@ -1847,12 +1946,19 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 
      slave_nmMeshPolys++;
      if (CELLISBLACK(gtable))
-	{cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOL_MESH;
-	 cacheThruResult[nmSlavePolys].tile=-5;
-	 for (i=0;i<4;i++)
-	    cacheThruResult[nmSlavePolys].poly[i]=poly[i];
-	 nmSlavePolys++;
-	 slave_lodFlat++;
+	{XyInt q[4];
+	 int g=weldFaceStrip(wall,f,slave_vCalc,q);
+	 if (clip_visible(q,s))
+	    {cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOL_MESH;
+	     cacheThruResult[nmSlavePolys].tile=-5;
+	     for (i=0;i<4;i++)
+		cacheThruResult[nmSlavePolys].poly[i]=q[i];
+	     nmSlavePolys++;
+	     slave_lodFlat++;
+	    }
+	 slave_lodCells+=g-f;
+	 slave_nmMeshPolys+=g-f;
+	 f=g;
 	 continue;
 	}
      cacheThruResult[nmSlavePolys].gtable=gtable;
