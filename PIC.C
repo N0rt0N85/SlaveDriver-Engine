@@ -636,19 +636,24 @@ void loadPalletes(int fd)
      colorRam[i]=objectPal[i];
   /* SCL_SetColRam(0,0,256,objectPal); */
 
+  /* Les bancs assombris.  Le pas d'origine etait r-=i, donc -4/31 au plus sur cinq bancs : de
+     quoi marquer une distance, pas de quoi suivre une brume qui va au noir.  On etale le meme
+     mecanisme sur SPRITEFOGMAX (UTIL.H), et SOUSTRACTIVEMENT -- comme le gouraud des murs, qui
+     retire un offset au lieu de multiplier, sans quoi les objets ne tiendraient pas la meme
+     gamme que le decor a la meme distance. */
   for (i=1;i<NMOBJECTPALLETES;i++)
-     {int r,g,b;
+     {int r,g,b,sub=(SPRITEFOGMAX*i)/(NMOBJECTPALLETES-1);
       for (c=0;c<256;c++)
 	 {r=objectPal[c] & 0x1f;
 	  g=(objectPal[c]>>5) & 0x1f;
 	  b=(objectPal[c]>>10) & 0x1f;
-	  r-=i;
+	  r-=sub;
 	  if (r<0)
 	     r=0;
-	  g-=i;
+	  g-=sub;
 	  if (g<0)
 	     g=0;
-	  b-=i;
+	  b-=sub;
 	  if (b<0)
 	     b=0;
 	  tempSpace[c]=RGB(r,g,b);

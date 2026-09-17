@@ -2793,7 +2793,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
  Sprite *drawList[100];
  int nmDraw,draw;
  int chunk,light,x,y,i,j;
- int spriteFog=0;
+ int spriteFog=0,spriteBank=0;
  int flip;
  int frame;
  Fixed32 width64,scale;
@@ -2943,6 +2943,15 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
       if (d<0) d=0;
       spriteFog=fogTable[d];
       spriteFog-=spriteFog>>2;
+      /* Les tuiles d'objets de Doom sont en TILE8BPP (params/doom.cfg : PIC_SLOTS=32,31,...),
+	 donc en BANC COULEUR, et le gouraud y decale l'index de palette au lieu du RGB
+	 (mesure materiel, saturn-refs/knowledge/HW_VDP1.md:783) : illisible sur PLAYPAL, qui
+	 n'est pas ordonnee en luminance.  Le banc assombri est le seul chemin, et c'est celui
+	 que Lobotomy avait prevu -- la ligne qui le choisissait est deux lignes plus haut, en
+	 commentaire, par la distance brute. */
+      spriteBank=(spriteFog*(NMOBJECTPALLETES-1))/SPRITEFOGMAX;
+      if (spriteBank>NMOBJECTPALLETES-1)
+	 spriteBank=NMOBJECTPALLETES-1;
      }
      /* tformed is center of sprite */
      project_point(&tformed,&feetScreenPos);
@@ -3073,7 +3082,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		 }
 	      EZ_scaleSpr(ZOOM_TL | flip,
 			  UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE,
-			  light<<8,pic,pos,
+			  (light? light: spriteBank)<<8,pic,pos,  /* light = eclair de tir */
 			  NULL);
 	     }
 	 }
