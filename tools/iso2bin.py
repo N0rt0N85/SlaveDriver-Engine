@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""iso2bin.py -- ISO 9660 (MODE1/2048) -> raw MODE1/2352 image + CUE, per ECMA-130.
+
+`xorrisofs` can only emit 2048-byte sectors: the DATA, without the header or the error-correction
+codes a CD actually carries.  An emulator that mounts the image as a filesystem reads it, but it is
+not a CD track: no burner and no real drive does anything with it.  The .bin/.cue pair below is the
+complete track.
+
+MODE1 sector (ECMA-130 SS14-15):
+    sync 12 | MSF BCD + mode 4 | data 2048 | EDC 4 | zeroes 8 | P parity 172 | Q parity 104
+
+TRAP: P covers bytes 12..2075 (header + data + EDC + zeroes), Q covers 12..2247 -- so Q reads the
+bytes P has just written, and must be computed AFTER it.  Swapping them yields an image that still
+mounts (the EDC is right) but whose error correction is wrong.
+
+VALIDATED against a PRESSED DISC: take the 2048 data bytes of 404 sectors spread over
+`refs/iso/Duke Nukem 3D (USA) (Track 01).bin`, rebuild the whole sector, and all 2352 bytes match
+every time -- sync, header, EDC, P and Q.  Comparing against a pair we made ourselves would only
+have proved we agree with ourselves.
+
+usage: python tools/iso2bin.py input.iso output.bin [output.cue]
+"""
+import os
+import sys
+
+SYNC = b"\x00" + b"\xff" * 10 + b"\x00"
+
+# EDC: CRC-32 with the reflected polynomial 0x8001801B (ECMA-130 annex A).
+_edc_t = []
+for i in range(256):
+    e = i
+    for _ in range(8):
+        e = (e >> 1) ^ (0xD8018001 if e & 1 else 0)
+    _edc_t.append(e)
+
+
+def edc(buf):
+    c = 0
+    for b in buf:
+        c = (c >> 8) ^ _edc_t[(c ^ b) & 0xFF]
+    return c & 0xFFFFFFFF
+
+
+# GF(2^8) field of the P/Q Reed-Solomon code, polynomial 0x11D (ECMA-130 S13).
+_f = [((i << 1) ^ (0x11D if i & 0x80 else 0)) & 0xFF for i in range(256)]
+_b = [0] * 256
+for i in range(256):
+    _b[i ^ _f[i]] = i
+
+
+def _pq(src, major_count, minor_count, major_mult, minor_inc):
+    """P parity (86, 24, 2, 86) or Q parity (52, 43, 86, 88): one sweep, four constants."""
+    size = major_count * minor_count
+    out = bytearray(major_count * 2)
+    for major in range(major_count):
+        index = (major >> 1) * major_mult + (major & 1)
+        a = b = 0
+        for _ in range(minor_count):
+            t = src[index]
+            index += minor_inc
+            if index >= size:
+                index -= size
+            a ^= t
+            b ^= t
+            a = _f[a]
+        a = _b[_f[a] ^ b]
+        out[major] = a
+        out[major + major_count] = a ^ b
+    return bytes(out)
+
+
+def bcd(n):
+    return ((n // 10) << 4) | (n % 10)
+
+
+def sector(lba, data2048):
+    t = lba + 150                       # LBA 0 sits at 00:02:00 (2 s of pre-gap)
+    s = bytearray(2352)
+    s[0:12] = SYNC
+    s[12:16] = bytes((bcd(t // 4500), bcd((t // 75) % 60), bcd(t % 75), 1))
+    s[16:2064] = data2048
+    s[2064:2068] = edc(s[0:2064]).to_bytes(4, "little")
+    s[2076:2248] = _pq(s[12:2076], 86, 24, 2, 86)     # P first...
+    s[2248:2352] = _pq(s[12:2248], 52, 43, 86, 88)    # ...then Q, which re-reads P's bytes
+    return bytes(s)
+
+
+def convert(src, dst):
+    """-> sector count.  Atomic write: a .bin truncated by a Ctrl-C looks like a valid disc and
+    burns without complaint."""
+    n = os.path.getsize(src)
+    if n % 2048:
+        raise SystemExit(f"{src}: {n} bytes, not a multiple of 2048 (this is not an ISO)")
+    tmp = dst + ".tmp"
+    with open(src, "rb") as f, open(tmp, "wb") as g:
+        for lba in range(n // 2048):
+            g.write(sector(lba, f.read(2048)))
+    os.replace(tmp, dst)
+    return n // 2048
+
+
+def write_cue(cue, bin_path):
+    tmp = cue + ".tmp"
+    with open(tmp, "wb") as c:
+        c.write(('FILE "%s" BINARY\r\n  TRACK 01 MODE1/2352\r\n    INDEX 01 00:00:00\r\n'
+                 % os.path.basename(bin_path)).encode())
+    os.replace(tmp, cue)
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not 2 <= len(argv) <= 3:
+        raise SystemExit(__doc__.strip().splitlines()[-1])
+    src, dst = argv[0], argv[1]
+    n = convert(src, dst)
+    if len(argv) > 2:
+        write_cue(argv[2], dst)
+    print(f"  DISC: {os.path.basename(dst)} ({n} sectors, {n * 2352} bytes, MODE1/2352)"
+          + (f" + {os.path.basename(argv[2])}" if len(argv) > 2 else ""))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

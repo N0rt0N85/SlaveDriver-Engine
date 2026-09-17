@@ -10,7 +10,9 @@
 #                      BOOT_PROBE) + two discs: SRL IP (SGL sysinit first) / jump-only IP (retail style)
 #   make BOOTPROBE=1 iso-retailbins -> the RETAIL 0 + MAIN.BIN (refs/extract/PS) on our disc recipe, both IPs
 #   make size       -> text/data/bss per program vs the original CPE spans
-#   make iso        -> build/slavedriver.iso: bootable test disc (SRL generic IP.BIN + cd/ data)
+#   make iso        -> build/slavedriver.bin + .cue: bootable test disc (SRL generic IP.BIN + cd/ data)
+#   make discs      -> one .bin/.cue per game in GAMES (default "doom duke"), built in sequence:
+#                      build/.../doom/AguzzinoDoom.cue and build/.../duke/AguzzinoDuke.cue
 #   make clean      -> remove build/
 #   make -k         -> keep going: compile everything that compiles today, report the rest
 #
@@ -204,7 +206,7 @@ ORIG_SPAN_KEYGEN := 136980
 # ---------------------------------------------------------------------------------------------
 .SUFFIXES:
 MAKEFLAGS += --no-builtin-rules
-.PHONY: all bins elfs objs size iso iso-ipjump iso-retailbins clean help
+.PHONY: all bins elfs objs size iso iso-ipjump iso-retailbins discs cddir-doom cddir-duke clean help
 .SECONDARY:
 .DELETE_ON_ERROR:
 
@@ -309,8 +311,14 @@ size: $(ELFS)
 IPFILE   ?= $(SRL_DIR)/modules/sgl/IP.BIN
 IPJUMP   := $(BUILD)/ip_jump.bin
 CDDIR    ?= cd
-ISO      := $(BUILD)/slavedriver.iso
-ISOJ     := $(BUILD)/slavedriver-ipjump.iso
+# Name of the delivered disc: once the .cue has left the repository it has to say which game it is.
+# It follows the params, so `make PARAMS=params/doom.cfg iso` emits AguzzinoDoom with nothing else
+# to pass.  PowerSlave (the default params) keeps `slavedriver`.
+DISC_doom := AguzzinoDoom
+DISC_duke := AguzzinoDuke
+DISCNAME ?= $(or $(DISC_$(notdir $(basename $(PARAMS)))),slavedriver)
+ISO      := $(BUILD)/$(DISCNAME).iso
+ISOJ     := $(BUILD)/$(DISCNAME)-ipjump.iso
 ISOSTAGE := $(BUILD)/iso
 XORRISO  ?= xorrisofs
 PYTHON   ?= python
@@ -337,8 +345,46 @@ define mkiso
 	@echo "ISO: $(1) ($$(stat -c %s $(1)) bytes): IP = $(2); 0.BIN = $(3); MAIN.BIN = $(4)"
 endef
 
-iso: $(ISO)
-iso-ipjump: $(ISOJ)
+# The deliverable is the .bin/.cue pair, not the .iso: xorrisofs only emits the 2048-byte DATA of
+# each sector, which an emulator can mount as a filesystem but which is not a CD track -- no burner
+# and no real drive does anything with it.  tools/iso2bin.py adds what ECMA-130 actually puts on the
+# disc (sync, MSF header, EDC, P and Q parities) to make a MODE1/2352 track.  The .iso stays next to
+# it as the intermediate step, so an incremental `make iso` still skips the work it already did.
+%.bin %.cue: %.iso tools/iso2bin.py
+	@$(PYTHON) tools/iso2bin.py $< $*.bin $*.cue
+
+iso: $(ISO:.iso=.cue)
+iso-ipjump: $(ISOJ:.iso=.cue)
+
+# --- one disc per game, in sequence ------------------------------------------------------------
+# `make discs` -> one .bin/.cue pair per game in GAMES, a full build each.  GAMES is the knob:
+# `make GAMES=doom discs` makes only that one.  NEVER in parallel -- two simultaneous cc1 make their
+# own CreateProcess fail under Windows.  NDEBUG, STATUSTEXT and the other command-line variables
+# reach the sub-make on their own through MAKEFLAGS.
+GAMES ?= doom duke
+discs:
+	@for g in $(GAMES); do \
+	  echo "=== $$g ==========================================================================="; \
+	  $(MAKE) --no-print-directory cddir-$$g || exit 1; \
+	  $(MAKE) --no-print-directory PARAMS=params/$$g.cfg CDDIR=cd_$$g iso || exit 1; \
+	done
+
+cddir-doom: ;   # cd_doom/ is produced by tools/doom2ps/make_e1m1.py, not by the Makefile
+cddir-duke: cd_duke/TOMB.LEV
+
+# cd_duke/: the Duke disc IS a PowerSlave disc whose first level (TOMB.LEV, BIGMAP.C:48) carries our
+# geometry.  HARD LINKS to the 161 MB in cd/, plus our single file: nothing is duplicated, and the
+# original is never overwritten -- the NOTES_E5 recipe wrote into cd/TOMB.LEV, which stops the
+# PowerSlave disc and the Duke disc from coexisting and leaves the retail data corrupted if one
+# forgets to restore it.
+DUKE_LEV ?= build/duke2ps/e5/TOMB.LEV
+cd_duke/TOMB.LEV: $(DUKE_LEV) $(wildcard cd/*)
+	rm -rf cd_duke && mkdir -p cd_duke
+	@for f in cd/*; do b=$${f##*/}; \
+	   if [ "$$b" != TOMB.LEV ]; then ln "$$f" "cd_duke/$$b" 2>/dev/null || cp "$$f" "cd_duke/$$b"; fi; \
+	 done
+	cp "$(DUKE_LEV)" $@
+	@echo "cd_duke/: $$(ls cd_duke | wc -l) fichiers (liens durs vers cd/) + notre TOMB.LEV"
 $(ISO): $(BUILD)/INIT.BIN $(BUILD)/MAIN.BIN $(CD_DATA) $(IPFILE)
 	$(call mkiso,$@,$(IPFILE),$(BUILD)/INIT.BIN,$(BUILD)/MAIN.BIN)
 $(ISOJ): $(BUILD)/INIT.BIN $(BUILD)/MAIN.BIN $(CD_DATA) $(IPJUMP)
@@ -349,7 +395,7 @@ $(ISOJ): $(BUILD)/INIT.BIN $(BUILD)/MAIN.BIN $(CD_DATA) $(IPJUMP)
 RETAIL_DIR ?= refs/extract/PS
 ISOR  := $(BUILD)/slavedriver-retailbins.iso
 ISORJ := $(BUILD)/slavedriver-retailbins-ipjump.iso
-iso-retailbins: $(ISOR) $(ISORJ)
+iso-retailbins: $(ISOR:.iso=.cue) $(ISORJ:.iso=.cue)
 $(ISOR): $(RETAIL_DIR)/0 $(RETAIL_DIR)/MAIN.BIN $(CD_DATA) $(IPFILE)
 	$(call mkiso,$@,$(IPFILE),$(RETAIL_DIR)/0,$(RETAIL_DIR)/MAIN.BIN)
 $(ISORJ): $(RETAIL_DIR)/0 $(RETAIL_DIR)/MAIN.BIN $(CD_DATA) $(IPJUMP)
@@ -361,7 +407,7 @@ clean:
 	rm -rf build
 
 help:
-	@sed -n '2,14p' Makefile
+	@sed -n '2,17p' Makefile
 
 # auto dependencies (-MMD)
 -include $(ALL_OBJS:.o=.d)
