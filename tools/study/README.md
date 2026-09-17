@@ -1,6 +1,21 @@
-# tools/study — scripts de mesure des études 2026-09-12
+# tools/study — scripts de mesure
 
-Hors commits (comme `tools/duke2ps/`). Lancer depuis la racine du fork.
+Lancer depuis la racine du fork. Chemins d'entrée en dur dans chaque script.
+
+## Gisements de la conversion (2026-09-18)
+
+Mesurés sur **nos** `.LEV` (`cd_doom/E1M1.LEV`, `cd_duke/TOMB.LEV`), pas sur le retail — la
+différence est le résultat : E1M1 converti est fait de sols (murs 22,2 % / sols 46,6 % /
+plafonds 31,2 % des cellules), l'inverse du retail (66,8 / 19,6 / 13,5).
+
+| script | ce qu'il mesure | résultat |
+|---|---|---|
+| `balayage_ordre.py` | TOURS, PAS, budget et plafond de `tools/ordre.py` | les trois réglages sont au plafond ; toutes les paires = 86 %, pire que rien |
+| `debord.py` | redondance du débord des sols et plafonds | ×1,179 (pas ×1,57) ; 321 faces sur 2 985 retirables, neutralité vérifiée ; TOMB 0 |
+| `bandes_plafond.py` | jusqu'où la soudure de faces peut aller | 54,4 % aujourd'hui, **81,1 %** par réordonnancement seul, 95,7 % avec le virage ; tessellation = 51 jointures |
+| `soldom_vue.py` | le plan dominant, par position debout et non par saut de portail | 140 cellules médianes retirées (19,6 % de l'image), p90 324 |
+
+## Études 2026-09-12
 
 | script | ce qu'il mesure | doc |
 |---|---|---|

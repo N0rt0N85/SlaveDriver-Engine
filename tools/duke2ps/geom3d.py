@@ -54,6 +54,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import ordre                                            # noqa: E402
+import cout                                             # noqa: E402
 
 Q_DEFAULT = os.path.join(ROOT, "build", "duke2ps", "e1l1_quant.json")
 C_DEFAULT = os.path.join(ROOT, "build", "duke2ps", "e1l1_quant_convex.json")
@@ -1423,16 +1424,23 @@ def main(argv=None):
     for k in sorted(b.stats):
         print(f"    {k} : {b.stats[k]}")
 
+    # Comme chez Doom : le flot de visibilite sert deux fois, aux paires d'ordre et a la carte de
+    # cout, donc il est calcule une fois et passe aux deux. Il ne change rien a ce qui est emis.
+    vu = ordre.visibilite(em.sectors, em.walls, em.vertices)
     paires = []
     if "ordre" in OPTIM_ACTIFS:
         # Meme defaut que chez Doom : deux secteurs sans portail commun (les deux cotes d'un
         # pilier) ne recoivent aucune contrainte de buildTree. Le calcul ne lit que (S, W, V).
-        paires, st_ordre = ordre.paires_d_ordre(em.sectors, em.walls, em.vertices, trace=print)
+        paires, st_ordre = ordre.paires_d_ordre(em.sectors, em.walls, em.vertices, vu=vu,
+                                                trace=print)
         d = min(st_ordre, key=lambda s: (s["positions"], s["paires"], s["entrees"]))
         print(f"  paires d'ordre : {len(paires)} entrees ({4 + 6 * len(paires)} o), "
               f"{d['positions']}/{d['total']} positions encore fautives "
               f"({100.0 * d['positions'] / max(1, d['total']):.0f} %, "
-              f"{100.0 * st_ordre[0]['positions'] / max(1, d['total']):.0f} % sans la table)")
+              f"{100.0 * st_ordre[0]['positions'] / max(1, d['total']):.0f} % sans la table), "
+              f"{d['indecidables']} paires sans plan separateur")
+    _positions, st_cout = cout.carte(em.sectors, em.walls, vu[0], vu[1])
+    print(f"  cout : {cout.resume(st_cout)}")
 
     crit = check(em, quant, args.cap_cells)
     out = dict(format="duke2ps/e3-geom3d v1",

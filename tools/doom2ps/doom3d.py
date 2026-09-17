@@ -41,6 +41,7 @@ import wad as wadmod                                   # noqa: E402
 import adjacency                                       # noqa: E402
 import gridparts                                       # noqa: E402
 import ordre                                           # noqa: E402
+import cout                                            # noqa: E402
 import doom_specials as sp                             # noqa: E402
 from geom3d import (Emitter, TILESIZE, CAP_CELLS, plane_of, area2,     # noqa: E402
                     CELL_MIN_U, CELL_MAX_U, CELL_MIN_V, CELL_MAX_V, SECTOR_LIGHT,
@@ -284,22 +285,32 @@ PARTITION = "bsp"
 #   ordre     : liste de paires de secteurs que le moteur ordonnerait au hasard, faute de portail
 #               entre eux (tools/ordre.py) -- CORRIGE un defaut, elle n'ajoute aucun risque
 #
-# `fusion` n'est PAS dans le defaut, et ne le sera pas : c'est la seule des trois qui enleve de
-# l'information au moteur. Les cordes du BSP ne portent aucune texture, mais elles portent l'ORDRE
-# DU PEINTRE : `buildTree` (WALLS.C:2128) refait a chaque image un graphe « s apres adjoin » a
-# partir des portails tournes vers l'oeil, et quand ce graphe BOUCLE il le casse au hasard -- son
-# propre commentaire dit « this doesn't happen normally » puis « NOTE: this breaks the tree structure
-# somewhat » (WALLS.C:2368-2385). Un obstacle au milieu d'une piece entoure l'oeil d'un ANNEAU de
-# secteurs : A cache B qui cache C qui cache A, aucun ordre lineaire n'existe. MESURE console 16-09
-# (E1M1, salle tech) : la 1re version peignait les bandes haute et basse du mur du fond PAR-DESSUS
-# le U qui les cache, selon le point de vue ; l'A/B avec `--optim penombres,avalement` etait propre.
-# Deux gardes la rendent sure, toutes deux dans gridparts.partition : `troue()` refuse une piece
-# percee, et `--cap-canal` refuse une piece qui demanderait un canal de plans de coupe plus gros que
-# le plus gros que Lobotomy ait livre. MESURE console 17-09 : le defaut ne se reproduit plus, pour
-# -7,2 % de secteurs et -4,8 % de murs (219/1796 contre 236/1886). Elle reste optionnelle parce
-# qu'elle est destructrice : qui edite ses cartes a la main doit l'allumer en connaissance de cause.
+# `fusion` EST dans le defaut depuis le 18-09, apres deux verdicts contraires qu'il faut garder
+# ecrits tous les deux. Elle enleve de l'information au moteur : les cordes du BSP ne portent
+# aucune texture, mais elles portent l'ORDRE DU PEINTRE -- `buildTree` (WALLS.C:2128) refait a
+# chaque image un graphe « s apres adjoin » a partir des portails tournes vers l'oeil, et une corde
+# supprimee est une contrainte en moins. Quand ce graphe BOUCLE il se casse au hasard, son propre
+# commentaire disant « this doesn't happen normally » puis « NOTE: this breaks the tree structure
+# somewhat » (WALLS.C:2368-2385). L'A/B console du 16-09 (E1M1, salle tech) l'a donc accusee : la
+# 1re version peignait les bandes haute et basse du mur du fond PAR-DESSUS le U qui les cache,
+# selon le point de vue, et `--optim penombres,avalement` etait propre.
+#
+# C'ETAIT FAUX. Le defaut EXISTE sans elle -- le tonneau a travers la colonne de la 1re salle, le
+# cadavre a travers un caisson, meme disque, meme jour -- et la fusion ne faisait que le DEPLACER.
+# Deux secteurs sans portail commun n'ont jamais eu de contrainte, fusion ou pas (tools/ordre.py).
+# Une fois la liste de paires en place, la fusion AIDE meme : moins de secteurs, donc moins de
+# paires que la geometrie ne decide pas (182 -> 155), et 6 % de positions fautives contre 13 %
+# sans elle. Elle vaut par ailleurs -7,2 % de secteurs et -4,8 % de murs (219/1796 contre
+# 236/1886) -- mais PAS de cellules : 3 835 contre 3 870, soit -0,9 % (tools/cout.py). Recoller
+# deux feuilles ne retire aucun sol a peindre, seulement des secteurs a traverser (42 visites
+# medianes par position contre 45). Son gain est l'ORDRE, pas le remplissage.
+#
+# Elle reste DESTRUCTRICE, donc bornee et coupable. Deux gardes dans gridparts.partition : `troue()`
+# refuse une piece percee, `--cap-canal` refuse une piece qui demanderait un canal de plans de coupe
+# plus gros que le plus gros que Lobotomy ait livre. Et `--optim penombres,avalement,ordre` la
+# coupe : qui edite ses cartes a la main retrouve le decoupage exact du BSP.
 OPTIMS = ("penombres", "avalement", "fusion", "ordre")
-OPTIM_DEFAUT = ("penombres", "avalement", "ordre")
+OPTIM_DEFAUT = ("penombres", "avalement", "fusion", "ordre")
 OPTIM_ACTIFS = set(OPTIM_DEFAUT)
 
 # Plafond de secteurs par canal de plans de coupe, quand `fusion` est active (gridparts.CAP_CANAL
@@ -1710,17 +1721,25 @@ def main(argv=None):
               f"{max(canaux.values())} (--cap-canal {CAP_CANAL}), "
               f"pire depassement {pire_plan:.2f} u"
               + (f" -- {sans_plan} PAIRE(S) SANS PLAN, LE MOTEUR LIRAIT 99" if sans_plan else ""))
+    # Les points de vue du niveau et ce qu'on y voit : LE calcul cher, partage par les paires
+    # d'ordre et la carte de cout. Il ne change rien a ce qui est emis, donc il a lieu meme quand
+    # `ordre` est coupe -- un diagnostic ne se desactive pas avec une optimisation.
+    vu = ordre.visibilite(em.sectors, em.walls, em.vertices)
     paires = []
     if "ordre" in OPTIM_ACTIFS:
         # Deux secteurs sans portail commun ne recoivent AUCUNE contrainte de buildTree : seul le
         # scalaire `distance` les separe, et il se trompe de part et d'autre d'un obstacle. Voir
         # tools/ordre.py pour la mesure et pour ce que coutent les autres remedes.
-        paires, st_ordre = ordre.paires_d_ordre(em.sectors, em.walls, em.vertices, trace=print)
+        paires, st_ordre = ordre.paires_d_ordre(em.sectors, em.walls, em.vertices, vu=vu,
+                                                trace=print)
         d = min(st_ordre, key=lambda s: (s["positions"], s["paires"], s["entrees"]))
         print(f"  paires d'ordre : {len(paires)} entrees ({4 + 6 * len(paires)} o), "
               f"{d['positions']}/{d['total']} positions encore fautives "
               f"({100.0 * d['positions'] / max(1, d['total']):.0f} %, "
-              f"{100.0 * st_ordre[0]['positions'] / max(1, d['total']):.0f} % sans la table)")
+              f"{100.0 * st_ordre[0]['positions'] / max(1, d['total']):.0f} % sans la table), "
+              f"{d['indecidables']} paires sans plan separateur")
+    _positions, st_cout = cout.carte(em.sectors, em.walls, vu[0], vu[1])
+    print(f"  cout : {cout.resume(st_cout)}")
     if a.diag_fusion:
         print(f"  DIAGNOSTIC : {peindre_fusions(conv)} murs repeints en damier "
               f"(feuilles nees d'une fusion)")
