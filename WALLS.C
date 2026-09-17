@@ -1095,6 +1095,12 @@ static int wallCrossesNear(MthXyz *coords)
 int lodEnable=1;         /* 0 = aucune fusion, 1 = fusion, 2 = fusion peinte en bleu */
 int lodFused,lodCells,lodFlat; /* murs fusionnes, cellules economisees, cellules aplaties */
 static int slave_lodFused,slave_lodCells,slave_lodFlat;
+/* Cellules venues du chemin MAILLAGE (drawWall / slave_drawWall), c'est-a-dire des murs qui ne
+   sont pas des parallelogrammes.  Un sol ou un plafond de Doom est un polygone quelconque : il ne
+   peut pas etre une grille, donc il passe forcement par la.  Ce compteur dit quelle part de
+   l'image ils font -- et donc si fusionner des faces de maillage vaut d'etre construit. */
+int nmMeshPolys;
+static int slave_nmMeshPolys;
 extern unsigned char fogTable[256];
 
 /* APLAT PAR CELLULE -- le complement de la fusion, pour ce qu'elle ne peut pas prendre : un mur
@@ -1404,6 +1410,7 @@ void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 	continue;
 
      assert(getPicClass(level_face[f].tile)==TILE16BPP);
+     nmMeshPolys++;
      if (CELLISBLACK(gtable))
 	{EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOLOR,poly,NULL);
 	 nmPolys++;
@@ -1779,6 +1786,7 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
      if (clip || !clip_visible(probeVDP1(poly),s))
 	continue;
 
+     slave_nmMeshPolys++;
      if (CELLISBLACK(gtable))
 	{cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOLOR;
 	 cacheThruResult[nmSlavePolys].tile=-5;
@@ -2769,8 +2777,8 @@ void drawWalls(MthMatrix *view)
  slave_plaxBBxmax=-160;
  slave_plaxBBymax=-120;
 
- lodFused=0; lodCells=0; lodFlat=0;
- slave_lodFused=0; slave_lodCells=0; slave_lodFlat=0;
+ lodFused=0; lodCells=0; lodFlat=0; nmMeshPolys=0;
+ slave_lodFused=0; slave_lodCells=0; slave_lodFlat=0; slave_nmMeshPolys=0;
 
  slaveView=view;
  nmPolys=0;
@@ -2838,6 +2846,7 @@ void drawWallsFinish(void)
  lodFused+=slave_lodFused;
  lodCells+=slave_lodCells;
  lodFlat+=slave_lodFlat;
+ nmMeshPolys+=slave_nmMeshPolys;
  /* merge slave and master plax bbs */
  if (slave_plaxBBxmin<plaxBBxmin)
     plaxBBxmin=slave_plaxBBxmin;

@@ -2305,8 +2305,10 @@ int runLevel(char *filename,int levelNm)
      /* LEGENDE  polys : cellules emises, total / part de l'esclave.  La seconde divise
 		 SLAVECMDS de l'arbre pour donner le cout d'un enregistrement.
 		 (lod est sur la ligne fps, -60) */
-     drawStringf(-158,-70,1,"polys:%d/%d vcl:%d pipe:%d",nmPolys+nmSlavePolys,
-		 nmSlavePolys,vdp1NmClipped,pipeSpin);
+     /* msh : la part des cellules venue du chemin MAILLAGE -- sols, plafonds, murs courbes,
+	tout ce qui n'est pas un parallelogramme.  Ce qui reste est en grille de mur. */
+     drawStringf(-158,-70,1,"polys:%d/%d msh:%d vcl:%d pipe:%d",nmPolys+nmSlavePolys,
+		 nmSlavePolys,nmMeshPolys,vdp1NmClipped,pipeSpin);
 
      drawStringf(-158,-50,1,"time:%d %d:%d",
 		 (lastCalc+lastLastCalc)>>1,lastDraw,

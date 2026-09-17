@@ -26,6 +26,7 @@ void setFog(int dist);
    partout devient UN quad plat.  0 = jamais, 1 = fusion, 2 = fusion peinte en bleu pour voir
    lesquels partent.  lodFused/lodCells = murs fusionnes et cellules economisees dans l'image. */
 extern int lodEnable,lodFused,lodCells,lodFlat;
+extern int nmMeshPolys;   /* cellules venues du chemin maillage : sols, plafonds, murs courbes */
 
 int vdp1NmClipped;  /* cellules fenetrees en V dans l'image : remplace les maxima cx/cy */
 
