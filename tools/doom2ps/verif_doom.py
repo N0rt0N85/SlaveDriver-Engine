@@ -26,9 +26,18 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import coverage                                         # noqa: E402
 import lev                                              # noqa: E402
+import ordre                                            # noqa: E402
 
 FAIL = []
 OK = []
+
+# % de positions debout ou une paire de secteurs reste peinte dans le mauvais ordre. Ce n'est pas
+# zero et ca ne peut pas l'etre avec ce mecanisme : contraindre TOUTES les paires qui se
+# chevauchent donne 86 %, bien pire que les 68 % d'origine (tools/ordre.py explique pourquoi).
+# MESURE 18-09 sur le disque par defaut : 6 % avec la fusion, 13 % sans. Le seuil est une
+# DECISION, posee ici comme garde-fou de REGRESSION : il laisse passer les deux reglages et
+# refuse tout retour vers les 68 % d'avant la table.
+SEUIL_ORDRE = 20.0
 
 
 def put(name, ok, detail=""):
@@ -654,6 +663,18 @@ def main(argv=None):
     trous, aire = coverage.trous_de_flats(S, W, V, F)
     put(f"aucun trou dans un sol ou un plafond (> {coverage.SEUIL_TROU:.0f} u2 par feuille)",
         not trous, coverage.resume(trous, aire))
+
+    # 19. ORDRE DU PEINTRE : le second critere qui juge l'IMAGE et non le fichier. Il rejoue la
+    #     boucle de dessin du moteur depuis chaque position debout, avec la table DU FICHIER --
+    #     donc il attrape aussi bien une table mal calculee qu'une table bien calculee et mal
+    #     serialisee, ce qu'aucun critere du convertisseur ne peut voir. La regle et les mesures
+    #     sont dans tools/ordre.py ; le convertisseur Duke le rejoue tel quel (verif_e3.py).
+    o = ordre.evaluer(S, W, V, [(p["a"], p["b"], p["plane"]) for p in L["orderPairs"]])
+    pc = 100.0 * o["positions"] / max(1, o["total"])
+    put(f"ordre du peintre : moins de {SEUIL_ORDRE:.0f} % de positions fautives", pc <= SEUIL_ORDRE,
+        f"{o['positions']}/{o['total']} positions ({pc:.0f} %), {o['paires']} paires mal "
+        f"ordonnees, {o['entrees']} entrees de table, {o['indecidables']} paires sans plan, "
+        f"{o['perdues']} aretes refusees par MAXFANIN")
 
     print(f"\n  {len(OK)} OK, {len(FAIL)} echec(s)" + (f" : {FAIL}" if FAIL else ""))
     return 1 if FAIL else 0

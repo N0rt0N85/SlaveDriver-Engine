@@ -24,6 +24,15 @@ from collections import defaultdict
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import coverage                                                         # noqa: E402
+import ordre                                                            # noqa: E402
+
+# % de positions debout ou une paire de secteurs reste peinte dans le mauvais ordre. MESURE 18-09
+# sur TOMB : 79 % sans la table, 38 % avec. Duke est loin derriere Doom (6 %) et c'est attendu :
+# ses morceaux viennent d'une decomposition convexe (convex.py), pas d'un BSP, donc leurs murs
+# separent moins bien les paires. Le seuil est une DECISION, posee comme garde-fou de REGRESSION
+# au-dessus de la mesure du jour, pas comme un objectif de qualite -- il sera baisse quand le
+# decoupage de Duke le permettra.
+SEUIL_ORDRE = 50.0
 
 
 def area2(pts):
@@ -290,6 +299,20 @@ def main():
     res["flats_sans_trou"] = dict(
         ok=not trous, n=len(trous), total=len(S),
         exemples=(sorted(trous, key=lambda t: -t[2])[:4] if trous else [coverage.resume(trous, aire)]))
+
+    # --- K. ordre du peintre ----------------------------------------------------------------
+    # Les criteres ci-dessus jugent le FICHIER ; celui-ci juge l'IMAGE. Il rejoue la boucle de
+    # dessin du moteur depuis chaque position debout avec la table calculee, et compte les
+    # positions ou deux secteurs restent peints dans le mauvais ordre. Il vient du convertisseur
+    # Doom et ne lit que (S, W, V) : tools/ordre.py.
+    o = ordre.evaluer(S, W, V, [tuple(p) for p in (G.get("orderPairs") or [])])
+    pc = 100.0 * o["positions"] / max(1, o["total"])
+    res["ordre_du_peintre"] = dict(
+        ok=pc <= SEUIL_ORDRE, n=o["positions"], total=o["total"],
+        exemples=[f"{pc:.0f} % des positions (seuil {SEUIL_ORDRE:.0f} %)",
+                  f"{o['paires']} paires mal ordonnees", f"{o['entrees']} entrees de table",
+                  f"{o['indecidables']} paires sans plan separateur",
+                  f"{o['perdues']} aretes refusees par MAXFANIN"])
 
     ok = all(v["ok"] for v in res.values())
     for k, v in res.items():
