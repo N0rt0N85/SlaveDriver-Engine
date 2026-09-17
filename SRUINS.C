@@ -2274,7 +2274,15 @@ int runLevel(char *filename,int levelNm)
 
 
 #ifdef STATUSTEXT
-     CFG_PROF("Overlay"); drawStringf(-158,-60,1,"fps:%d %d",60/framesElapsed,60/(smoothVTime+1));
+     /* LEGENDE  fps : images par seconde, instantane puis lisse
+		 lod : murs fusionnes / cellules que la fusion a evitees / cellules emises a
+		       PLAT.  Les deux premieres ne sont plus dans polys ; la troisieme y est
+		       encore -- elle garde sa commande VDP1 et ne perd que sa texture.
+	 La ligne fps ne faisait que neuf colonnes sur la quarantaine lisibles, et -50 a -30
+	 sont pris (time, mem, puis l'arbre de profil) : le LOD tient ici. */
+     CFG_PROF("Overlay"); drawStringf(-158,-60,1,"fps:%d %d lod:%d/%d/%d",
+				      60/framesElapsed,60/(smoothVTime+1),
+				      lodFused,lodCells,lodFlat);
 
      CFG_STATUS_SECTOR();
 
@@ -2296,12 +2304,9 @@ int runLevel(char *filename,int levelNm)
 			 -1 = rien n'etait en vol (seisme, ou WALLPIPE a 0). */
      /* LEGENDE  polys : cellules emises, total / part de l'esclave.  La seconde divise
 		 SLAVECMDS de l'arbre pour donner le cout d'un enregistrement.
-		 lod   : murs fusionnes / cellules que la fusion a evitees / cellules emises a
-			 PLAT.  Les deux premieres ne sont plus dans polys ; la troisieme y est
-			 encore -- elle garde sa commande VDP1 et ne perd que sa texture. */
+		 (lod est sur la ligne fps, -60) */
      drawStringf(-158,-70,1,"polys:%d/%d vcl:%d pipe:%d",nmPolys+nmSlavePolys,
 		 nmSlavePolys,vdp1NmClipped,pipeSpin);
-     drawStringf(-158,-60,1,"lod:%d/%d/%d",lodFused,lodCells,lodFlat);
 
      drawStringf(-158,-50,1,"time:%d %d:%d",
 		 (lastCalc+lastLastCalc)>>1,lastDraw,
