@@ -1118,6 +1118,30 @@ extern unsigned char fogTable[256];
 #define CELLISBLACK(g) (lodEnable && \
 			!((g).entry[0]|(g).entry[1]|(g).entry[2]|(g).entry[3]))
 
+/* Meme test sur une cellule de GRILLE, avant que la boucle n'ait permute les coins pour la
+   texture : les quatre sommets sont aux indices de grille, pas dans l'ordre du motif. */
+#define LODCELLDARK(V) (lodEnable && \
+			!((V)[row1+w].light|(V)[row1+w+1].light| \
+			  (V)[row2+w].light|(V)[row2+w+1].light))
+
+/* SOUDURE D'UNE SUITE DE CELLULES NOIRES, dans une rangee de grille.
+   Elle est EXACTE, et voici pourquoi : une rangee de la grille est une DROITE du monde -- c'est
+   une rangee d'un parallelogramme, prise le long du vecteur largeur -- et une projection
+   perspective envoie une droite sur une droite.  Les sommets projetes d'une rangee sont donc
+   COLINEAIRES, et le quad soude passe exactement par ceux qu'il saute : ni trou, ni recouvrement.
+   Ce n'est pas une approximation qu'on borne, c'est une egalite.
+
+   Le seul sommet qui sortirait de cette droite est celui que rectTransform a borne au plan proche
+   -- mais il porte alors le bit de clip, donc sa lumiere n'est pas nulle, donc il coupe la suite
+   avant qu'elle ne l'atteigne.
+
+   w vaut ici UN DE PLUS que la derniere cellule noire : c'est l'arete droite du quad. */
+#define LODRUNQUAD(V) \
+   q[0].x=(V)[row1+runStart].x; q[0].y=(V)[row1+runStart].y; \
+   q[1].x=(V)[row1+w].x;        q[1].y=(V)[row1+w].y; \
+   q[2].x=(V)[row2+w].x;        q[2].y=(V)[row2+w].y; \
+   q[3].x=(V)[row2+runStart].x; q[3].y=(V)[row2+runStart].y
+
 static int wallIsBlack(sWallType *w,MthXyz *coords,int nmLit,int wavy)
 {int i,fog,n,base,maxl;
  if (!lodEnable || nmLit || wavy)
@@ -1156,13 +1180,21 @@ static int fuseWallPoly(MthXyz *coords,SectorDrawRecord *s,XyInt *q)
     project_point(coords+j,q+j);
  return clip_visible(q,s);
 }
-#define LODCOLOR ((lodEnable>1)? RGB(0,0,16): RGB(0,0,0))
+/* LOD PAINTED peint chaque etage d'une couleur DIFFERENTE, parce qu'un seul bleu ne repond pas a
+   la question qu'on lui pose.  Voir d'un coup d'oeil quel chemin a pris une surface :
+      VERT   un mur entier replie en un seul quad
+      BLEU   une soudure de cellules noires dans une grille de mur
+      ROUGE  une face de maillage -- donc un sol, un plafond ou un mur courbe */
+#define LODCOL_FUSE ((lodEnable>1)? RGB(0,24,0): RGB(0,0,0))
+#define LODCOL_RECT ((lodEnable>1)? RGB(0,0,24): RGB(0,0,0))
+#define LODCOL_MESH ((lodEnable>1)? RGB(24,0,0): RGB(0,0,0))
 
 void drawRectWall(sWallType *theWall,MthXyz *coords,
 		  SectorDrawRecord *s)
 {MthXyz vWidth,vHeight;
  XyInt poly[4];
  int w,h,clip;
+ int runStart;   /* debut de la suite de cellules noires en cours, -1 = aucune */
  int light;
  int tex,row1,row2;
  register char *ppattern;
@@ -1198,7 +1230,7 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
  if (wallIsBlack(theWall,coords,nmWallLights,wavyIndex))
     {XyInt q[4];
      if (fuseWallPoly(coords,s,q))
-	{EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOLOR,q,NULL);
+	{EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_FUSE,q,NULL);
 	 lodFused++;
 	 lodCells+=theWall->tileHeight*theWall->tileLength-1;
 	}
@@ -1239,8 +1271,28 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
  row2=width+1;
  pushProfile("2nd Half");
  for (h=0;h<height;h++)
-    {for (w=0;w<width;w++)
-	{clip=0x8000;
+    {runStart=-1;
+     for (w=0;w<=width;w++)
+	{if (w<width && LODCELLDARK(vCalc))
+	    {if (runStart<0)
+		runStart=w;
+	     tex+=2;
+	     continue;
+	    }
+	 if (runStart>=0)
+	    {XyInt q[4];
+	     LODRUNQUAD(vCalc);
+	     if (clip_visible(q,s))
+		{EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_RECT,q,NULL);
+		 nmPolys++;
+		 lodFlat++;
+		}
+	     lodCells+=w-runStart-1;
+	     runStart=-1;
+	    }
+	 if (w==width)
+	    break;
+	 clip=0x8000;
 #if MIPMAP
 	 if (tileBias)
 	    {/* GCC14: a mip cell is ONE sprite whose pic replicates ONE half-res tile 2x2
@@ -1339,13 +1391,6 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 	    }
 
 	 assert(getPicClass(level_texture[tex])==TILE16BPP);
-	 if (CELLISBLACK(gtable))
-	    {EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOLOR,poly,NULL);
-	     nmPolys++;
-	     lodFlat++;
-	     tex++;
-	     continue;
-	    }
 #if 0
 	 EZ_distSpr(DIR_NOREV,
 		    UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|
@@ -1412,7 +1457,7 @@ void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
      assert(getPicClass(level_face[f].tile)==TILE16BPP);
      nmMeshPolys++;
      if (CELLISBLACK(gtable))
-	{EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOLOR,poly,NULL);
+	{EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_MESH,poly,NULL);
 	 nmPolys++;
 	 lodFlat++;
 	 continue;
@@ -1543,6 +1588,7 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 {MthXyz vWidth,vHeight;
  XyInt poly[4];
  int w,h,v,clip;
+ int runStart;   /* debut de la suite de cellules noires en cours, -1 = aucune */
  int light;
  int tex,row1,row2;
  int width=theWall->tileLength; /* GCC14: not const, halved under #if MIPMAP */
@@ -1595,7 +1641,7 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
      int j;
      if (fuseWallPoly(coords,s,q))
 	{cacheThruResult[nmSlavePolys].tile=-5;
-	 cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOLOR;
+	 cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOL_FUSE;
 	 for (j=0;j<4;j++)
 	    cacheThruResult[nmSlavePolys].poly[j]=q[j];
 	 nmSlavePolys++;
@@ -1626,8 +1672,31 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
  row1=0;
  row2=width+1;
  for (h=0;h<height;h++)
-    {for (w=0;w<width;w++)
-	{clip=0x8000;
+    {runStart=-1;
+     for (w=0;w<=width;w++)
+	{if (w<width && LODCELLDARK(slave_vCalc))
+	    {if (runStart<0)
+		runStart=w;
+	     tex+=2;
+	     continue;
+	    }
+	 if (runStart>=0)
+	    {XyInt q[4];
+	     LODRUNQUAD(slave_vCalc);
+	     if (clip_visible(q,s))
+		{cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOL_RECT;
+		 cacheThruResult[nmSlavePolys].tile=-5;
+		 for (v=0;v<4;v++)
+		    cacheThruResult[nmSlavePolys].poly[v]=q[v];
+		 nmSlavePolys++;
+		 slave_lodFlat++;
+		}
+	     slave_lodCells+=w-runStart-1;
+	     runStart=-1;
+	    }
+	 if (w==width)
+	    break;
+	 clip=0x8000;
 #if MIPMAP
 	 if (tileBias)
 	    {/* GCC14: a mip cell is ONE sprite whose pic replicates ONE half-res tile 2x2
@@ -1729,16 +1798,6 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 	     continue;
 	    }
 
-	 if (CELLISBLACK(gtable))
-	    {cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOLOR;
-	     cacheThruResult[nmSlavePolys].tile=-5;
-	     for (v=0;v<4;v++)
-		cacheThruResult[nmSlavePolys].poly[v]=poly[v];
-	     nmSlavePolys++;
-	     slave_lodFlat++;
-	     tex++;
-	     continue;
-	    }
 	 cacheThruResult[nmSlavePolys].gtable=gtable;
 	 for (v=0;v<4;v++)
 	    cacheThruResult[nmSlavePolys].poly[v]=poly[v];
@@ -1788,7 +1847,7 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 
      slave_nmMeshPolys++;
      if (CELLISBLACK(gtable))
-	{cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOLOR;
+	{cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOL_MESH;
 	 cacheThruResult[nmSlavePolys].tile=-5;
 	 for (i=0;i<4;i++)
 	    cacheThruResult[nmSlavePolys].poly[i]=poly[i];
