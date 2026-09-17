@@ -2092,6 +2092,24 @@ int runLevel(char *filename,int levelNm)
       else
 	 mipChord=0;
      }
+     {/* tenir L+R+B -- ou A+B+Z -- pour faire tourner le LOD par lumiere.  Trois crans : aucune
+	 fusion, fusion, puis fusion PEINTE en bleu, qui montre lesquels des murs sont partis et
+	 sert a regler la brume jusqu'a ce que la bascule soit invisible. */
+      static char lodChord=0;
+      if (((((~lastInputSample)&(PER_DGT_TL|PER_DGT_TR|PER_DGT_B)))==
+	   (PER_DGT_TL|PER_DGT_TR|PER_DGT_B)) ||
+	  ((((~lastInputSample)&(PER_DGT_A|PER_DGT_B|PER_DGT_Z)))==
+	   (PER_DGT_A|PER_DGT_B|PER_DGT_Z)))
+	 {if (!lodChord)
+	     {static char *lodName[3]={"LOD OFF","LOD ON","LOD PAINTED"};
+	      lodEnable=(lodEnable+1)%3;
+	      changeMessage(lodName[lodEnable]);
+	      lodChord=1;
+	     }
+	 }
+      else
+	 lodChord=0;
+     }
      {/* tenir L+R+Z -- ou A+C+Z, pour les pads dont les gachettes ne rendent que de
 	 l'analogique -- pour faire tourner la brume de profondeur.  Quatre crans : le
 	 comportement d'origine, puis le noir a 2048, 1024 et 512 unites.  C'est un ECART
@@ -2277,10 +2295,12 @@ int runLevel(char *filename,int levelNm)
 			 de l'image precedente.  0 = elle tenait entierement dans la queue ;
 			 -1 = rien n'etait en vol (seisme, ou WALLPIPE a 0). */
      /* LEGENDE  polys : cellules emises, total / part de l'esclave.  La seconde divise
-		 SLAVECMDS de l'arbre pour donner le cout d'un enregistrement -- le chiffre
-		 qui dit si ce poste vaut d'etre attaque. */
+		 SLAVECMDS de l'arbre pour donner le cout d'un enregistrement.
+		 lod   : murs fusionnes par le LOD / cellules que cette fusion a evitees.  La
+			 seconde est le gain BRUT -- a comparer a polys, qui ne les compte plus. */
      drawStringf(-158,-70,1,"polys:%d/%d vcl:%d pipe:%d",nmPolys+nmSlavePolys,
 		 nmSlavePolys,vdp1NmClipped,pipeSpin);
+     drawStringf(-158,-60,1,"lod:%d/%d",lodFused,lodCells);
 
      drawStringf(-158,-50,1,"time:%d %d:%d",
 		 (lastCalc+lastLastCalc)>>1,lastDraw,

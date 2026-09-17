@@ -22,6 +22,11 @@ extern int pipeSpin;          /* tours d'attente a la jointure ; -1 = rien n'eta
 extern int fogDist;
 void setFog(int dist);
 
+/* LOD par lumiere (WALLS.C, en tete de drawRectWall) : un mur que la brume a deja rendu noir
+   partout devient UN quad plat.  0 = jamais, 1 = fusion, 2 = fusion peinte en bleu pour voir
+   lesquels partent.  lodFused/lodCells = murs fusionnes et cellules economisees dans l'image. */
+extern int lodEnable,lodFused,lodCells;
+
 int vdp1NmClipped;  /* cellules fenetrees en V dans l'image : remplace les maxima cx/cy */
 
 int vdp1MaxCoord;   /* max(|x|,|y|) -- conserve pour compatibilite d'affichage */

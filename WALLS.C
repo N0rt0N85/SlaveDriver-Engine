@@ -1070,6 +1070,73 @@ static int wallCrossesNear(MthXyz *coords)
 	}								\
     }
 
+/* --- LOD PAR LUMIERE -------------------------------------------------------------------------
+   Un mur n'est decoupe en grille QUE pour corriger la perspective de sa texture : le VDP1 etire
+   un motif entre quatre sommets sans diviser par pixel, donc il faut de petits quads.  Quand la
+   brume a ramene la lumiere de TOUS les sommets a zero, il n'y a plus rien a corriger -- le
+   gouraud retire 16 a chaque canal et il ne reste que du noir.  Le mur devient alors UN
+   quadrilatere : quatre sommets projetes au lieu de (h+1)(w+1), une commande VDP1 au lieu de
+   h*w, et plus aucune tuile demandee au cache.
+
+   Le critere n'est pas un reglage, c'est une egalite.  L'assembleur calcule
+   lumiere = level_vertexLight[] - fogTable[z>>24], bornee a zero ; elle vaut donc zero PARTOUT
+   si et seulement si la brume au point le plus PROCHE du mur atteint deja sa lumiere statique la
+   plus FORTE.  Les deux bornes sont prises dans le sens conservateur : jamais de fusion sur un
+   mur qui aurait encore quelque chose a montrer.  Et rien la-dedans ne regarde le temps d'image
+   -- ce n'est pas un gouverneur, le critere EST l'image.
+
+   Une lumiere dynamique casse la condition, et c'est tout l'interet : la boule de feu de l'imp
+   doit rendre sa texture au mur qu'elle eclaire.  buildLightList vient de poser nmWallLights
+   POUR CE MUR, donc le veto est gratuit et local -- le detail revient la ou la lumiere tombe et
+   nulle part ailleurs.
+
+   La brume paie le LOD : sans brume (fog 4096) la condition ne se declenche quasiment jamais, ce
+   qui est honnete puisqu'il n'y a alors rien derriere quoi cacher la simplification. */
+int lodEnable=1;         /* 0 = aucune fusion, 1 = fusion, 2 = fusion peinte en bleu */
+int lodFused,lodCells;   /* murs fusionnes, cellules economisees -- part du maitre */
+static int slave_lodFused,slave_lodCells;
+extern unsigned char fogTable[256];
+
+static int wallIsBlack(sWallType *w,MthXyz *coords,int nmLit,int wavy)
+{int i,fog,n,base,maxl;
+ if (!lodEnable || nmLit || wavy)
+    return 0;
+ fog=coords[0].z;              /* le coin le plus PROCHE, donc la brume la plus faible */
+ for (i=1;i<4;i++)
+    if (coords[i].z<fog)
+       fog=coords[i].z;
+ if (fog<=0)
+    return 0;
+ fog>>=24;                     /* fogTable indexe des tranches de 256 unites, comme l'asm */
+ if (fog>255)
+    fog=255;
+ fog=fogTable[fog];
+ if (fog<1)
+    return 0;   /* pas de brume ici -- sort avant de balayer les lumieres des murs proches */
+ if (fog<31)    /* au-dela, aucune lumiere statique ne survit : inutile de les lire */
+    {base=w->firstLight;
+     n=(w->tileHeight+1)*(w->tileLength+1);
+     maxl=0;
+     for (i=0;i<n;i++)
+	if (level_vertexLight[base+i]>maxl)
+	   maxl=level_vertexLight[base+i];
+     if (maxl>fog)
+	return 0;
+    }
+ return 1;
+}
+
+/* Les quatre coins du mur, projetes comme rectTransform les aurait projetes -- meme division par
+   z, meme negation de y (wallasm_gnu.s:_project_point et .Lrt_retFromLit).  Retourne 0 si le quad
+   n'est pas visible dans le secteur. */
+static int fuseWallPoly(MthXyz *coords,SectorDrawRecord *s,XyInt *q)
+{int j;
+ for (j=0;j<4;j++)
+    project_point(coords+j,q+j);
+ return clip_visible(q,s);
+}
+#define LODCOLOR ((lodEnable>1)? RGB(0,0,16): RGB(0,0,0))
+
 void drawRectWall(sWallType *theWall,MthXyz *coords,
 		  SectorDrawRecord *s)
 {MthXyz vWidth,vHeight;
@@ -1106,6 +1173,16 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 #endif
 
  buildLightList(theWall);
+
+ if (wallIsBlack(theWall,coords,nmWallLights,wavyIndex))
+    {XyInt q[4];
+     if (fuseWallPoly(coords,s,q))
+	{EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOLOR,q,NULL);
+	 lodFused++;
+	 lodCells+=theWall->tileHeight*theWall->tileLength-1;
+	}
+     return;
+    }
 
  Set_Hardware_Divide(coords[1].x-coords[0].x,width);
  vWidth.y=(coords[1].y-coords[0].y)/width;
@@ -1477,6 +1554,21 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 #ifdef LIGHT
  sbuildLightList(theWall);
 #endif
+
+ if (wallIsBlack(theWall,coords,snmWallLights,sWavyIndex))
+    {XyInt q[4];
+     int j;
+     if (fuseWallPoly(coords,s,q))
+	{cacheThruResult[nmSlavePolys].tile=-5;
+	 cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOLOR;
+	 for (j=0;j<4;j++)
+	    cacheThruResult[nmSlavePolys].poly[j]=q[j];
+	 nmSlavePolys++;
+	 slave_lodFused++;
+	 slave_lodCells+=theWall->tileHeight*theWall->tileLength-1;
+	}
+     return;
+    }
 
  light=theWall->firstLight;
 
@@ -2137,6 +2229,13 @@ void drawSlaveWalls(void)
     {if (slaveResult[i].tile<0)
 	{switch (slaveResult[i].tile)
 	    {
+	     case -5:
+		{/* mur fusionne par le LOD : un seul quad, la couleur est dans la table gouraud
+		    faute d'un autre champ libre dans l'enregistrement */
+		 EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,
+			    slaveResult[i].gtable.entry[0],slaveResult[i].poly,NULL);
+		 continue;
+		}
 #if 0
 	     case -4:
 		EZ_polygon(DRAW_GOURAU|DRAW_MESH|ECD_DISABLE|SPD_DISABLE,
@@ -2623,6 +2722,9 @@ void drawWalls(MthMatrix *view)
  slave_plaxBBxmax=-160;
  slave_plaxBBymax=-120;
 
+ lodFused=0; lodCells=0;
+ slave_lodFused=0; slave_lodCells=0;
+
  slaveView=view;
  nmPolys=0;
  vdp1NmClipped=0;
@@ -2683,6 +2785,11 @@ void drawWallsFinish(void)
  drawDebugLines();
 #endif
  updateLights();
+ /* La part de l'esclave dans les compteurs de LOD.  Meme regle que la boite du plax juste en
+    dessous : l'esclave les ecrit par des adresses normales, et drawSlaveWalls a purge le cache du
+    maitre avant qu'on arrive ici. */
+ lodFused+=slave_lodFused;
+ lodCells+=slave_lodCells;
  /* merge slave and master plax bbs */
  if (slave_plaxBBxmin<plaxBBxmin)
     plaxBBxmin=slave_plaxBBxmin;
