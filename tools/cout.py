@@ -12,6 +12,20 @@ LA LOI (docs/STEXT_BASELINE_2026-09-12.md, 5 captures STATUSTEXT sur console, bu
 `cellules` est `nmPolys + nmSlavePolys` : les cellules de murs et les faces de sols et plafonds,
 SANS les sprites. C'est exactement ce qui est compte ici.
 
+⚠ CETTE LOI EST PESSIMISTE SUR UN BUILD NDEBUG, et donc les paliers ci-dessus aussi. 6 captures
+console du 18-09 (E1M1, cour, build -NDebug -StatusText), `polys` contre `calc` lu en lignes de
+balayage a 63,56 us :
+    493 -> 22,95 ms   505 -> 22,44   498 -> 22,18   402 -> 21,93   501 -> 22,82   286 -> 18,69
+A 500 cellules la loi annonce 34,5 ms, la console en mesure 22,4 : elle SUR-ESTIME de 1,5x. Le
+fixe, lui, tient (14,3 contre 14,9 par moindres carres) -- ce qui tombe juste, puisque les asserts
+supprimes etaient DEUX PAR CELLULE dont un appel de fonction (WALLS.C:1142 et :1172). C'est la
+PENTE qui s'effondre, pas le plancher.
+⚠ NE PAS recalculer les constantes sur ces six points : cinq sont tasses entre 402 et 505
+cellules, le sixieme fait tout le bras de levier, et ils melangent des cellules texturees et des
+cellules aplaties par le LOD, qui ne coutent pas pareil. Il faut une campagne qui fasse VARIER le
+point de vue. En attendant, lire les paliers comme une borne haute : une position donnee pour
+« au-dela de 470 » peut encore tenir les 30 images.
+
 ⚠ LA PENTE MOYENNE N'EST PAS LA MARGE. 39,2 us situe une position sur l'echelle ; elle ne dit pas
 ce que rend une cellule RETIREE, qui vaut 24 us, et 12-18 pour une face de plat (une face ne paie
 ni la preparation de son mur ni ses 4 sommets : `normTransform` transforme la plage une fois par

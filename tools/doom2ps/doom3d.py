@@ -284,6 +284,8 @@ PARTITION = "bsp"
 #               (gridparts.partition, g=None) -- elle DETRUIT des cordes du BSP, voir ci-dessous
 #   ordre     : liste de paires de secteurs que le moteur ordonnerait au hasard, faute de portail
 #               entre eux (tools/ordre.py) -- CORRIGE un defaut, elle n'ajoute aucun risque
+#   bandes    : les faces d'un mur sont rangees dans l'ordre ou weldFaceStrip sait les souder
+#               (tools/bandes.py) -- PERMUTATION pure, aucun sommet ne bouge, aucune face ne change
 #
 # `fusion` EST dans le defaut depuis le 18-09, apres deux verdicts contraires qu'il faut garder
 # ecrits tous les deux. Elle enleve de l'information au moteur : les cordes du BSP ne portent
@@ -309,8 +311,8 @@ PARTITION = "bsp"
 # refuse une piece percee, `--cap-canal` refuse une piece qui demanderait un canal de plans de coupe
 # plus gros que le plus gros que Lobotomy ait livre. Et `--optim penombres,avalement,ordre` la
 # coupe : qui edite ses cartes a la main retrouve le decoupage exact du BSP.
-OPTIMS = ("penombres", "avalement", "fusion", "ordre")
-OPTIM_DEFAUT = ("penombres", "avalement", "fusion", "ordre")
+OPTIMS = ("penombres", "avalement", "fusion", "ordre", "bandes")
+OPTIM_DEFAUT = ("penombres", "avalement", "fusion", "ordre", "bandes")
 OPTIM_ACTIFS = set(OPTIM_DEFAUT)
 
 # Plafond de secteurs par canal de plans de coupe, quand `fusion` est active (gridparts.CAP_CANAL
@@ -485,6 +487,7 @@ class DoomConverter:
         self.em = Emitter()
         if "avalement" not in OPTIM_ACTIFS:
             self.em.eps_avale = 0.0           # --optim : l'auteur refuse l'avalement des echardes
+        self.em.bandes = "bandes" in OPTIM_ACTIFS
         self.cap = cap_cells
         self.sizes = sizes                    # {nom de texture: (w, h)}
         self.pic = {}                         # ("tex"|"flat", nom) -> picnum

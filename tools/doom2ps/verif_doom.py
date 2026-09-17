@@ -24,6 +24,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+import bandes                                           # noqa: E402
 import coverage                                         # noqa: E402
 import lev                                              # noqa: E402
 import ordre                                            # noqa: E402
@@ -675,6 +676,23 @@ def main(argv=None):
         f"{o['positions']}/{o['total']} positions ({pc:.0f} %), {o['paires']} paires mal "
         f"ordonnees, {o['entrees']} entrees de table, {o['indecidables']} paires sans plan, "
         f"{o['perdues']} aretes refusees par MAXFANIN")
+
+    # 20. BANDES DE MAILLAGE : les faces d'un mur sont-elles rangees dans l'ordre ou
+    #     weldFaceStrip sait les souder ? Le critere n'a PAS de seuil arbitraire -- il recalcule
+    #     le plafond sur les faces du fichier lui-meme (tools/bandes.py, couplage biparti, donc
+    #     optimum exact) et exige qu'on y soit. Un ordre d'emission relache se voit tout de suite.
+    atteint = possibles = plafond = 0
+    for w in W:
+        if w["firstFace"] < 0:
+            continue
+        q = [F[i]["v"] for i in range(w["firstFace"], w["lastFace"] + 1)]
+        possibles += max(0, len(q) - 1)
+        atteint += bandes.jointures(q)
+        o, _c = bandes.ordonner(q)
+        plafond += bandes.jointures([q[i] for i in o])
+    put("faces rangees en bandes soudables (au plafond du rangement)", atteint >= plafond,
+        f"{atteint}/{possibles} jointures ({100.0 * atteint / max(1, possibles):.1f} %), "
+        f"plafond {plafond} ({100.0 * plafond / max(1, possibles):.1f} %)")
 
     print(f"\n  {len(OK)} OK, {len(FAIL)} echec(s)" + (f" : {FAIL}" if FAIL else ""))
     return 1 if FAIL else 0

@@ -53,6 +53,7 @@ from collections import Counter, defaultdict
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+import bandes                                           # noqa: E402
 import ordre                                            # noqa: E402
 import cout                                             # noqa: E402
 
@@ -107,7 +108,9 @@ CAP_CELLS = 256   # borne de decoupe. MESURE retail : le plus gros mur PARALLELO
 #               s'etend sur le residu (_grid_cells) -- etirement borne a x1,25
 #   ordre     : liste de paires de secteurs que le moteur ordonnerait au hasard, faute de portail
 #               entre eux (tools/ordre.py) -- CORRIGE un defaut, elle n'ajoute aucun risque
-OPTIMS = ("avalement", "ordre")
+#   bandes    : les faces d'un mur sont rangees dans l'ordre ou weldFaceStrip sait les souder
+#               (tools/bandes.py) -- PERMUTATION pure, aucun sommet ne bouge
+OPTIMS = ("avalement", "ordre", "bandes")
 OPTIM_ACTIFS = set(OPTIMS)
 
 
@@ -366,6 +369,9 @@ class Emitter:
         # Avalement des echardes (voir _grid_cells). Reglable par l'appelant : les deux
         # convertisseurs le mettent a 0 quand l'auteur refuse cette optimisation (--optim none).
         self.eps_avale = EPS_AVALE
+        # Rangement des faces en bandes soudables (tools/bandes.py). Meme regle que ci-dessus :
+        # les deux convertisseurs le coupent quand l'auteur refuse l'optimisation.
+        self.bandes = True
         self.vertices = []      # {x,y,z,light,pad}
         self.faces = []         # {v[4] LOCAUX au mur, tile, pad}
         self.texture = []       # unsigned char, 2 par cellule : [motif, tuile]
@@ -506,7 +512,7 @@ class Emitter:
                 w["firstLight"] = len(self.vertexLight)
                 self.vertexLight.extend([light] * ((tl + 1) * (th + 1)))
             else:
-                self._faces_from_quad(w, quad, tl, th, picnum, light, tex)
+                self._faces_from_quad(w, quad, tl, th, picnum, light, tex, stats)
                 if stats is not None:
                     stats["murs_trapezes"] += 1
         self.walls.append(w)
@@ -515,7 +521,25 @@ class Emitter:
             stats["cellules_max"] = max(stats["cellules_max"], tl * th)
         return [len(self.walls) - 1]
 
-    def _faces_from_quad(self, w, quad, tl, th, picnum, light, tex=None):
+    def push_faces(self, w, faces, stats=None):
+        """Pose les faces d'un mur, apres les avoir rangees dans l'ordre ou le moteur sait les
+        SOUDER (tools/bandes.py : weldFaceStrip n'enchaine que des faces consecutives liees par
+        des aretes opposees). C'est une PERMUTATION -- aucun sommet ne bouge, aucune face ne
+        change, et l'ordre de v[0..3], qui porte l'orientation de la texture, est intact."""
+        avant = bandes.jointures([f["v"] for f in faces])
+        apres, casses = avant, 0
+        if self.bandes:
+            faces, avant, apres, casses = bandes.ranger(faces)
+        if stats is not None:
+            stats["bandes_possibles"] += max(0, len(faces) - 1)
+            stats["bandes_avant"] += avant
+            stats["bandes_apres"] += apres
+            stats["bandes_cycles"] += casses
+        w["firstFace"] = len(self.faces)
+        self.faces.extend(faces)
+        w["lastFace"] = len(self.faces) - 1
+
+    def _faces_from_quad(self, w, quad, tl, th, picnum, light, tex=None, stats=None):
         """Mur non parallelogramme : grille (tl x th) par interpolation bilineaire sur le quad,
         emise en faces explicites. L'ordre des coins suit drawRectWall (WALLS.C:1105-1120) :
         (h,w), (h,w+1), (h+1,w+1), (h+1,w)."""
@@ -532,10 +556,10 @@ class Emitter:
                 pts.append(tuple(int(round(x)) for x in lerp(a, b, h / th)) + (light,))
         fv, lv = self.push_vertices(pts, light)
         w["firstVertex"], w["lastVertex"] = fv, lv
-        w["firstFace"] = len(self.faces)
         # Une FACE n'a pas d'octet motif (sFaceType = v[4] + tile + pad, SLEVEL.H:120-124, et
         # WALLS.C:1223-1231 mappe poly[i]=vCalc[v[i]] sans permutation) : son orientation EST
         # l'ordre de v[0..3]. On applique donc le miroir en permutant les sommets.
+        faces = []
         for h in range(th):
             r1, r2 = h * (tl + 1), (h + 1) * (tl + 1)
             for c in range(tl):
@@ -545,8 +569,8 @@ class Emitter:
                 q = [r1 + c, r1 + c + 1, r2 + c + 1, r2 + c]
                 if pat:
                     q = [q[i] for i in FACE_PERM[pat]]
-                self.faces.append(dict(v=q, tile=t, pad=0))
-        w["lastFace"] = len(self.faces) - 1
+                faces.append(dict(v=q, tile=t, pad=0))
+        self.push_faces(w, faces, stats)
 
     def _split_wall(self, quad, tl, th, *, cap_cells, stats=None, **kw):
         """Decoupe un mur dont tileLength*tileHeight depasse la reservation du slave (WALLS.C:1374).
@@ -683,10 +707,7 @@ class Emitter:
             return []
         fvp, lvp = self.push_vertices(pts, light)
         w["firstVertex"], w["lastVertex"] = fvp, lvp
-        w["firstFace"] = len(self.faces)
-        for q, tile in faces:
-            self.faces.append(dict(v=list(q), tile=tile, pad=0))
-        w["lastFace"] = len(self.faces) - 1
+        self.push_faces(w, [dict(v=list(q), tile=tile, pad=0) for q, tile in faces], stats)
         self.walls.append(w)
         if stats is not None:
             stats["faces_plats"] += len(faces)
@@ -957,6 +978,7 @@ class Builder:
         self.em = Emitter()
         if "avalement" not in OPTIM_ACTIFS:
             self.em.eps_avale = 0.0           # --optim : l'auteur refuse l'avalement des echardes
+        self.em.bandes = "bandes" in OPTIM_ACTIFS
         self.stats = Counter()
         self.stats["cellules_max"] = 0
         # morceau -> secteur gen1 (meme indice : un morceau = un secteur)
