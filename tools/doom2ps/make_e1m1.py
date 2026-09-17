@@ -250,7 +250,9 @@ def assemble_doom(G, T, sprites, sounds, objects, params, sky, palette, switches
         texture=list(G["texture"]), vertexLight=list(G["vertexLight"]),
         # Plans de coupe : rendent au peintre l'ordre que la fusion des feuilles lui prend
         # (doom3d.plans_de_coupe). Liste vide quand aucune fusion n'a eu lieu.
-        cutPlane=[list(r) for r in (G.get("cutPlane") or [])])
+        cutPlane=[list(r) for r in (G.get("cutPlane") or [])],
+        # Paires d'ordre : bloc optionnel apres le cutPlane (tools/ordre.py).
+        orderPairs=[tuple(p) for p in (G.get("orderPairs") or [])])
     snd = dict(map=list(sounds["map"]),
                sounds=[dict(rate=s["rate"], bps=s["bps"], loopStart=s["loopStart"], pcm=s["pcm"])
                        for s in sounds["sounds"]])

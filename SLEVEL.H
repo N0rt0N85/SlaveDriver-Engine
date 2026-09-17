@@ -2,6 +2,18 @@
 #ifndef __INCLUDEDslevelh
 #define __INCLUDEDslevelh
 
+/* Ordering pair: two sectors with NO portal between them -- the two sides of a pillar -- which
+   buildTree therefore leaves entirely to the distance scalar.  `plane` names the wall whose plane
+   decides, same encoding as level_cutPlane: an offset from firstWall of `a`, or of `b` when bit
+   0x80 is set.  The block is OPTIONAL and sits after cutPlane; the header has no field left, so
+   its presence is read off the level block size.  Retail levels have none. */
+typedef
+struct
+{short a,b;
+ unsigned char plane;
+ unsigned char pad;
+} sOrderPair;
+
 struct sLevelHeader
 {int nmSectors;
  int nmWalls;

@@ -106,7 +106,24 @@ def level_parts(lv):
         ('texture', _u8(lv['texture'], 'level.texture')),
         ('vertexLight', _u8(lv['vertexLight'], 'level.vertexLight')),
         ('cutPlane', b''.join(_u8(r, 'level.cutPlane') for r in cut)),
+        # PAIRES D'ORDRE -- bloc OPTIONNEL, apres tout ce que le format retail contient.  Le
+        # chargeur connait la taille totale du bloc niveau et sait donc s'il reste des octets :
+        # un .LEV retail s'arrete au cutPlane et n'en lit aucun (LEVEL.C, voir tools/ordre.py
+        # pour ce que ces paires corrigent).
+        ('orderPair', _paires_d_ordre(lv.get('orderPairs') or [])),
     ]
+
+
+def _paires_d_ordre(paires):
+    """int n, puis n x (short a, short b, uchar plane, uchar pad) -- 6 octets par entree."""
+    if not paires:
+        return b''
+    out = [struct.pack('>i', len(paires))]
+    for a, b, plane in paires:
+        if not (0 <= a < 32768 and 0 <= b < 32768 and 0 <= plane < 256):
+            raise ValueError('orderPair (%r, %r, %r) hors bornes' % (a, b, plane))
+        out.append(struct.pack('>hhBB', a, b, plane, 0))
+    return b''.join(out)
 
 
 def level_header(lv):

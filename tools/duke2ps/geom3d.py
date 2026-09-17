@@ -52,6 +52,9 @@ from collections import Counter, defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import ordre                                            # noqa: E402
+
 Q_DEFAULT = os.path.join(ROOT, "build", "duke2ps", "e1l1_quant.json")
 C_DEFAULT = os.path.join(ROOT, "build", "duke2ps", "e1l1_quant_convex.json")
 OUT_DEFAULT = os.path.join(ROOT, "build", "duke2ps", "e1l1_geom3d.json")
@@ -101,7 +104,9 @@ CAP_CELLS = 256   # borne de decoupe. MESURE retail : le plus gros mur PARALLELO
 # lecteur.
 #   avalement : une coupe de cellule qui ne laisserait qu'une echarde ne se fait pas, la voisine
 #               s'etend sur le residu (_grid_cells) -- etirement borne a x1,25
-OPTIMS = ("avalement",)
+#   ordre     : liste de paires de secteurs que le moteur ordonnerait au hasard, faute de portail
+#               entre eux (tools/ordre.py) -- CORRIGE un defaut, elle n'ajoute aucun risque
+OPTIMS = ("avalement", "ordre")
 OPTIM_ACTIFS = set(OPTIMS)
 
 
@@ -1418,6 +1423,17 @@ def main(argv=None):
     for k in sorted(b.stats):
         print(f"    {k} : {b.stats[k]}")
 
+    paires = []
+    if "ordre" in OPTIM_ACTIFS:
+        # Meme defaut que chez Doom : deux secteurs sans portail commun (les deux cotes d'un
+        # pilier) ne recoivent aucune contrainte de buildTree. Le calcul ne lit que (S, W, V).
+        paires, st_ordre = ordre.paires_d_ordre(em.sectors, em.walls, em.vertices, trace=print)
+        d = min(st_ordre, key=lambda s: (s["positions"], s["paires"], s["entrees"]))
+        print(f"  paires d'ordre : {len(paires)} entrees ({4 + 6 * len(paires)} o), "
+              f"{d['positions']}/{d['total']} positions encore fautives "
+              f"({100.0 * d['positions'] / max(1, d['total']):.0f} %, "
+              f"{100.0 * st_ordre[0]['positions'] / max(1, d['total']):.0f} % sans la table)")
+
     crit = check(em, quant, args.cap_cells)
     out = dict(format="duke2ps/e3-geom3d v1",
                source=dict(quant=os.path.relpath(args.q, ROOT).replace("\\", "/"),
@@ -1431,6 +1447,7 @@ def main(argv=None):
                    faces="indices de sommet LOCAUX au mur (WALLS.C:1223)",
                    tiles="`tiles` = cles [pic, 0, 0, 1, 1] : la texture Build `pic` entiere. "
                          "L'echelle passe par la TAILLE de la cellule, pas par un decoupage."),
+               orderPairs=[list(p) for p in paires],
                stats=dict(b.stats), criteres=crit, tiles=em.tiles,
                placage=dict(cellule_u=[CELL_MIN_U, CELL_MAX_U],
                             cellule_v=[CELL_MIN_V, CELL_MAX_V],

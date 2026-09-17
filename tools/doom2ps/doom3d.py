@@ -35,10 +35,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools", "duke2ps"))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import wad as wadmod                                   # noqa: E402
 import adjacency                                       # noqa: E402
 import gridparts                                       # noqa: E402
+import ordre                                           # noqa: E402
 import doom_specials as sp                             # noqa: E402
 from geom3d import (Emitter, TILESIZE, CAP_CELLS, plane_of, area2,     # noqa: E402
                     CELL_MIN_U, CELL_MAX_U, CELL_MIN_V, CELL_MAX_V, SECTOR_LIGHT,
@@ -279,6 +281,8 @@ PARTITION = "bsp"
 #               s'etend sur le residu (geom3d._grid_cells) -- etirement borne a x1,25
 #   fusion    : recolle deux feuilles du BSP d'un meme secteur Doom quand leur union est convexe
 #               (gridparts.partition, g=None) -- elle DETRUIT des cordes du BSP, voir ci-dessous
+#   ordre     : liste de paires de secteurs que le moteur ordonnerait au hasard, faute de portail
+#               entre eux (tools/ordre.py) -- CORRIGE un defaut, elle n'ajoute aucun risque
 #
 # `fusion` n'est PAS dans le defaut, et ne le sera pas : c'est la seule des trois qui enleve de
 # l'information au moteur. Les cordes du BSP ne portent aucune texture, mais elles portent l'ORDRE
@@ -294,8 +298,8 @@ PARTITION = "bsp"
 # le plus gros que Lobotomy ait livre. MESURE console 17-09 : le defaut ne se reproduit plus, pour
 # -7,2 % de secteurs et -4,8 % de murs (219/1796 contre 236/1886). Elle reste optionnelle parce
 # qu'elle est destructrice : qui edite ses cartes a la main doit l'allumer en connaissance de cause.
-OPTIMS = ("penombres", "avalement", "fusion")
-OPTIM_DEFAUT = ("penombres", "avalement")
+OPTIMS = ("penombres", "avalement", "fusion", "ordre")
+OPTIM_DEFAUT = ("penombres", "avalement", "ordre")
 OPTIM_ACTIFS = set(OPTIM_DEFAUT)
 
 # Plafond de secteurs par canal de plans de coupe, quand `fusion` est active (gridparts.CAP_CANAL
@@ -1706,6 +1710,17 @@ def main(argv=None):
               f"{max(canaux.values())} (--cap-canal {CAP_CANAL}), "
               f"pire depassement {pire_plan:.2f} u"
               + (f" -- {sans_plan} PAIRE(S) SANS PLAN, LE MOTEUR LIRAIT 99" if sans_plan else ""))
+    paires = []
+    if "ordre" in OPTIM_ACTIFS:
+        # Deux secteurs sans portail commun ne recoivent AUCUNE contrainte de buildTree : seul le
+        # scalaire `distance` les separe, et il se trompe de part et d'autre d'un obstacle. Voir
+        # tools/ordre.py pour la mesure et pour ce que coutent les autres remedes.
+        paires, st_ordre = ordre.paires_d_ordre(em.sectors, em.walls, em.vertices, trace=print)
+        d = min(st_ordre, key=lambda s: (s["positions"], s["paires"], s["entrees"]))
+        print(f"  paires d'ordre : {len(paires)} entrees ({4 + 6 * len(paires)} o), "
+              f"{d['positions']}/{d['total']} positions encore fautives "
+              f"({100.0 * d['positions'] / max(1, d['total']):.0f} %, "
+              f"{100.0 * st_ordre[0]['positions'] / max(1, d['total']):.0f} % sans la table)")
     if a.diag_fusion:
         print(f"  DIAGNOSTIC : {peindre_fusions(conv)} murs repeints en damier "
               f"(feuilles nees d'une fusion)")
@@ -1743,7 +1758,7 @@ def main(argv=None):
                stats=dict(conv.stats), criteres=crit, tiles=em.tiles,
                picnames=conv.picnames,
                sectors=em.sectors, walls=em.walls, vertices=em.vertices, faces=em.faces,
-               cutPlane=cutplane,
+               cutPlane=cutplane, orderPairs=[list(p) for p in paires],
                texture=em.texture, vertexLight=em.vertexLight, anims=conv.anims,
                doom_sector=[conv.leaf_sector[li] for li in conv.keep])
     if tags is not None:

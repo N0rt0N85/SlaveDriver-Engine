@@ -216,6 +216,9 @@ def main(argv=None):
         # Plans de coupe : le convertisseur Doom s'en sert pour rendre au peintre l'ordre que la
         # fusion des feuilles lui prend (doom3d.plans_de_coupe). Duke n'en emet pas.
         cutPlane=G.get("cutPlane") or [],
+        # Paires d'ordre (tools/ordre.py) : bloc optionnel apres le cutPlane, meme calcul que pour
+        # Doom -- il ne lit que (S, W, V), donc rien n'est specifique a l'un des deux jeux.
+        orderPairs=[tuple(p) for p in (G.get("orderPairs") or [])],
     )
 
     data = lev_write.write_lev(model, strict=False)

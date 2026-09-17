@@ -2613,6 +2613,42 @@ void buildTree(void)
 	 sectorDraw[s].nmChildren++;
 	}
     }
+
+ /* Two sectors with NO portal between them get no constraint at all above, so only the distance
+    scalar orders them -- and that scalar is the distance to the nearest doorway they were reached
+    through, not their depth.  On either side of a pillar both doorways are equidistant and the
+    order is a coin toss: the floor shows through the pillar's wall.  The pair table
+    (tools/ordre.py) names a wall whose plane decides, and the edge joins the SAME graph, so the
+    sort composes it with the portal constraints -- unlike level_cutPlane, which reorders after
+    the fact and undoes more than it repairs. */
+ for (update=0;update<level_nmOrderPairs;update++)
+    {int a=level_orderPair[update].a;
+     int b=level_orderPair[update].b;
+     int plane=level_orderPair[update].plane;
+     int front,back;
+     sWallType *cutWall;
+     MthXyz testV,p;
+     if (!(sectorDraw[a].flags & SDFLAG_BBVALID) ||
+	 !(sectorDraw[b].flags & SDFLAG_BBVALID))
+	continue;
+     cutWall=level_wall+(((plane & 0x80)?level_sector[b].firstWall
+				       :level_sector[a].firstWall)+(plane & 0x7f));
+     getVertex(cutWall->v[0],&testV);
+     p.x=camera->pos.x-testV.x;
+     p.y=camera->pos.y-testV.y;
+     p.z=camera->pos.z-testV.z;
+     /* the normal points INTO the wall's own sector, so the camera on that side means that
+	sector is the near one */
+     if (MTH_Product((Fixed32 *)&p,(Fixed32 *)cutWall->normal)>0)
+	front=(plane & 0x80)?b:a;
+     else
+	front=(plane & 0x80)?a:b;
+     back=(front==a)?b:a;
+     if (sectorDraw[back].nmAncestors>=MAXFANIN)
+	continue;              /* ancestor[] is fixed at MAXFANIN: drop the edge, never smash it */
+     sectorDraw[back].ancestor[(int)sectorDraw[back].nmAncestors++]=front;
+     sectorDraw[front].nmChildren++;
+    }
 }
 
 
@@ -2823,18 +2859,20 @@ void wallsTraverse(MthMatrix *view,int onSlave)
 	{/* there are still sectors we haven't drawn, we must have a
 	    circular dependancy, try to break it */
 	 /* this doesn't happen normally */
-	 /* ... find the sector in the updateList which has the minimum
-	    nonzero # of children */
-	 int bestNmChildren;
+	 /* ... the freed sector is painted NEXT, so take the FARTHEST: it is the
+	    one the others may legitimately paint over.  The number of children
+	    ranks nothing.  Required by the pairs buildTree adds: they add edges,
+	    edges make cycles, and breaking those by fan-in scrambles the list. */
+	 Fixed32 farthest;
 	 int i;
-	 bestNmChildren=1000;
+	 farthest=-1;
 	 for (i=0;i<updateListSize;i++)
 	    if (updateList[i]->nmChildren>0 &&
-		updateList[i]->nmChildren<bestNmChildren)
-	       {bestNmChildren=updateList[i]->nmChildren;
+		updateList[i]->distance>farthest)
+	       {farthest=updateList[i]->distance;
 		breakLeaf=updateList[i];
 	       }
-	 assert(bestNmChildren!=1000);
+	 assert(breakLeaf!=NULL);
 	 /* ... remove all breakLeaf's children */
 	 /* NOTE: this breaks the tree structure somewhat, as breakLeaf is
 	    still referenced by ancestor pointers in other sectors. */

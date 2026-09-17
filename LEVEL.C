@@ -16,6 +16,8 @@ short *level_PBWall;
 WaveVert *level_waveVert;
 WaveFace *level_waveFace;
 unsigned char (*level_cutPlane)[][MAXCUTSECTORS];
+sOrderPair *level_orderPair;
+int level_nmOrderPairs;
 
 int level_nmSectors;
 int level_nmWalls;
@@ -27,10 +29,12 @@ int level_nmVertex;
 #define LOADPART(array,type,number) \
  size=number*sizeof(type);\
  array=(type *)mem_malloc(1,size);\
- fs_read(fd,(char *)array,size);
+ fs_read(fd,(char *)array,size);\
+ used+=size;
 
 int loadLevel(int fd,int tileBase)
 {int size;
+ int total,used;
  int i;
  struct sLevelHeader *head;
  assert(fd>=0);
@@ -39,8 +43,10 @@ int loadLevel(int fd,int tileBase)
  dPrint("coreleft=%d\n",mem_coreleft(1));
  assert(size>0);
  assert(size<900000);
+ total=size;
  head=(struct sLevelHeader *)mem_malloc(1,sizeof(struct sLevelHeader));
  fs_read(fd,(char *)head,sizeof(struct sLevelHeader));
+ used=sizeof(struct sLevelHeader);
  level_nmSectors=head->nmSectors;
  level_nmWalls=head->nmWalls;
  level_nmObjects=head->nmObjects;
@@ -65,6 +71,19 @@ int loadLevel(int fd,int tileBase)
  size=(head->nmCutSectors*MAXCUTSECTORS)*sizeof(char);
  level_cutPlane=(unsigned char (*)[][MAXCUTSECTORS])mem_malloc(1,size);
  fs_read(fd,(char *)level_cutPlane,size);
+ used+=size;
+
+ /* Ordering pairs (SLEVEL.H): an optional block our converter appends after cutPlane.  A retail
+    level stops here, so "is it there" is simply "are there bytes left". */
+ level_nmOrderPairs=0;
+ level_orderPair=NULL;
+ if (used<total)
+    {fs_read(fd,(char *)&level_nmOrderPairs,4);
+     used+=4;
+     assert(level_nmOrderPairs>0);
+     assert(used+(int)(level_nmOrderPairs*sizeof(sOrderPair))==total);
+     LOADPART(level_orderPair,sOrderPair,level_nmOrderPairs);
+    }
 
  for (i=1;i<head->nmTextureIndexes;i+=2)
     level_texture[i]+=tileBase;

@@ -108,6 +108,7 @@ def _decode_level(lay):
         texture=list(Lv['texture']),
         vertexLight=list(Lv['vertexLight']),
         cutPlane=[list(cut[i:i + MAXCUTSECTORS]) for i in range(0, len(cut), MAXCUTSECTORS)],
+        orderPairs=[(p['a'], p['b'], p['plane']) for p in Lv.get('orderPairs') or []],
     )
 
 

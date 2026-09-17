@@ -119,13 +119,29 @@ def parse_level_block(r):
     textures = raw('texture', hdr['nmTextureIndexes'])                  # LEVEL.C:63 (odd entries += tileBase, :70-71)
     lights = raw('vertexLight', hdr['nmLightValues'])                   # LEVEL.C:64
     cut = raw('cutPlane', hdr['nmCutSectors'] * MAXCUTSECTORS)          # LEVEL.C:66-68
+    # OPTIONAL block, appended after cutPlane by our own converter (tools/ordre.py): pairs of
+    # sectors with no portal between them, which buildTree would otherwise leave to the distance
+    # scalar alone.  The header has no field left, so its presence is read off the block size --
+    # a retail level stops at cutPlane and leaves nothing over.
+    extra = ['orderPairCount', 'orderPair']
+    pairs = []
+    if size > 56 + sum(p['size'] for p in parts.values()):
+        off = r.p
+        n = r.i32()
+        parts['orderPairCount'] = dict(off=off, count=1, size=4)
+        recs, off = r.records('>hhBB', n)
+        parts['orderPair'] = dict(off=off, count=n, size=n * 6)
+        pairs = [dict(a=x[0], b=x[1], plane=x[2]) for x in recs]
+    else:
+        extra = []
+    out['orderPairs'] = pairs
     out['parts'] = parts
     out['end'] = r.p
     out['sum_parts'] = sum(p['size'] for p in parts.values())
     out['size_ok'] = (size == 56 + out['sum_parts'])                    # RETAIL_DISCS.md par.4: size == 56 + sum LOADPART
     out['contiguous'] = True
     prev_end = out['header_off'] + 56
-    for name in PART_ORDER:
+    for name in PART_ORDER + extra:
         p = parts[name]
         if p['off'] != prev_end:
             out['contiguous'] = False
