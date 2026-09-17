@@ -27,6 +27,7 @@ void setFog(int dist);
    lesquels partent.  lodFused/lodCells = murs fusionnes et cellules economisees dans l'image. */
 extern int lodEnable,lodFused,lodCells,lodFlat;
 extern int nmMeshPolys;   /* cellules venues du chemin maillage : sols, plafonds, murs courbes */
+extern int lodWeldWhy[2]; /* soudures refusees : [0] hors bande, [1] sommet hors de l'arete */
 
 int vdp1NmClipped;  /* cellules fenetrees en V dans l'image : remplace les maxima cx/cy */
 

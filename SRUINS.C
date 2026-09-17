@@ -2310,9 +2310,12 @@ int runLevel(char *filename,int levelNm)
      drawStringf(-158,-70,1,"polys:%d/%d msh:%d vcl:%d pipe:%d",nmPolys+nmSlavePolys,
 		 nmSlavePolys,nmMeshPolys,vdp1NmClipped,pipeSpin);
 
-     drawStringf(-158,-50,1,"time:%d %d:%d",
+     /* LEGENDE  wl : soudures de maillage REFUSEES -- la face noire suivante n'etait pas dans la
+		     bande / elle y etait mais un sommet saute tombait a cote de l'arete.  Dit
+		     laquelle des deux portes ouvrir pour prendre les cellules qui restent a plat. */
+     drawStringf(-158,-50,1,"time:%d %d:%d wl:%d/%d",
 		 (lastCalc+lastLastCalc)>>1,lastDraw,
-		 lastCalc+lastDraw);
+		 lastCalc+lastDraw,lodWeldWhy[0],lodWeldWhy[1]);
 
      drawStringf(-158,-40,1,"mem:%dk+%dk=%dk",mem_coreleft(0)>>10,
 		 mem_coreleft(1)>>10,(mem_coreleft(0)+mem_coreleft(1))>>10);

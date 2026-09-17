@@ -1095,6 +1095,12 @@ static int wallCrossesNear(MthXyz *coords)
 int lodEnable=1;         /* 0 = aucune fusion, 1 = fusion, 2 = fusion peinte en bleu */
 int lodFused,lodCells,lodFlat; /* murs fusionnes, cellules economisees, cellules aplaties */
 static int slave_lodFused,slave_lodCells,slave_lodFlat;
+/* POURQUOI une soudure de maillage a ete refusee : [0] la face noire suivante n'etait pas dans la
+   bande -- jointure en eventail, ou debut d'une autre rangee ; [1] la bande existait mais un
+   sommet saute ne tombait pas sur l'arete qui devait le remplacer.  Les deux ouvrent des portes
+   differentes : la premiere demande une adjacence plus generale, la seconde une tolerance. */
+int lodWeldWhy[2];
+static int slave_lodWeldWhy[2];
 /* Cellules venues du chemin MAILLAGE (drawWall / slave_drawWall), c'est-a-dire des murs qui ne
    sont pas des parallelogrammes.  Un sol ou un plafond de Doom est un polygone quelconque : il ne
    peut pas etre une grille, donc il passe forcement par la.  Ce compteur dit quelle part de
@@ -1177,7 +1183,7 @@ static int nearSegment(XyInt *a,XyInt *b,int px,int py)
 
 /* Etend une bande de faces noires depuis f, remplit q[] avec le quad soude, et retourne le
    dernier indice de la bande -- f lui-meme si rien ne se soude. */
-static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q)
+static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,int *why)
 {int g,dir,j;
  unsigned short *a,*c;
  if (f>=wall->lastFace)
@@ -1189,7 +1195,10 @@ static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q)
      else if (a[0]==c[1] && a[3]==c[2])
 	dir=2;                     /* ... dans l'autre sens */
      else
-	dir=0;
+	{dir=0;
+	 if (faceIsBlack(f+1,V))
+	    why[0]++;   /* la face suivante etait noire, mais elle n'est pas dans la bande */
+	}
      g=f;
      while (dir && g<wall->lastFace)
 	{a=level_face[g].v; c=level_face[g+1].v;
@@ -1211,7 +1220,7 @@ static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q)
      for (j=f;j<g;j++)   /* les sommets sautes sont les aretes partagees */
 	if (!nearSegment(q+0,q+3,V[level_face[j].v[3]].x,V[level_face[j].v[3]].y) ||
 	    !nearSegment(q+1,q+2,V[level_face[j].v[2]].x,V[level_face[j].v[2]].y))
-	   {dir=0; break;}
+	   {dir=0; why[1]++; break;}
     }
  else
     if (dir==2)
@@ -1222,7 +1231,7 @@ static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q)
 	for (j=f;j<g;j++)
 	   if (!nearSegment(q+0,q+1,V[level_face[j].v[0]].x,V[level_face[j].v[0]].y) ||
 	       !nearSegment(q+3,q+2,V[level_face[j].v[3]].x,V[level_face[j].v[3]].y))
-	      {dir=0; break;}
+	      {dir=0; why[1]++; break;}
        }
  if (!dir)
     {LODVXY(q[0],V,level_face[f].v[0]);
@@ -1550,7 +1559,7 @@ void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
      nmMeshPolys++;
      if (CELLISBLACK(gtable))
 	{XyInt q[4];
-	 int g=weldFaceStrip(wall,f,vCalc,q);
+	 int g=weldFaceStrip(wall,f,vCalc,q,lodWeldWhy);
 	 if (clip_visible(q,s))
 	    {EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_MESH,q,NULL);
 	     nmPolys++;
@@ -1947,7 +1956,7 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
      slave_nmMeshPolys++;
      if (CELLISBLACK(gtable))
 	{XyInt q[4];
-	 int g=weldFaceStrip(wall,f,slave_vCalc,q);
+	 int g=weldFaceStrip(wall,f,slave_vCalc,q,slave_lodWeldWhy);
 	 if (clip_visible(q,s))
 	    {cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOL_MESH;
 	     cacheThruResult[nmSlavePolys].tile=-5;
@@ -2943,7 +2952,9 @@ void drawWalls(MthMatrix *view)
  slave_plaxBBymax=-120;
 
  lodFused=0; lodCells=0; lodFlat=0; nmMeshPolys=0;
+ lodWeldWhy[0]=0; lodWeldWhy[1]=0;
  slave_lodFused=0; slave_lodCells=0; slave_lodFlat=0; slave_nmMeshPolys=0;
+ slave_lodWeldWhy[0]=0; slave_lodWeldWhy[1]=0;
 
  slaveView=view;
  nmPolys=0;
@@ -3012,6 +3023,8 @@ void drawWallsFinish(void)
  lodCells+=slave_lodCells;
  lodFlat+=slave_lodFlat;
  nmMeshPolys+=slave_nmMeshPolys;
+ lodWeldWhy[0]+=slave_lodWeldWhy[0];
+ lodWeldWhy[1]+=slave_lodWeldWhy[1];
  /* merge slave and master plax bbs */
  if (slave_plaxBBxmin<plaxBBxmin)
     plaxBBxmin=slave_plaxBBxmin;
