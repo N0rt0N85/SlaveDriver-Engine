@@ -11,7 +11,8 @@ plafonds 31,2 % des cellules), l'inverse du retail (66,8 / 19,6 / 13,5).
 | script | ce qu'il mesure | résultat |
 |---|---|---|
 | `balayage_ordre.py` | TOURS, PAS, budget et plafond de `tools/ordre.py` | les trois réglages sont au plafond ; toutes les paires = 86 %, pire que rien |
-| `debord.py` | redondance du débord des sols et plafonds | ×1,179 (pas ×1,57) ; 321 faces sur 2 985 retirables, neutralité vérifiée ; TOMB 0 |
+| `debord.py` | redondance du débord des sols et plafonds | ×1,179 (pas ×1,57) ; 321 faces sur 2 985 couvertes par les autres, union inchangée après retrait ; TOMB 0 |
+| `debord_sur.py` | **et ces faces-là, peut-on vraiment les retirer ?** | **NON : 311 sur 319 ouvrent un trou**, 1 073 positions sur 1 089 en verraient un, pire face 4 096 u². Le gisement du débord est CLOS par cette voie |
 | `bandes_plafond.py` | jusqu'où la soudure de faces peut aller | 54,4 % aujourd'hui, **81,1 %** par réordonnancement seul, 95,7 % avec le virage ; tessellation = 51 jointures |
 | `soldom_vue.py` | le plan dominant, par position debout et non par saut de portail | 140 cellules médianes retirées (19,6 % de l'image), p90 324 |
 

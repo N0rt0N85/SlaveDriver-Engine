@@ -13,8 +13,8 @@ LA LOI (docs/STEXT_BASELINE_2026-09-12.md, 5 captures STATUSTEXT sur console, bu
 SANS les sprites. C'est exactement ce qui est compte ici.
 
 ⚠ CETTE LOI EST PESSIMISTE SUR UN BUILD NDEBUG, et donc les paliers ci-dessus aussi. 6 captures
-console du 18-09 (E1M1, cour, build -NDebug -StatusText), `polys` contre `calc` lu en lignes de
-balayage a 63,56 us :
+console du 18-09 (E1M1, cour, build -NDebug -StatusText), `polys` contre le premier champ de
+`time:`, c'est-a-dire le calc LISSE sur deux images, en lignes de balayage a 63,56 us :
     493 -> 22,95 ms   505 -> 22,44   498 -> 22,18   402 -> 21,93   501 -> 22,82   286 -> 18,69
 A 500 cellules la loi annonce 34,5 ms, la console en mesure 22,4 : elle SUR-ESTIME de 1,5x. Le
 fixe, lui, tient (14,3 contre 14,9 par moindres carres) -- ce qui tombe juste, puisque les asserts
