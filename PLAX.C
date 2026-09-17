@@ -60,11 +60,35 @@ void enablePlax(int setting)
 }
 
 static unsigned short plaxPal[256];
+static int plaxFade=16;   /* 16 = palette telle qu'elle est sur le disque */
+
+/* ASSOMBRIR LE CIEL.  Le plax est un bitmap 8 bpp sur RBG0 avec sa PROPRE banque CRAM (banc 7,
+   SCL_SET_R0CAOS(7) plus bas) : rebattre ces 256 entrees ne touche aucun autre plan, ni le VDP1,
+   ni le decalage couleur A que se partagent les degats et l'ecran de mort.  Cout : 256 ecritures
+   CRAM quand le reglage change, zero par image.
+
+   Pourquoi tricher : une brume de profondeur devrait rendre NOIR ce qui est a l'infini, donc le
+   ciel entier.  Ce serait juste et laid.  On le descend juste assez pour qu'il tienne dans la
+   meme gamme que le decor embrume. */
+void setPlaxFade(int f)
+{int i;
+ if (f<0) f=0;
+ if (f>16) f=16;
+ plaxFade=f;
+ for (i=0;i<256;i++)
+    {unsigned int c=plaxPal[i];
+     unsigned int r=((c&31)*f)>>4,
+		  g=(((c>>5)&31)*f)>>4,
+		  b=(((c>>10)&31)*f)>>4;
+     POKE_W(SCL_COLRAM_ADDR+((256*7+i)<<1),(c&0x8000)|(b<<10)|(g<<5)|r);
+    }
+}
+
+int getPlaxFade(void)
+{return plaxFade;}
 
 void retryPlaxPal(void)
-{int i;
- for (i=0;i<256;i++)
-    POKE_W(SCL_COLRAM_ADDR+((256*7+i)<<1),plaxPal[i]);
+{setPlaxFade(plaxFade);
  /* SCL_SetColRam(0,256*7,256,plaxPal); */
 }
 

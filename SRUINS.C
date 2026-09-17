@@ -155,6 +155,16 @@ void addColorOffset(int r,int g,int b)
  colorOffset[2]+=b;
 }
 
+/* Le ciel suit la brume.  A l'infini la brume vaut son maximum, donc le ciel devrait etre noir :
+   on triche, en descendant sa palette juste assez pour qu'il ne troue plus l'image.  4096 (brume
+   coupee) rend le ciel intact ; 512 le descend au tiers. */
+static int skyFadeFor(int fog)
+{int f=4+(12*fog)/4096;
+ if (f>16) f=16;
+ if (f<0) f=0;
+ return f;
+}
+
 static int ouchTime=0;
 void playerHurt(int hpLost)
 {int i;
@@ -2061,6 +2071,8 @@ int runLevel(char *filename,int levelNm)
 #endif
 
  mipBase=createMippedPics();
+ setFog(fogDist);   /* remplit la table ; fogDist survit d'un niveau au suivant */
+ setPlaxFade(skyFadeFor(fogDist));  /* initPlax a repose la palette d'origine au chargement */
 
  while(1)
     {htimer=0;
@@ -2079,6 +2091,30 @@ int runLevel(char *filename,int levelNm)
 	 }
       else
 	 mipChord=0;
+     }
+     {/* tenir L+R+Z -- ou A+C+Z, pour les pads dont les gachettes ne rendent que de
+	 l'analogique -- pour faire tourner la brume de profondeur.  Quatre crans : le
+	 comportement d'origine, puis le noir a 2048, 1024 et 512 unites.  C'est un ECART
+	 ASSUME a Doom, qui ne noircit jamais un secteur a pleine lumiere : le but du reglage
+	 est de le juger a l'ecran, pas de le retablir. */
+      static char fogChord=0;
+      static char fogIndex=0;
+      if (((((~lastInputSample)&(PER_DGT_TL|PER_DGT_TR|PER_DGT_Z)))==
+	   (PER_DGT_TL|PER_DGT_TR|PER_DGT_Z)) ||
+	  ((((~lastInputSample)&(PER_DGT_A|PER_DGT_C|PER_DGT_Z)))==
+	   (PER_DGT_A|PER_DGT_C|PER_DGT_Z)))
+	 {if (!fogChord)
+	     {static char *fogName[4]={"FOG OFF (4096)","FOG 2048","FOG 1024","FOG 512"};
+	      static short fogVal[4]={4096,2048,1024,512};
+	      fogIndex=(fogIndex+1)&3;
+	      setFog(fogVal[(int)fogIndex]);
+	      setPlaxFade(skyFadeFor(fogVal[(int)fogIndex]));
+	      changeMessage(fogName[(int)fogIndex]);
+	      fogChord=1;
+	     }
+	 }
+      else
+	 fogChord=0;
      }
 #ifdef STATUSTEXT
      {/* hold L+R+Y -- or A+B+C, for pads whose triggers report only analog values --
@@ -2240,8 +2276,11 @@ int runLevel(char *filename,int levelNm)
 		 pipe  : tours d'attente a la jointure de la traversee lancee dans la queue
 			 de l'image precedente.  0 = elle tenait entierement dans la queue ;
 			 -1 = rien n'etait en vol (seisme, ou WALLPIPE a 0). */
-     drawStringf(-158,-70,1,"polys:%d vcl:%d pipe:%d",nmPolys+nmSlavePolys,
-		 vdp1NmClipped,pipeSpin);
+     /* LEGENDE  polys : cellules emises, total / part de l'esclave.  La seconde divise
+		 SLAVECMDS de l'arbre pour donner le cout d'un enregistrement -- le chiffre
+		 qui dit si ce poste vaut d'etre attaque. */
+     drawStringf(-158,-70,1,"polys:%d/%d vcl:%d pipe:%d",nmPolys+nmSlavePolys,
+		 nmSlavePolys,vdp1NmClipped,pipeSpin);
 
      drawStringf(-158,-50,1,"time:%d %d:%d",
 		 (lastCalc+lastLastCalc)>>1,lastDraw,
@@ -2268,7 +2307,11 @@ int runLevel(char *filename,int levelNm)
 		       remplacee alors qu'une commande deja emise la designait : c'est
 		       exactement la mauvaise texture a l'ecran, avec la bonne encore
 		       visible ailleurs dans la meme image. */
-      drawStringf(-158,-90,1,"tile:%d sw:%d",used[0],nmSwaps[0]);
+      /* fog : distance en unites ou un secteur a pleine lumiere atteint le noir.  4096 est
+	 le reglage d'origine, donc hors de toute ligne de vue -- L+R+Z le fait tourner.
+	 sky : echelle 0-16 appliquee a la palette du ciel, LUE dans PLAX.C -- 16 = intacte. */
+      drawStringf(-158,-90,1,"tile:%d sw:%d fog:%d sky:%d",used[0],nmSwaps[0],
+		  fogDist,getPlaxFade());
 #endif
 #ifndef NDEBUG
 #ifdef STATUSTEXT

@@ -2069,6 +2069,27 @@ volatile int slaveDrawStart;
    donc on ne lance pas tant qu'il est actif.
    L'interrupteur WALLPIPE est dans WALLS.H : la boucle de jeu en a besoin aussi. */
 
+/* Brume de profondeur.  Les deux transformations de sommets retiraient z>>24 a la lumiere du
+   sommet, soit un niveau tous les 256 unites et le noir a 4096 -- plus loin que toute ligne de
+   vue, donc en pratique pas de brume.  z>>24 sert maintenant d'index dans cette table, lue par
+   wallasm_gnu.s (_fogTable) : la pente devient reglable, et la forme aussi le jour ou on
+   voudra autre chose qu'une droite.
+   ⚠ C'est un ECART ASSUME a Doom : Doom ne noircit JAMAIS un secteur a pleine lumiere, quelle
+   que soit la distance.  Le reglage existe pour en juger a l'ecran. */
+unsigned char fogTable[256];
+int fogDist=4096;      /* distance ou un secteur a pleine lumiere (16) atteint le noir */
+
+void setFog(int dist)
+{int i;
+ if (dist<256)
+    dist=256;
+ fogDist=dist;
+ for (i=0;i<256;i++)
+    {int v=(i*256*16)/dist;     /* i indexe des tranches de 256 unites */
+     fogTable[i]=(v>31)? 31: v;
+    }
+}
+
 volatile int slaveJob;         /* 0 = dessiner, 1 = traverser */
 static MthMatrix pipeMatrix;   /* copie stable : viewTransform sera depile entre-temps */
 static int pipeInFlight;
@@ -2772,6 +2793,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
  Sprite *drawList[100];
  int nmDraw,draw;
  int chunk,light,x,y,i,j;
+ int spriteFog=0;
  int flip;
  int frame;
  Fixed32 width64,scale;
@@ -2911,6 +2933,17 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	{light=NMOBJECTPALLETES;
 	 o->flags&=~SPRITEFLAG_FLASH;
 	}
+     /* Brume de profondeur sur les objets.  Meme table que les murs (WALLS.C:setFog), donc un
+	seul reglage pour toute l'image, mais ADOUCIE d'un quart : un monstre doit rester lisible
+	un peu plus loin que le decor qui l'entoure.  Lobotomy assombrissait deja les objets avec
+	la distance -- le code est deux lignes plus haut, en commentaire, par bancs de palette ;
+	on passe par le gouraud parce que les tuiles de Doom sont en 16 bpp. */
+     {int d=tformed.z>>24;
+      if (d>255) d=255;
+      if (d<0) d=0;
+      spriteFog=fogTable[d];
+      spriteFog-=spriteFog>>2;
+     }
      /* tformed is center of sprite */
      project_point(&tformed,&feetScreenPos);
      scale=o->scale;
@@ -3021,7 +3054,10 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		 {if (light==NMOBJECTPALLETES)
 		     gtable.entry[0]=RGB(31,31,31);
 		 else
-		    gtable.entry[0]=greyTable[16-light*2];
+		    {int g=16-light*2-spriteFog;   /* brume adoucie, voir plus haut */
+		     if (g<0) g=0;
+		     gtable.entry[0]=greyTable[g];
+		    }
 		 }
 	      gtable.entry[1]=gtable.entry[0];
 	      gtable.entry[2]=gtable.entry[0];

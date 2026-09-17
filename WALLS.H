@@ -16,6 +16,12 @@ void wallsPipeJoin(void);
 void wallsPipeDiscard(void);  /* joint puis jette : la camera va bouger, ou le niveau partir */
 extern int pipeSpin;          /* tours d'attente a la jointure ; -1 = rien n'etait en vol */
 
+/* Brume de profondeur : table de 256 octets indexee par z>>24, lue par l'assembleur.
+   setFog(d) = un secteur a pleine lumiere atteint le noir a d unites.  4096 rend le
+   comportement d'origine (plus loin que toute ligne de vue, donc pas de brume). */
+extern int fogDist;
+void setFog(int dist);
+
 int vdp1NmClipped;  /* cellules fenetrees en V dans l'image : remplace les maxima cx/cy */
 
 int vdp1MaxCoord;   /* max(|x|,|y|) -- conserve pour compatibilite d'affichage */

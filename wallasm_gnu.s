@@ -137,6 +137,18 @@ _rectTransform:
 	! ... r3 = clamped z coord from above
 	shlr16 r3
 	shlr8 r3
+	! GCC14: le retrait etait z>>24 tel quel, soit un niveau tous les 256 unites et le
+	!        noir a 4096 -- au-dela de toute ligne de vue du jeu.  z>>24 sert maintenant
+	!        d'INDEX dans _fogTable (256 octets), ce qui permet n'importe quelle courbe
+	!        et pas seulement une pente.  shad aurait suffi mais n'existe qu'a partir du
+	!        SH-2E.  r0 et r3 sont les deux seuls registres libres ici : r1 porte la
+	!        lumiere du sommet, r0 vient d'etre consomme par le pas de lumiere.
+	!        Ces instructions tombent dans l'ombre de la division materielle lancee plus
+	!        haut, dont le resultat n'est relu qu'apres.
+	mov r3,r0
+	mov.l .Lrt_fog,r3
+	mov.b @(r0,r3),r3
+	extu.b r3,r3
 	! stuff to support wavywalls
 	!mov.l r1,r0
 	!and #31,r0
@@ -219,6 +231,7 @@ _rectTransform:
 .Lrt_vlight:	.long _level_vertexLight	! GCC14: literal pool of rectTransform
 .Lrt_divu:	.long 0xffffff00
 .Lrt_grey:	.long _greyTable
+.Lrt_fog:	.long _fogTable		! GCC14: 256 octets, indexes par z>>24 (WALLS.C)
 
 	.align 2
 .Lrt_callLit:	! perform function call to @r13
@@ -349,6 +362,10 @@ _normTransform:
 	mov r10,r3		! GCC14: was mov.l r10,r3
 	shlr16 r3
 	shlr8 r3
+	mov r3,r0		! GCC14: brume par table -- voir rectTransform
+	mov.l .Lnt_fog,r3
+	mov.b @(r0,r3),r3
+	extu.b r3,r3
 !	shlr2 r3
 !	shlr2 r3
 !	shlr r3
@@ -429,3 +446,4 @@ _normTransform:
 	.align 2
 .Lnt_divu:	.long 0xffffff00	! GCC14: literal pool of normTransform
 .Lnt_grey:	.long _greyTable
+.Lnt_fog:	.long _fogTable		! GCC14: 256 octets, indexes par z>>24 (WALLS.C)
