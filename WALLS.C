@@ -1093,9 +1093,24 @@ static int wallCrossesNear(MthXyz *coords)
    La brume paie le LOD : sans brume (fog 4096) la condition ne se declenche quasiment jamais, ce
    qui est honnete puisqu'il n'y a alors rien derriere quoi cacher la simplification. */
 int lodEnable=1;         /* 0 = aucune fusion, 1 = fusion, 2 = fusion peinte en bleu */
-int lodFused,lodCells;   /* murs fusionnes, cellules economisees -- part du maitre */
-static int slave_lodFused,slave_lodCells;
+int lodFused,lodCells,lodFlat; /* murs fusionnes, cellules economisees, cellules aplaties */
+static int slave_lodFused,slave_lodCells,slave_lodFlat;
 extern unsigned char fogTable[256];
+
+/* APLAT PAR CELLULE -- le complement de la fusion, pour ce qu'elle ne peut pas prendre : un mur
+   qui s'enfonce dans la brume est noir au fond et clair au pied, donc jamais fusionnable en
+   entier, mais ses cellules du fond le sont une a une.
+
+   Le test est EXACT et il ne coute aucune lecture.  L'assembleur range dans vCalc[].light le mot
+   gouraud final -- greyTable[lumiere] avec le bit 15 inverse quand le sommet est devant le plan
+   proche (wallasm_gnu.s, .Lrt_retFromLit).  greyTable[0] vaut 0x8000, donc un sommet BON et
+   totalement NOIR vaut exactement zero.  Les quatre valeurs sont deja chargees pour la table
+   gouraud : un OU des quatre, et zero veut dire que la cellule n'a plus rien a montrer.
+
+   Ce qui reste emis : la commande VDP1.  Ce qui part : la tuile (donc mapPic et une place dans
+   le cache), la table gouraud, et le placage de texture cote VDP1. */
+#define CELLISBLACK(g) (lodEnable && \
+			!((g).entry[0]|(g).entry[1]|(g).entry[2]|(g).entry[3]))
 
 static int wallIsBlack(sWallType *w,MthXyz *coords,int nmLit,int wavy)
 {int i,fog,n,base,maxl;
@@ -1318,6 +1333,13 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 	    }
 
 	 assert(getPicClass(level_texture[tex])==TILE16BPP);
+	 if (CELLISBLACK(gtable))
+	    {EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOLOR,poly,NULL);
+	     nmPolys++;
+	     lodFlat++;
+	     tex++;
+	     continue;
+	    }
 #if 0
 	 EZ_distSpr(DIR_NOREV,
 		    UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|
@@ -1382,6 +1404,12 @@ void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 	continue;
 
      assert(getPicClass(level_face[f].tile)==TILE16BPP);
+     if (CELLISBLACK(gtable))
+	{EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOLOR,poly,NULL);
+	 nmPolys++;
+	 lodFlat++;
+	 continue;
+	}
 #if 0
      EZ_distSpr(DIR_NOREV,
 		UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|DRAW_GOURAU,
@@ -1694,6 +1722,16 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 	     continue;
 	    }
 
+	 if (CELLISBLACK(gtable))
+	    {cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOLOR;
+	     cacheThruResult[nmSlavePolys].tile=-5;
+	     for (v=0;v<4;v++)
+		cacheThruResult[nmSlavePolys].poly[v]=poly[v];
+	     nmSlavePolys++;
+	     slave_lodFlat++;
+	     tex++;
+	     continue;
+	    }
 	 cacheThruResult[nmSlavePolys].gtable=gtable;
 	 for (v=0;v<4;v++)
 	    cacheThruResult[nmSlavePolys].poly[v]=poly[v];
@@ -1741,6 +1779,15 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
      if (clip || !clip_visible(probeVDP1(poly),s))
 	continue;
 
+     if (CELLISBLACK(gtable))
+	{cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOLOR;
+	 cacheThruResult[nmSlavePolys].tile=-5;
+	 for (i=0;i<4;i++)
+	    cacheThruResult[nmSlavePolys].poly[i]=poly[i];
+	 nmSlavePolys++;
+	 slave_lodFlat++;
+	 continue;
+	}
      cacheThruResult[nmSlavePolys].gtable=gtable;
      for (i=0;i<4;i++)
 	cacheThruResult[nmSlavePolys].poly[i]=poly[i];
@@ -2722,8 +2769,8 @@ void drawWalls(MthMatrix *view)
  slave_plaxBBxmax=-160;
  slave_plaxBBymax=-120;
 
- lodFused=0; lodCells=0;
- slave_lodFused=0; slave_lodCells=0;
+ lodFused=0; lodCells=0; lodFlat=0;
+ slave_lodFused=0; slave_lodCells=0; slave_lodFlat=0;
 
  slaveView=view;
  nmPolys=0;
@@ -2790,6 +2837,7 @@ void drawWallsFinish(void)
     maitre avant qu'on arrive ici. */
  lodFused+=slave_lodFused;
  lodCells+=slave_lodCells;
+ lodFlat+=slave_lodFlat;
  /* merge slave and master plax bbs */
  if (slave_plaxBBxmin<plaxBBxmin)
     plaxBBxmin=slave_plaxBBxmin;

@@ -2296,11 +2296,12 @@ int runLevel(char *filename,int levelNm)
 			 -1 = rien n'etait en vol (seisme, ou WALLPIPE a 0). */
      /* LEGENDE  polys : cellules emises, total / part de l'esclave.  La seconde divise
 		 SLAVECMDS de l'arbre pour donner le cout d'un enregistrement.
-		 lod   : murs fusionnes par le LOD / cellules que cette fusion a evitees.  La
-			 seconde est le gain BRUT -- a comparer a polys, qui ne les compte plus. */
+		 lod   : murs fusionnes / cellules que la fusion a evitees / cellules emises a
+			 PLAT.  Les deux premieres ne sont plus dans polys ; la troisieme y est
+			 encore -- elle garde sa commande VDP1 et ne perd que sa texture. */
      drawStringf(-158,-70,1,"polys:%d/%d vcl:%d pipe:%d",nmPolys+nmSlavePolys,
 		 nmSlavePolys,vdp1NmClipped,pipeSpin);
-     drawStringf(-158,-60,1,"lod:%d/%d",lodFused,lodCells);
+     drawStringf(-158,-60,1,"lod:%d/%d/%d",lodFused,lodCells,lodFlat);
 
      drawStringf(-158,-50,1,"time:%d %d:%d",
 		 (lastCalc+lastLastCalc)>>1,lastDraw,
