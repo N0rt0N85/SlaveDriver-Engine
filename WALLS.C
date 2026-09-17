@@ -2051,6 +2051,32 @@ void findDoorways(int sectorNm,MthMatrix *view)
 
 volatile int slaveDrawStart;
        /* index in the update list at which to start drawing */
+/* --- Pipeline de traversee -------------------------------------------------------------
+   La camera et level_vertex[] sont figes des la fin de la boucle de jeu : movePlayer et
+   updatePushBlockPositions ont deja ecrit, et drawWalls de l'image SUIVANTE les relit tels
+   quels.  Une traversee lancee la produit donc exactement le meme resultat que celle du
+   sommet de l'image suivante -- pas une approximation.
+     0  arret, comportement d'origine.
+     1  MESURE : l'esclave traverse dans la queue, le maitre retraverse au sommet de l'image
+        suivante et ECRASE ce que l'esclave a produit.  L'image est identique au disque
+        d'origine ; le seul ajout est `pipeSpin`, les tours d'attente a la jointure, qui
+        repond a la seule question qui decide : la traversee tient-elle dans la queue ?
+     2  LEVIER : le maitre saute sa propre traversee.
+   Le lancement est place a la TOUTE FIN de la boucle de jeu, apres les quatre `return` et
+   apres le menu : aucune sortie ne peut laisser l'esclave en vol pendant que le maitre
+   recharge le niveau, et plus rien ne peut bouger la camera entre le lancement et la
+   jointure.  Le seisme fait exception -- il tire son jitter au sommet de l'image suivante,
+   donc on ne lance pas tant qu'il est actif.
+   L'interrupteur WALLPIPE est dans WALLS.H : la boucle de jeu en a besoin aussi. */
+
+volatile int slaveJob;         /* 0 = dessiner, 1 = traverser */
+static MthMatrix pipeMatrix;   /* copie stable : viewTransform sera depile entre-temps */
+static int pipeInFlight;
+static int pipeDone;
+int pipeSpin=-1;               /* tours d'attente a la jointure ; -1 = rien n'etait en vol */
+
+void wallsTraverse(MthMatrix *view,int onSlave);
+
 MthMatrix *slaveView;
 void slaveDraw(void)
 {int i;
@@ -2178,7 +2204,15 @@ void wallRenderSlaveMain(void)
      while (!(*FTCSR & 0x80)) ;
      /* sync */
      *FTCSR=0x0;
-     slaveDraw();
+     /* Purger AVANT de lire slaveJob : il vient d'etre ecrit par le maitre, et le cache de
+	l'esclave peut encore porter la valeur du travail precedent.  (slaveDraw purge aussi
+	a son entree ; la double purge est sans effet de bord.) */
+     *CACHECNTRL=0x10;
+     *CACHECNTRL=0x01;
+     if (slaveJob)
+	wallsTraverse(&pipeMatrix,1);
+     else
+	slaveDraw();
      *(Uint16 volatile *)0x21800000=0xffff;
     }
 }
@@ -2309,35 +2343,28 @@ static void sortLeafList(SectorDrawRecord **leafList,int leafListSize)
 
 
 int slaveSize=1;
-void drawWalls(MthMatrix *view)
+/* --- Moitie TRAVERSEE ------------------------------------------------------------------
+   Separee de la moitie DESSIN pour pouvoir tourner sur l'esclave, dans la queue de l'image
+   PRECEDENTE (voir WALLPIPE).  Elle n'ecrit que sectorDraw[], updateList[], drawList[],
+   doorwayCache et tLightPos ; elle ne touche ni le VDP1, ni le cache de tuiles, ni les
+   compteurs lus par l'overlay, ni plaxBB -- tout cela reste dans la moitie dessin, qui
+   s'execute pendant que l'image precedente est encore a l'ecran.
+   `onSlave` coupe le profileur, dont l'etat appartient au maitre. */
+static SectorDrawRecord *leafList[MAXNMSECTORS];  /* 2,4 Ko : hors pile, celle de l'esclave
+						     est petite */
+
+void wallsTraverse(MthMatrix *view,int onSlave)
 {int i;
- XyInt parms[2];
  int done;
  int leafListSize;
  int leafToDraw;
- int lastWallCmd;
- SectorDrawRecord *leafList[MAXNMSECTORS],*sdr;
- checkStack();
-
- plaxBBxmin=160;
- plaxBBymin=120;
- plaxBBxmax=-160;
- plaxBBymax=-120;
-
- slave_plaxBBxmin=160;
- slave_plaxBBymin=120;
- slave_plaxBBxmax=-160;
- slave_plaxBBymax=-120;
+ SectorDrawRecord *sdr;
 
  for (i=0;i<nmLights;i++)
     MTH_CoordTrans(view,&(lightSource[i]->pos),tLightPos+i);
 
- pushProfile("Find Visible");
+ if (!onSlave) pushProfile("Find Visible");
 
- slaveView=view;
- nmPolys=0;
- autoTarget=NULL;
- bestAutoAimRating=INT_MAX;
  for (i=0;i<level_nmSectors;i++)
     sectorDraw[i].flags=0;
  assert(camera->s>=0 && camera->s<level_nmSectors);
@@ -2347,9 +2374,13 @@ void drawWalls(MthMatrix *view)
  sectorDraw[camera->s].xmax=XMAX;
  sectorDraw[camera->s].ymax=YMAX;
  sectorDraw[camera->s].flags|=SDFLAG_BBVALID;
+ /* Le secteur de la camera n'est atteint par aucun portail, donc findDoorways ne lui pose
+    jamais de distance : sans cette ligne il garde celle d'une image precedente.  Seul le tri
+    des feuilles la lisait jusqu'ici, et un mauvais ordre passait inapercu. */
+ sectorDraw[camera->s].distance=0;
  updateListSize=1;
  updateList[0]=sectorDraw+camera->s;
- pushProfile("Find Doorways");
+ if (!onSlave) pushProfile("Find Doorways");
  findDoorways(camera->s,view);
  do
     {done=1;
@@ -2363,7 +2394,7 @@ void drawWalls(MthMatrix *view)
 	}
     }
  while (!done);
- popProfile();
+ if (!onSlave) popProfile();
 
 #if 0
  for (i=0;i<updateListSize;i++)
@@ -2487,7 +2518,101 @@ void drawWalls(MthMatrix *view)
  for (i=0;i<updateListSize;i++)
     updateList[i]=drawList[updateListSize-i-1];
 
- CFG_SPRITE_LEAVES(); popProfile();
+ CFG_SPRITE_LEAVES();
+ if (!onSlave) popProfile();
+}
+
+
+/* Lance sur l'esclave la traversee de l'image SUIVANTE.  A appeler a la fin de la boucle de
+   jeu, avec la matrice de vue telle qu'elle sera rebatie au sommet de l'image suivante. */
+void wallsPipeKick(MthMatrix *view)
+{
+#if WALLPIPE
+ int k;
+ char *d=(char *)&pipeMatrix,*s=(char *)view;
+ if (pipeInFlight)
+    return;                     /* deja en vol : ne jamais relancer sans jointure */
+ for (k=0;k<(int)sizeof(MthMatrix);k++)
+    d[k]=s[k];
+ pipeDone=0;
+ slaveJob=1;
+ pipeInFlight=1;
+ *(Uint16 volatile *)0x21000000=0xffff;
+#endif
+}
+
+/* Joint puis JETTE : a appeler partout ou la camera va encore bouger avant l'image suivante
+   (menu, question de voyage) ou ou le niveau va partir (les sorties de runLevel).  Ne jamais
+   sortir de la boucle de jeu avec une traversee en vol : l'esclave lirait level_vertex[]
+   pendant que le maitre le recharge. */
+void wallsPipeDiscard(void)
+{
+#if WALLPIPE
+ wallsPipeJoin();
+ pipeDone=0;
+#endif
+}
+
+/* Joint la traversee lancee dans la queue.  A appeler AVANT drawWalls -- et avant toute
+   liberation du niveau, sans quoi l'esclave lirait de la geometrie rechargee sous lui. */
+void wallsPipeJoin(void)
+{
+#if WALLPIPE
+ int i=0;
+ if (!pipeInFlight)
+    {pipeSpin=-1;
+     return;
+    }
+ while (!(*FTCSR & 0x80))
+    i++;
+ *FTCSR=0x0;
+ /* L'esclave vient d'ecrire sectorDraw[], updateList[], drawList[], doorwayCache et
+    tLightPos par des adresses NORMALES -- pas par l'alias cache-through que ses resultats
+    de dessin empruntent.  Le cache du maitre porte encore les lignes de l'image
+    precedente ; sans cette purge il dessine avec des boites de decoupe, un ordre et des
+    entrees de liste perimes, et une face finit peinte avec la tuile d'une autre. */
+ *CACHECNTRL=0x10;
+ *CACHECNTRL=0x01;
+ pipeInFlight=0;
+ slaveJob=0;
+ pipeSpin=i;               /* 0 = la traversee tenait entierement dans la queue */
+#if WALLPIPE>=2
+ pipeDone=1;
+#endif
+#endif
+}
+
+
+/* --- Moitie DESSIN --------------------------------------------------------------------
+   Tout ce qui emet des commandes VDP1 ou touche le cache de tuiles reste ici, sur le
+   maitre, qui en est le seul ecrivain. */
+void drawWalls(MthMatrix *view)
+{int i;
+ XyInt parms[2];
+ int lastWallCmd;
+ checkStack();
+
+ plaxBBxmin=160;
+ plaxBBymin=120;
+ plaxBBxmax=-160;
+ plaxBBymax=-120;
+
+ slave_plaxBBxmin=160;
+ slave_plaxBBymin=120;
+ slave_plaxBBxmax=-160;
+ slave_plaxBBymax=-120;
+
+ slaveView=view;
+ nmPolys=0;
+ vdp1NmClipped=0;
+ autoTarget=NULL;
+ bestAutoAimRating=INT_MAX;
+
+#if WALLPIPE>=2
+ if (!pipeDone)     /* l'esclave ne l'a pas faite dans la queue : la faire ici */
+#endif
+    wallsTraverse(view,0);
+ pipeDone=0;
 
  if (slaveSize>updateListSize-1)
     slaveSize=updateListSize-1;

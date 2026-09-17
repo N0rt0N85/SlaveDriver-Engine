@@ -8,6 +8,16 @@
    -1024..1023 et au-dela "operation cannot be guaranteed" (HW_VDP1.md:184).  Sert a
    trancher : magnification normale du plan proche (~1e3) ou geometrie corrompue (>>1e4).
    -fcommon fusionne cette definition provisoire, donc zero ligne ajoutee dans un .C. */
+/* Pipeline de traversee -- 0 arret, 1 mesure (resultat jete), 2 levier.  Le pourquoi et les
+   conditions de validite sont en tete de WALLS.C. */
+#define WALLPIPE 2
+void wallsPipeKick(MthMatrix *view);
+void wallsPipeJoin(void);
+void wallsPipeDiscard(void);  /* joint puis jette : la camera va bouger, ou le niveau partir */
+extern int pipeSpin;          /* tours d'attente a la jointure ; -1 = rien n'etait en vol */
+
+int vdp1NmClipped;  /* cellules fenetrees en V dans l'image : remplace les maxima cx/cy */
+
 int vdp1MaxCoord;   /* max(|x|,|y|) -- conserve pour compatibilite d'affichage */
 int vdp1MaxX,vdp1MaxY;  /* separes : dit SUR QUEL AXE on sort de la plage */
 static __inline__ int vdp1TakeMaxX(void){int m=vdp1MaxX; vdp1MaxX=0; return m;}

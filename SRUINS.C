@@ -2127,6 +2127,11 @@ int runLevel(char *filename,int levelNm)
      EZ_localCoord(320/2,CFG_YCENTER);
      pushProfile("Walls");
      /* ok */
+#if WALLPIPE
+     /* recuperer la traversee lancee dans la queue de l'image precedente, AVANT que le
+	maitre ne touche sectorDraw[] */
+     wallsPipeJoin();
+#endif
      drawWalls(viewTransform.current);
      /* nok */
      popProfile();
@@ -2230,8 +2235,13 @@ int runLevel(char *filename,int levelNm)
 	}
 #endif
 
-     drawStringf(-158,-70,1,"polys:%d cx:%d cy:%d",nmPolys+nmSlavePolys,
-		 vdp1TakeMaxX(),vdp1TakeMaxY());
+     /* LEGENDE  polys : cellules emises (murs+sols+plafonds, sprites exclus)
+		 vcl   : cellules fenetrees en V, donc hors plage VDP1 (etait cx/cy)
+		 pipe  : tours d'attente a la jointure de la traversee lancee dans la queue
+			 de l'image precedente.  0 = elle tenait entierement dans la queue ;
+			 -1 = rien n'etait en vol (seisme, ou WALLPIPE a 0). */
+     drawStringf(-158,-70,1,"polys:%d vcl:%d pipe:%d",nmPolys+nmSlavePolys,
+		 vdp1NmClipped,pipeSpin);
 
      drawStringf(-158,-50,1,"time:%d %d:%d",
 		 (lastCalc+lastLastCalc)>>1,lastDraw,
@@ -2273,6 +2283,29 @@ int runLevel(char *filename,int levelNm)
      EZ_closeCommand();
      SPR_WaitDrawEnd();
      lastDraw=htimer-lastCalc;
+
+#if WALLPIPE
+     /* LE CREUX.  Ici le trace VDP1 est fini et le maitre n'a plus qu'a attendre le VBlank :
+	a 30 fps il a calcule 222 lignes sur 525, il en reste ~300 de vide.  La camera et la
+	geometrie sont figees depuis Motion et Post, et drawWalls de l'image suivante les
+	relira telles quelles -- la traversee lancee ici est donc identique au bit pres a
+	celle qu'il ferait lui-meme.
+	Apres ce point, seuls le menu, la question de voyage et les deux sorties peuvent
+	encore bouger la camera : chacun appelle wallsPipeDiscard().
+	Le seisme fait exception -- son jitter est tire au sommet de l'image suivante. */
+     if (!earthQuake)
+	{MTH_PushMatrix(&viewTransform);
+	 MTH_RotateMatrixZ(&viewTransform, playerAngle.roll );
+	 MTH_RotateMatrixX(&viewTransform, playerAngle.pitch );
+	 MTH_RotateMatrixY(&viewTransform, playerAngle.yaw );
+	 MTH_MoveMatrix(&viewTransform,
+			-camera->pos.x,
+			-camera->pos.y+playerHeightOffset+CFG_VIEW_BOB,
+			-camera->pos.z);
+	 wallsPipeKick(viewTransform.current);
+	 MTH_PopMatrix(&viewTransform);
+	}
+#endif
 
      DISABLE;
      if (vtimer<smoothVTime)
@@ -2319,11 +2352,16 @@ int runLevel(char *filename,int levelNm)
      lastYaw=playerAngle.yaw; lastPitch=playerAngle.pitch;
 
      if (playerIsDead && colorOffset[0]==-255)
-	return 1;
+	{wallsPipeDiscard();
+	 return 1;
+	}
 
      enablePlax(1);
      if (hitCamel)
-	{enablePlax(0);
+	{/* la question de voyage rend la main ailleurs, ou plus tard : ce que l'esclave est
+	    en train de traverser ne vaudra plus rien */
+	 wallsPipeDiscard();
+	 enablePlax(0);
 	 if (runTravelQuestion(getText(LB_LEVELNAMES,hitCamel-100)))
 	    return hitCamel;
 	 stunCounter=10;
@@ -2332,7 +2370,9 @@ int runLevel(char *filename,int levelNm)
 	}
      if (playerMotionEnable &&
 	 (!(lastInputSample & PER_DGT_S) || !controlerPresent || delayed_fade))
-	{enablePlax(0);
+	{/* le menu peut bouger la camera */
+	 wallsPipeDiscard();
+	 enablePlax(0);
 	 runInventory(currentState.inventory,keyMask,&mapOn,
 		      delayed_fade,delayed_fadeButton,delayed_fadeSel);
 	 delayed_fade=0;
@@ -2340,7 +2380,9 @@ int runLevel(char *filename,int levelNm)
 	}
 
      if (quitRequest)
-	return 2;
+	{wallsPipeDiscard();
+	 return 2;
+	}
 #ifdef PSYQ
      pollhost();
 #endif

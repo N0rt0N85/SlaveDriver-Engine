@@ -16,15 +16,24 @@ void normTransform(sVertexType *firstVertex,MthMatrix *viewMatrix,
 		   Fixed32 nearFloor);   /* GCC14: z floor of the projection, per wall */
 
 /* SONDE -- ne modifie rien.  Les sommets de commande VDP1 tiennent sur 11 bits signes,
-   -1024..1023, et au-dela "operation cannot be guaranteed" (HW_VDP1.md:184). */
+   -1024..1023, et au-dela "operation cannot be guaranteed" (HW_VDP1.md:184).
+
+   ELLE COURT SUR CHAQUE CELLULE, et personne ne la lit : vdp1TakeMaxX/Y (WALLS.H:13-14) n'ont
+   aucun appelant.  A 0 elle disparait ; la mettre a 1 en meme temps qu'on ajoute la ligne
+   d'overlay qui l'affiche, jamais avant. */
+#define VDP1PROBE 0
+
 static __inline__ XyInt *probeVDP1(XyInt *poly)
-{int i,a;
+{
+#if VDP1PROBE
+ int i,a;
  for (i=0;i<4;i++)
     {a=poly[i].x; if (a<0) a=-a;
      if (a>vdp1MaxX) vdp1MaxX=a; if (a>vdp1MaxCoord) vdp1MaxCoord=a;
      a=poly[i].y; if (a<0) a=-a;
      if (a>vdp1MaxY) vdp1MaxY=a; if (a>vdp1MaxCoord) vdp1MaxCoord=a;
     }
+#endif
  return poly;
 }
 
@@ -53,17 +62,29 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
 				       struct gourTable *g)
 {int i,a,over=0,t0,t1;
  XyInt src[4];
+ /* `over` ne regarde QUE |y| : seul l'axe V est fenetrable (voir LIMITES CONNUES ci-dessus).
+    Ne pas y ajouter x -- ca enverrait au fenetrage vertical des quads qui debordent en x, que
+    ce chemin ne sait pas corriger. */
  for (i=0;i<4;i++)
-    {a=poly[i].x; if (a<0) a=-a;
+    {
+#if VDP1PROBE
+     a=poly[i].x; if (a<0) a=-a;
      if (a>vdp1MaxX) vdp1MaxX=a; if (a>vdp1MaxCoord) vdp1MaxCoord=a;
+#endif
      a=poly[i].y; if (a<0) a=-a;
+#if VDP1PROBE
      if (a>vdp1MaxY) vdp1MaxY=a; if (a>vdp1MaxCoord) vdp1MaxCoord=a;
+#endif
      if (a>VDP1LIM) over=1;
     }
  if (!over)
     {EZ_specialDistSpr2(charNm,poly,g);
      return;
     }
+ /* Remplace les anciens maxima cx/cy : le compte des cellules effectivement fenetrees dit la
+    meme chose (sort-on de la plage, et combien souvent) pour un increment sur le chemin RARE,
+    au lieu de six comparaisons sur CHAQUE cellule. */
+ vdp1NmClipped++;
 #if VDP1DIAG
  /* DISQUE DE DIAGNOSTIC -- ne corrige rien, MONTRE.  Toute cellule dont un sommet sort de la
     plage VDP1 est peinte a plat, bornee a la plage, au lieu d'etre texturee :
