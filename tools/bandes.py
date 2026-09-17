@@ -48,25 +48,51 @@ def direction(a, b):
 
 
 def jointures(quads):
-    """Combien de jointures consecutives forment une bande, dans l'ordre donne."""
+    """Combien de PAIRES consecutives forment une bande, dans l'ordre donne. C'est un MAJORANT de
+    ce que le moteur prend : lui exige en plus une direction constante (voir ci-dessous)."""
     return sum(1 for i in range(len(quads) - 1) if direction(quads[i], quads[i + 1]))
 
 
+def jointures_moteur(quads):
+    """Ce que la boucle prend VRAIMENT (WALLS.C:1203-1211) : `dir` est fixe par la premiere paire
+    et la bande s'arrete des qu'il change ; apres la soudure f..g on repart a g+1, donc la paire
+    (g, g+1) n'est meme pas examinee.
+
+    L'ecart avec `jointures` n'est pas theorique : une couverture par chemins qui melange les deux
+    directions a 50/50 perd un joint a chaque changement. MESURE E1M1 avant correction : 2 103
+    paires valides mais 1 716 seulement consommees, 387 perdues en changements de direction."""
+    n = len(quads)
+    f = j = 0
+    while f < n - 1:
+        d = direction(quads[f], quads[f + 1])
+        if d == 0:
+            f += 1
+            continue
+        g = f
+        while g < n - 1 and direction(quads[g], quads[g + 1]) == d:
+            g += 1
+            j += 1
+        f = g + 1
+    return j
+
+
 def _successeurs(quads):
-    """Les arcs i -> j : « j peut suivre i ». Indexes par l'arete cherchee, donc lineaires en
-    nombre de faces -- une arete est partagee par deux faces, pas par toutes."""
+    """Les arcs i -> j : « j peut suivre i », SEPARES PAR DIRECTION. Indexes par l'arete cherchee,
+    donc lineaires en nombre de faces -- une arete est partagee par deux faces, pas par toutes."""
     par01 = defaultdict(list)
     par12 = defaultdict(list)
     for j, q in enumerate(quads):
         par01[(q[0], q[1])].append(j)
         par12[(q[1], q[2])].append(j)
-    succ = []
+    s1, s2 = [], []
     for i, q in enumerate(quads):
-        s = set(par01.get((q[3], q[2]), ()))          # dir 1
-        s |= set(par12.get((q[0], q[3]), ()))         # dir 2 : b[1] == a[0], b[2] == a[3]
-        s.discard(i)
-        succ.append(sorted(s))
-    return succ
+        a = set(par01.get((q[3], q[2]), ()))          # dir 1 : a[3]==b[0] et a[2]==b[1]
+        b = set(par12.get((q[0], q[3]), ()))          # dir 2 : a[0]==b[1] et a[3]==b[2]
+        a.discard(i)
+        b.discard(i)
+        s1.append(sorted(a))
+        s2.append(sorted(b))
+    return s1, s2
 
 
 def _couplage(succ):
@@ -130,29 +156,67 @@ def _casser_cycles(apres, avant):
     return casses
 
 
-def ordonner(quads):
-    """-> la permutation des faces qui maximise les jointures soudables, et le nombre de cycles
-    casses. Deterministe : a graphe egal, meme sortie."""
-    if len(quads) < 3:
-        return list(range(len(quads))), 0
-    apres, avant = _couplage(_successeurs(quads))
+def _monochrome(s_premier, s_second, n):
+    """Couverture par chemins dont chaque chemin est d'UNE SEULE direction.
+
+    On couvre d'abord avec `s_premier`, puis on complete avec `s_second` entre faces restees
+    LIBRES des deux cotes. Une face qui a deja un predecesseur ne peut pas prendre un successeur
+    de l'autre direction : ce serait precisement le changement que la boucle refuse.
+    -> (apres, avant, cycles casses)."""
+    apres, avant = _couplage(s_premier)
     casses = _casser_cycles(apres, avant)
+    libre = [i for i in range(n) if apres[i] < 0 and avant[i] < 0]
+    if libre:
+        ok = set(libre)
+        s2 = [[j for j in s_second[i] if j in ok] if i in ok else [] for i in range(n)]
+        a2, v2 = _couplage(s2)
+        casses += _casser_cycles(a2, v2)
+        for i in range(n):
+            if a2[i] >= 0:
+                apres[i] = a2[i]
+                avant[a2[i]] = i
+    return apres, avant, casses
+
+
+def _chemins(apres, avant, n):
     ordre = []
-    for i in range(len(quads)):
+    for i in range(n):
         if avant[i] < 0:
             k = i
             while k >= 0:
                 ordre.append(k)
                 k = apres[k]
-    assert len(ordre) == len(quads), (len(ordre), len(quads))
-    return ordre, casses
+    return ordre
+
+
+def ordonner(quads):
+    """-> la permutation des faces qui maximise les jointures que le moteur CONSOMME, et le
+    nombre de cycles casses.
+
+    Les deux directions sont essayees en tete a tour de role et on garde la meilleure, jugee a
+    `jointures_moteur` -- pas a `jointures`, qui compte des joints que la boucle laissera tomber.
+    Deterministe : a graphe egal, meme sortie."""
+    n = len(quads)
+    if n < 3:
+        return list(range(n)), 0
+    s1, s2 = _successeurs(quads)
+    meilleur = None
+    for premier, second in ((s1, s2), (s2, s1)):
+        apres, avant, casses = _monochrome(premier, second, n)
+        ordre = _chemins(apres, avant, n)
+        assert len(ordre) == n, (len(ordre), n)
+        score = jointures_moteur([quads[i] for i in ordre])
+        if meilleur is None or score > meilleur[0]:
+            meilleur = (score, ordre, casses)
+    return meilleur[1], meilleur[2]
 
 
 def ranger(faces, cle=lambda f: f["v"]):
-    """Applique `ordonner` a une liste de faces, quelle que soit leur representation.
+    """Applique `ordonner` a une liste de faces, quelle que soit leur representation. Les deux
+    comptes rendus sont ceux que le moteur CONSOMME.
     -> (faces rangees, jointures avant, jointures apres, cycles casses)."""
     quads = [cle(f) for f in faces]
-    avant = jointures(quads)
+    avant = jointures_moteur(quads)
     ordre, casses = ordonner(quads)
     rangees = [faces[i] for i in ordre]
-    return rangees, avant, jointures([cle(f) for f in rangees]), casses
+    return rangees, avant, jointures_moteur([cle(f) for f in rangees]), casses

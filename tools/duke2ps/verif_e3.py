@@ -318,19 +318,21 @@ def main():
     # --- L. bandes de maillage ---------------------------------------------------------------
     # Meme critere que chez Doom, et sans seuil arbitraire : le plafond est recalcule sur les
     # faces du fichier (couplage biparti = optimum exact) et on exige d'y etre.
-    atteint = possibles = plafond = 0
+    atteint = possibles = plafond = paires = 0
     for w in W:
         if w["firstFace"] < 0:
             continue
         q = [F[i]["v"] for i in range(w["firstFace"], w["lastFace"] + 1)]
         possibles += max(0, len(q) - 1)
-        atteint += bandes.jointures(q)
+        atteint += bandes.jointures_moteur(q)
+        paires += bandes.jointures(q)
         o, _c = bandes.ordonner(q)
-        plafond += bandes.jointures([q[i] for i in o])
+        plafond += bandes.jointures_moteur([q[i] for i in o])
     res["bandes_au_plafond"] = dict(
         ok=atteint >= plafond, n=possibles - atteint, total=possibles,
-        exemples=[f"{atteint} jointures soudables ({100.0 * atteint / max(1, possibles):.1f} %)",
-                  f"plafond {plafond} ({100.0 * plafond / max(1, possibles):.1f} %)"])
+        exemples=[f"{atteint} jointures CONSOMMEES ({100.0 * atteint / max(1, possibles):.1f} %)",
+                  f"plafond {plafond} ({100.0 * plafond / max(1, possibles):.1f} %)",
+                  f"{paires} paires valides, {paires - atteint} laissees par la boucle"])
 
     ok = all(v["ok"] for v in res.values())
     for k, v in res.items():
