@@ -27,7 +27,7 @@
 #define RECTCLIP 1
 #define ENABLEFARCLIP 0
 
-#define TILENEARCLIP F(33)
+#define TILENEARCLIP F(33)	/* GCC14: superseded -- the grid's near floor is passed per wall */
 #define MIPDIST F(256)
 
 short plaxBBymax,plaxBBxmax,
@@ -1000,6 +1000,76 @@ void EZ_specialDistSpr2(short charNm,XyInt *xy,struct gourTable *gTable);
 #define MIPMID(d,a,b)  (d).x=(short)((((int)(a).x)+(b).x)>>1);  (d).y=(short)((((int)(a).y)+(b).y)>>1);  (d).light=(unsigned short)(((((a).light)&0x7bde)+(((b).light)&0x7bde))>>1)
 #endif
 
+
+/* GCC14: near-plane repair of one row of a wall grid.  rectTransform cannot clip, only clamp: a
+   grid point nearer than the floor keeps its x,y and is divided by the floor, which for a point
+   BEHIND the eye invents a projection -- as the wall's near end swings behind you its view x goes
+   to zero and the corner drifts to the middle of the screen.  Every flagged point of the row
+   (light bit 15) is moved to where the row crosses the cut, the further along U of
+     (a) the near plane z = NEARCLIP, and
+     (b) the lateral frustum plane |x| = z, where the wall genuinely leaves the screen.
+   (b) is the only handle on the straddling tile's stretch: a tile's pattern cannot be windowed in
+   U (WALLASM.H), so the whole tile is spread from that corner whatever we do, and the screen edge
+   is the furthest out the corner can sit without leaving a hole.  Two divides per row, and only
+   on a wall that has a corner nearer than the plane. */
+static void repairNearRow(struct vCalc *row,int nmv,MthXyz *p0,MthXyz *vW)
+{int i,flagged=0;
+ Fixed32 u,ua,den,umax;
+ MthXyz P;
+ XyInt xy;
+
+ for (i=0;i<nmv;i++)
+    if (row[i].light & 0x8000)
+       flagged++;
+ if (!flagged || !vW->z)
+    return;
+ umax=F(nmv-1);
+ if (flagged==nmv)
+    /* no crossing in this row -- it is nearer than the plane from end to end.  Collapse it to
+       its far end rather than divide for a crossing that is not there. */
+    u=(vW->z>0)? umax: 0;
+ else
+    {/* a point on each side of the plane, so this crossing is inside [0,nmv-1] */
+     u=MTH_Div(NEARCLIP-p0->z,vW->z);
+     den=(p0->x<0)? vW->x+vW->z: vW->x-vW->z;
+     if (den)
+	{ua=(p0->x<0)? MTH_Div(-(p0->z+p0->x),den): MTH_Div(p0->z-p0->x,den);
+	 if (ua>=0 && ua<=umax && ((vW->z>0)? (ua>u): (ua<u)))
+	    u=ua;
+	}
+     if (u<0) u=0;
+     if (u>umax) u=umax;
+    }
+ P.x=p0->x+MTH_Mul(vW->x,u);
+ P.y=p0->y+MTH_Mul(vW->y,u);
+ P.z=p0->z+MTH_Mul(vW->z,u);
+ if (P.z<NEARCLIP)
+    P.z=NEARCLIP;
+ project_point(&P,&xy);
+ for (i=0;i<nmv;i++)
+    if (row[i].light & 0x8000)
+       {row[i].x=xy.x;
+	row[i].y=xy.y;
+       }
+}
+
+/* GCC14: true when the wall reaches nearer than the plane, i.e. when its grid needs the repair
+   above.  Four compares on the per-wall path, which already does back face, far and near. */
+static int wallCrossesNear(MthXyz *coords)
+{return coords[0].z<NEARCLIP || coords[1].z<NEARCLIP ||
+	coords[2].z<NEARCLIP || coords[3].z<NEARCLIP;
+}
+
+#define REPAIRNEARGRID(vc)						\
+ if (wallCrossesNear(coords))						\
+    {MthXyz p0=coords[0];						\
+     int rh;								\
+     for (rh=0;rh<=height;rh++)						\
+	{repairNearRow((vc)+rh*(width+1),width+1,&p0,&vWidth);		\
+	 p0.x+=vHeight.x; p0.y+=vHeight.y; p0.z+=vHeight.z;		\
+	}								\
+    }
+
 void drawRectWall(sWallType *theWall,MthXyz *coords,
 		  SectorDrawRecord *s)
 {MthXyz vWidth,vHeight;
@@ -1058,11 +1128,13 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 	       vCalc,
 	       (nmWallLights||wavyIndex)?&getLight:NULL,
 #if MIPMAP
-	       tileBias?1:0,tileBias?2*(theWall->tileLength-width):0
+	       tileBias?1:0,tileBias?2*(theWall->tileLength-width):0,
 #else
-	       0,0
+	       0,0,
 #endif
-	       );
+	       NEARCLIP);
+
+ REPAIRNEARGRID(vCalc);
 
  tex=theWall->textures;
  row1=0;
@@ -1209,7 +1281,7 @@ void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
  assert(wall->lastVertex-wall->firstVertex<MAXVPERWALL);
  normTransform(level_vertex+wall->firstVertex,view,
 	       wall->lastVertex-wall->firstVertex+1,vCalc,
-	       (nmWallLights||wavyIndex)?&getLight:NULL);
+	       (nmWallLights||wavyIndex)?&getLight:NULL,NEARCLIP);
 
 #ifndef NDEBUG
  maxV=wall->lastVertex-wall->firstVertex+1;
@@ -1415,11 +1487,13 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 	       slave_vCalc,
 	       (snmWallLights||sWavyIndex)?sgetLight:NULL,
 #if MIPMAP
-	       tileBias?1:0,tileBias?2*(theWall->tileLength-width):0
+	       tileBias?1:0,tileBias?2*(theWall->tileLength-width):0,
 #else
-	       0,0
+	       0,0,
 #endif
-	       );
+	       NEARCLIP);
+
+ REPAIRNEARGRID(slave_vCalc);
 
  tex=theWall->textures;
  row1=0;
@@ -1561,7 +1635,7 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 
  normTransform(level_vertex+wall->firstVertex,view,
 	       wall->lastVertex-wall->firstVertex+1,slave_vCalc,
-	       (snmWallLights||sWavyIndex)?&sgetLight:NULL);
+	       (snmWallLights||sWavyIndex)?&sgetLight:NULL,NEARCLIP);
 
  for (f=wall->firstFace;f<=wall->lastFace;f++)
     {clip=0x8000;
@@ -2081,7 +2155,8 @@ void drawSlaveWalls(void)
 	 assert(0);
 	}
      assert(getPicClass(slaveResult[i].tile)==TILE16BPP);
-     EZ_specialDistSpr(slaveResult+i,mapPic(slaveResult[i].tile));
+     EZ_distSprVClip(mapPic(slaveResult[i].tile),	/* GCC14: was EZ_specialDistSpr */
+		     slaveResult[i].poly,&slaveResult[i].gtable);
 
 #if 0
      EZ_distSpr(DIR_NOREV,

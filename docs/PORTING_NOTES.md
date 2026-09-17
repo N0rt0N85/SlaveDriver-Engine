@@ -195,3 +195,53 @@ Every section-relative reference of the 66 affected objects (of 342) was shifted
 link the `.A` archives **as COFF** (`-Wl,-b,coff-sh sdk/sbl6/lib/coff/SEGA_SAT.A -Wl,-b,elf32-sh`);
 verified to pull the same 39 members and to read the table at the `.data`(int.o) address from the
 `.map`. The Makefile's link rule keeps a guard on that address.
+
+## Near plane — the wall grid clamped z instead of clipping against it
+
+The two vertex transforms in `wallasm_gnu.s` did not near-clip: they projected every wall grid
+point against `max(z, F(33))`, a hardcoded constant, leaving x and y untouched. That is a clamp,
+not a clip — the vertex is not walked along its edge to the plane, it is divided by 33 instead of
+by its own z, so the projected point contracts radially toward the vanishing point by z/33. x and
+y shrink together, the corner slides along the ray from the screen centre and the edge pivots.
+
+For a wall the player is touching, every grid point shares the same perpendicular distance `d`, so
+all the points nearer than 33 land on one column: the near part of the wall collapses onto a
+vertical seam at `FOCALDIST*d/33` px from the screen centre, and the band between that seam and the
+screen edge is never painted. Retail never showed it because PowerSlave's radius is 47: the seam
+sits at 228 px, off a 160 px half-screen. It becomes visible as soon as the radius drops below 33 —
+Duke's cylinder at 20 puts it at 97 px, the Doom player at 16 puts it at 78 px. `#define
+TILENEARCLIP F(33)` (WALLS.C) was the C-side record of the constant and `clipZTile` its mirror;
+both were already unreferenced.
+
+`NEAR_CLIP` was made a per-game parameter (32 / 18 / 10) but the 33 in the assembly was not, so the
+face and the grid disagreed: `clipZ` (WALLS.C) cuts the face correctly at `NEARCLIP`, while the
+grid inside that face was projected against 33. The floor is now the last argument of
+`rectTransform` (`@(48,r14)`) and of `normTransform` (`r8`, which joins the saved set), and all
+four call sites pass `NEARCLIP`. The inner loops lose an instruction each. The default build's
+floor moves 33 -> 32, its `NEAR_CLIP`.
+
+Consequence: projected coordinates near the plane grow by the ratio of the two floors (3.3x in the
+Doom build) and can leave the VDP1 range of -1024..1023. The master path already handles that
+(`EZ_distSprVClip`, WALLASM.H: exact V windowing of the pattern, `VDP1DIAG` paints what it cannot
+window); the slave queue went straight to `EZ_specialDistSpr` and now goes through the same call.
+The U axis still has no windowing — a horizontal overflow shows up as a red cell on a `VDP1DIAG`
+disc.
+
+Lowering the floor left two artefacts, both from the same place: the floor decides *which* z is
+used, it does not make the clamp a clip. A grid point **behind** the eye still got a projection
+invented for it, and since the clamp keeps x, its screen x is `FOCALDIST*x/T` whatever z is — so
+as a wall's near end swings behind the player its view x goes to zero and the corner drifts to the
+middle of the screen. And the tile that straddles the plane has its near corner at
+`FOCALDIST*d/T`, with the whole pattern spread affinely from there: at T = 10 and d = 16 the
+border shows texel 41% where perspective wants 12%, i.e. the tile reads ~1.5x too zoomed. Moving
+the corner further out makes that worse, moving it inside the screen edge leaves a hole, so the
+screen edge itself is the optimum — and a tile's pattern cannot be windowed in U (WALLASM.H), so
+the corner is the only handle there is.
+
+`repairNearRow` (WALLS.C) therefore moves every flagged point of a grid row to where that row
+crosses the cut, the further along U of the near plane `z = NEARCLIP` and the lateral frustum
+plane `|x| = z`. The first fixes the drift — the flagged points land on a fixed world position
+instead of a projection of a point that has none. The second puts the straddling tile's corner
+exactly on the screen edge, which leaves no hole and is the least-stretched position available;
+the residual, ~14% squashed in the same case, is inherent to one sprite per cell. It costs two
+divides per row and runs only on a wall with a corner nearer than the plane (`wallCrossesNear`).

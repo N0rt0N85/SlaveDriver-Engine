@@ -6,12 +6,14 @@ void rectTransform(Fixed32 wx,Fixed32 wy,Fixed32 wz,
 		   unsigned short (*lightFunc)(char vLightIndex,
 					       MthXyz *pos),
 		   int lightStepExtra,   /* GCC14: extra bytes after each light byte */
-		   int lightRowExtra);   /* GCC14: extra bytes after each vertex row */
+		   int lightRowExtra,    /* GCC14: extra bytes after each vertex row */
+		   Fixed32 nearFloor);   /* GCC14: z floor of the projection, per wall */
 
 void normTransform(sVertexType *firstVertex,MthMatrix *viewMatrix,
 		   int nmVert,void *output,
 		   unsigned short (*lightFunc)(char vLightIndex,
-					       MthXyz *pos));
+					       MthXyz *pos),
+		   Fixed32 nearFloor);   /* GCC14: z floor of the projection, per wall */
 
 /* SONDE -- ne modifie rien.  Les sommets de commande VDP1 tiennent sur 11 bits signes,
    -1024..1023, et au-dela "operation cannot be guaranteed" (HW_VDP1.md:184). */
@@ -26,7 +28,7 @@ static __inline__ XyInt *probeVDP1(XyInt *poly)
  return poly;
 }
 
-#define VDP1DIAG 1      /* 1 = disque de diagnostic : peint les cellules hors plage */
+#define VDP1DIAG 0      /* 1 = disque de diagnostic : peint les cellules hors plage */
 #define VDP1LIM  1023
 #define VCLIPONE 1024   /* fractions de coupe en 1/1024 : (30000<<10) tient dans un int */
 

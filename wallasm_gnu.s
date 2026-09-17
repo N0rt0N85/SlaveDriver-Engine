@@ -71,7 +71,9 @@ _project_point:
 !	       Fixed32 hx,Fixed32 hy,Fixed32 hz,
 !	       vCalc *output,
 !	       unsigned short (*lightFunc)(int vLightIndex,
-!				                  MthXyz *pos);
+!				                  MthXyz *pos),
+!	       int lightStepExtra,int lightRowExtra,
+!	       Fixed32 nearFloor);	! GCC14: last arg, @(48,r14)
 
 !	xref level_vertexLight   -> _level_vertexLight
 !	xref greyTable           -> _greyTable
@@ -110,15 +112,14 @@ _rectTransform:
 	! r11=width loop counter
 .Lrt_widthLoop:
 	! project point
-	! ... compare z coordinate against F(33)
-	mov #33,r1		! GCC14: was mov.l #33,r1
-	shll16 r1
+	! ... compare z coordinate against the caller's near floor
+	mov.l @(48,r14),r1	! GCC14: near floor, per wall (was a hardcoded F(33))
 	cmp/gt r1,r10
 	movt r2
 	bt/s .Lrt_2
 	mov r10,r0		! GCC14: was mov.l r10,r0
 	mov r1,r0		! GCC14: was mov.l r1,r0
-.Lrt_2:	! ... r0 now holds the z coord or F(33), whichever is greater
+.Lrt_2:	! ... r0 now holds the z coord or the near floor, whichever is greater
 	! ... start the hardware divide
 	mov.l r0,@(0,gbr)	! GCC14: @(gbr,0)
 	mov r0,r3		! save r0 for depth cue calculation below   GCC14: was mov.l
@@ -249,7 +250,8 @@ _rectTransform:
 !normTransform(sVertexType *firstVertex,MthMatrix *viewMatrix,
 !	       int nmVert,vCalc *output,
 !	       unsigned short (*lightFunc)(int vLightIndex,
-!				           MthXyz *pos);
+!				           MthXyz *pos),
+!	       Fixed32 nearFloor);	! GCC14: last arg, kept in r8
 
 !	xref level_vertex        (unused)
 !	xref greyTable           -> _greyTable
@@ -260,13 +262,15 @@ _normTransform:
 	! r6=nmVert left
 	! r7=vCalc *output
 
+	mov.l r8,@-r15		! GCC14: r8 carries the near floor
 	mov.l r10,@-r15
 	mov.l r11,@-r15
 	mov.l r12,@-r15
 	mov.l r13,@-r15
 	mov.l r14,@-r15
-	mov.l @(20,r15),r13	! GCC14: @(r15,20)
+	mov.l @(24,r15),r13	! GCC14: was @(r15,20), before r8 joined the saved set
 	! r13=lightFunc
+	mov.l @(28,r15),r8	! GCC14: near floor, per wall (was a hardcoded F(33))
 	sts.l pr,@-r15
 	! reserve space for point
 	mov #0,r0
@@ -297,14 +301,12 @@ _normTransform:
 	mov.l @r5+,r1
 	add r1,r0
 	! z coordinate is now in r0
-	mov #33,r1		! GCC14: was mov.l #33,r1
-	shll16 r1
-	cmp/gt r1,r0
+	cmp/gt r8,r0		! GCC14: near floor in r8 (was a hardcoded F(33))
 	movt r2
 	bt/s .Lnt_2
 	mov r0,r10		! copy of z coordinate in r10
-	mov r1,r0		! GCC14: was mov.l r1,r0
-.Lnt_2:	! ... r0 now holds the z coord or F(33), whichever is greater
+	mov r8,r0
+.Lnt_2:	! ... r0 now holds the z coord or the near floor, whichever is greater
 	! ... start the hardware divide
 	mov.l r0,@(0,gbr)	! GCC14: @(gbr,0)
 	mov #80,r0		! GCC14: was mov.l #80,r0
@@ -392,8 +394,9 @@ _normTransform:
 	mov.l @r15+,r13
 	mov.l @r15+,r12
 	mov.l @r15+,r11
-	rts
 	mov.l @r15+,r10
+	rts
+	mov.l @r15+,r8		! GCC14: r8 joined the saved set
 
 
 
