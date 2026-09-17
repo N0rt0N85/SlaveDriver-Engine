@@ -60,6 +60,7 @@ GX = 8            # unites Build par unite Saturn en X/Z
 GY = 128          # unites Build par unite Saturn en Y
 TILESIZE = 64     # SLEVEL.H:126
 EPS_AVALE = 8.0   # u : residu en deca duquel une coupe ne se fait pas (voir _grid_cells)
+
 MAXVPERWALL = 700 # WALLS.C:1207 (strict : lastVertex-firstVertex < 700)
 MAX_SLAVE = 1300  # MAXNMSLAVEPOLYS (WALLS.C:1336)
 SLAVE_MARGIN = 50 # WALLS.C:1374
@@ -89,6 +90,41 @@ CAP_CELLS = 256   # borne de decoupe. MESURE retail : le plus gros mur PARALLELO
                   # cellules et le plus gros mur A FACES 376 faces. Les bornes DURES sont ailleurs :
                   # drawRectWall assert(tileLength*tileHeight < MAXVPERWALL) (WALLS.C:1017) et
                   # rectTransform remplit (tileLength+1)*(tileHeight+1) entrees dans vCalc[700].
+
+
+# ------------------------------------------------------------------------------------------
+# optimisations de niveau
+# ------------------------------------------------------------------------------------------
+# Refusables une par une (--optim). Une carte editee a la main doit pouvoir etre convertie TELLE
+# QUELLE : celui qui place ses secteurs au pixel pres a le droit de refuser qu'on les deplace, meme
+# pour gagner des faces. Le convertisseur Doom a sa propre liste (doom3d.OPTIMS) et se sert du meme
+# lecteur.
+#   avalement : une coupe de cellule qui ne laisserait qu'une echarde ne se fait pas, la voisine
+#               s'etend sur le residu (_grid_cells) -- etirement borne a x1,25
+OPTIMS = ("avalement",)
+OPTIM_ACTIFS = set(OPTIMS)
+
+
+def lire_optims(s, connues, defaut=None):
+    """`defaut`, `all`, `none`, ou une liste de noms pris dans `connues`. Un nom inconnu est une
+    ERREUR : une faute de frappe qui couperait silencieusement une regle serait pire que pas
+    d'option du tout.
+
+    `defaut` != `all` : une optimisation dont un defaut a ete CONSTATE mais pas encore explique
+    reste disponible sans etre active. On ne la retire pas du code -- on la retire du defaut."""
+    s = (s or "defaut").strip().lower()
+    if s in ("defaut", "default"):
+        return set(connues if defaut is None else defaut)
+    if s in ("all", "toutes"):
+        return set(connues)
+    if s in ("none", "aucune"):
+        return set()
+    noms = {x.strip() for x in s.split(",") if x.strip()}
+    inconnus = noms - set(connues)
+    if inconnus:
+        raise SystemExit("--optim : %s inconnu(s) ; connus : %s"
+                         % (", ".join(sorted(inconnus)), ", ".join(connues)))
+    return noms
 
 
 # ------------------------------------------------------------------------------------------
@@ -321,9 +357,8 @@ class Emitter:
     """Accumule sommets, faces, textures et lumieres dans les tableaux du .LEV."""
 
     def __init__(self):
-        # Avalement des echardes (voir _grid_cells). Reglable par l'appelant : le convertisseur Doom
-        # le met a 0 quand l'auteur refuse cette optimisation (doom3d, --optim). Duke et PowerSlave
-        # n'emettent jamais avec `grille`, donc la valeur ne les concerne pas.
+        # Avalement des echardes (voir _grid_cells). Reglable par l'appelant : les deux
+        # convertisseurs le mettent a 0 quand l'auteur refuse cette optimisation (--optim none).
         self.eps_avale = EPS_AVALE
         self.vertices = []      # {x,y,z,light,pad}
         self.faces = []         # {v[4] LOCAUX au mur, tile, pad}
@@ -677,15 +712,21 @@ class Emitter:
         decalee sur deux cellules (MESURE E1M1 : 150 faces sur 3 039). Chaque face tient alors
         dans UNE cellule : les cellules pleines sont exactes, seule la cellule du bord s'ecrase."""
         src_edges = [(poly_xz[k], poly_xz[(k + 1) % len(poly_xz)]) for k in range(len(poly_xz))]
-        # AVALEMENT (flat Doom seulement) : une coupe qui ne laisserait qu'une ECHARDE d'un cote --
-        # moins de EPS_AVALE -- ne se fait pas, et la cellule voisine s'etend sur le residu. Une
-        # echarde porte la tuile ENTIERE ecrasee au moins 8 fois, donc sous ce que le moteur sait
-        # representer ; l'avaler coute un etirement borne par (64 + 2*eps)/64 = x1,25 sur sa voisine
-        # (le residu peut tomber des DEUX cotes), contre x8 et plus si on la garde. MESURE E1M1 :
-        # 178 echardes -> 42, et les faces baissent avec elles.
-        # A eps = 0 les deux expressions redonnent EXACTEMENT les anciennes : Duke et PowerSlave, qui
-        # n'emettent jamais avec `grille`, ne bougent pas d'un octet.
-        eps = self.eps_avale if grille else 0.0
+        # AVALEMENT : une coupe qui ne laisserait qu'une ECHARDE d'un cote -- moins de EPS_AVALE --
+        # ne se fait pas, et la cellule voisine s'etend sur le residu. Une echarde porte la tuile
+        # ENTIERE ecrasee au moins 8 fois, donc sous ce que le moteur sait representer ; l'avaler
+        # coute un etirement borne par (64 + 2*eps)/64 = x1,25 sur sa voisine (le residu peut tomber
+        # des DEUX cotes), contre x8 et plus si on la garde. MESURE E1M1 : 178 echardes -> 42, et les
+        # faces baissent avec elles.
+        # Les DEUX branches sont relachees ensemble, sinon la boucle tourne : `_cut_line` refuserait
+        # une coupe que `fini` reclame encore, et on sortirait sur la garde des 20 000. Une cellule
+        # peut donc aller jusqu'a 64 + 2*eps -- c'est exactement l'etirement x1,25 ci-dessus. La
+        # terminaison tient parce qu'au-dela de 64 + 2*eps l'intervalle (lo+eps, hi-eps) est plus
+        # long que 64 : il contient toujours un multiple de 64, donc la coupe est une vraie ligne de
+        # grille et le nombre de lignes restantes decroit strictement.
+        # A eps = 0 les expressions redonnent EXACTEMENT les anciennes : --optim none reproduit le
+        # convertisseur d'avant a l'octet pres.
+        eps = self.eps_avale
 
         def traverse(lo, hi):
             return (int((lo + eps) // TILESIZE) + 1) * TILESIZE < hi - eps
@@ -706,7 +747,7 @@ class Emitter:
             if grille:
                 fini = not (traverse(min(xs), max(xs)) or traverse(min(zs), max(zs)))
             else:
-                fini = dx <= TILESIZE and dz <= TILESIZE
+                fini = dx <= TILESIZE + 2 * eps and dz <= TILESIZE + 2 * eps
             if fini:
                 out.append(poly)
                 continue
@@ -714,7 +755,7 @@ class Emitter:
             cut = None
             for ax in axes:
                 lo, hi = (min(xs), max(xs)) if ax == 0 else (min(zs), max(zs))
-                if (not traverse(lo, hi)) if grille else (hi - lo <= TILESIZE):
+                if (not traverse(lo, hi)) if grille else (hi - lo <= TILESIZE + 2 * eps):
                     continue
                 c = self._cut_line(lo, hi, eps)
                 a, b = split_convex(poly, ax, c, src_edges)
@@ -908,6 +949,8 @@ class Builder:
         self.pieces = convex["pieces"]
         self.cap = cap_cells
         self.em = Emitter()
+        if "avalement" not in OPTIM_ACTIFS:
+            self.em.eps_avale = 0.0           # --optim : l'auteur refuse l'avalement des echardes
         self.stats = Counter()
         self.stats["cellules_max"] = 0
         # morceau -> secteur gen1 (meme indice : un morceau = un secteur)
@@ -1342,8 +1385,14 @@ def main(argv=None):
     ap.add_argument("--budget-tuiles", type=int, default=0,
                     help="conserve pour la ligne de commande ; sans effet depuis E4.1b, ou une "
                          "texture ne coute plus qu'une seule tuile")
+    ap.add_argument("--optim", default="defaut",
+                    help="optimisations de niveau : `defaut`, `all`, `none`, ou une liste parmi %s. "
+                         "`none` reproduit a l'octet pres la geometrie de la carte dessinee."
+                         % ", ".join(OPTIMS))
     args = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
+    global OPTIM_ACTIFS
+    OPTIM_ACTIFS = lire_optims(args.optim, OPTIMS)
 
     quant = json.load(open(args.q, encoding="utf-8"))
     convex = json.load(open(args.c, encoding="utf-8"))
@@ -1372,7 +1421,8 @@ def main(argv=None):
     crit = check(em, quant, args.cap_cells)
     out = dict(format="duke2ps/e3-geom3d v1",
                source=dict(quant=os.path.relpath(args.q, ROOT).replace("\\", "/"),
-                           convex=os.path.relpath(args.c, ROOT).replace("\\", "/")),
+                           convex=os.path.relpath(args.c, ROOT).replace("\\", "/"),
+                           optim=sorted(OPTIM_ACTIFS)),
                conventions=dict(
                    repere="X = x_build/8, Z = -y_build/8, Y = -z_build/128 ; Y vers le haut",
                    mur="v0,v1 arete haute ; v2,v3 arete basse ; v0->v1 longueur, v1->v2 hauteur",
