@@ -22,6 +22,8 @@ import sys
 from collections import defaultdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import coverage                                                         # noqa: E402
 
 
 def area2(pts):
@@ -277,6 +279,17 @@ def main():
     res["portails_connexes"] = dict(ok=len(seen) == len(S), n=len(S) - len(seen), total=len(S),
                                     exemples=[f"{len(seen)}/{len(S)} secteurs atteints depuis le 0",
                                               f"depart Build {dep.get('build_xy')}"])
+
+    # --- J. couverture des flats -----------------------------------------------------------
+    # A verifie que le pavage d'un secteur a la bonne AIRE ; ce critere-la verifie que la surface
+    # est effectivement PEINTE -- une face peut exister, avoir la bonne aire et ne pas etre au bon
+    # endroit. Il vient du convertisseur Doom, ou il a date un trou de 3 760 u2 qu'aucun autre
+    # critere ne voyait (tools/coverage.py). MESURE 16-09 sur E1L1 : 0 trou, residu 2 352 u2 au sol
+    # et 1 424 u2 au plafond, soit des eclats de bord diagonal du meme ordre que Doom.
+    trous, aire = coverage.trous_de_flats(S, W, V, F)
+    res["flats_sans_trou"] = dict(
+        ok=not trous, n=len(trous), total=len(S),
+        exemples=(sorted(trous, key=lambda t: -t[2])[:4] if trous else [coverage.resume(trous, aire)]))
 
     ok = all(v["ok"] for v in res.values())
     for k, v in res.items():
