@@ -2261,6 +2261,15 @@ int runLevel(char *filename,int levelNm)
      {int nmSwaps[NMCLASSES];
       int used[NMCLASSES];
       pic_nextFrame(nmSwaps,used);
+#ifdef STATUSTEXT
+      /* LEGENDE  tile: tuiles de la classe des murs utilisees dans CETTE image, contre les
+		       slots alloues (params/doom.cfg : PIC_SLOTS=32,31,1,0,0)
+		  sw:  evictions dans l'image.  Des que ce n'est plus 0, une tuile a ete
+		       remplacee alors qu'une commande deja emise la designait : c'est
+		       exactement la mauvaise texture a l'ecran, avec la bonne encore
+		       visible ailleurs dans la meme image. */
+      drawStringf(-158,-90,1,"tile:%d sw:%d",used[0],nmSwaps[0]);
+#endif
 #ifndef NDEBUG
 #ifdef STATUSTEXT
       drawString(25,-80,1,"vswaps:");

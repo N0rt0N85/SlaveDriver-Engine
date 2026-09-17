@@ -168,7 +168,9 @@ void setDrawModeBit(int class,int bit,int onOff)
 
 void pic_nextFrame(int *swaps,int *used)
 {
-#ifndef NDEBUG
+ /* Les disques de mesure sont des builds NDEBUG : sans cela, les deux seuls compteurs qui
+    disent si le cache de tuiles deborde n'existent que dans le build ou personne ne mesure. */
+#if !defined(NDEBUG) || defined(STATUSTEXT)
  int i,j;
  if (swaps)
     for (i=0;i<NMCLASSES;i++)
@@ -282,7 +284,7 @@ static void map(Pic *p)
      assert(oldest>=0);
      index=oldest;
      classType[(int)p->class].slots[oldest]->charNm=-1;
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(STATUSTEXT)
      classType[(int)p->class].nmSwaps++;
 #endif
     }
