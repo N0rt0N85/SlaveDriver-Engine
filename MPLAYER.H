@@ -49,9 +49,8 @@ int  mpIndexOfObject(struct __object *o);
 extern unsigned char mpBank[MPMAX];
 void mpSetBanks(void);
 
-/* Pads: player k reads its own 60 Hz queue (V_BLANK.C fills them).  A pad that is absent
-   mirrors another -- player 3 plays pad 1, player 4 pad 2 -- so 3 and 4 players can be tried
-   on an emulator that offers two pads. */
+/* Pads: player k reads its own 60 Hz queue (V_BLANK.C fills them) from its own pad; a player
+   whose pad is absent stands still. */
 extern volatile unsigned short inputQP[MPMAX][16];
 extern volatile unsigned short lastInputSampleP[MPMAX];
 extern int mpPadsPresent;               /* pads found at the last poll */

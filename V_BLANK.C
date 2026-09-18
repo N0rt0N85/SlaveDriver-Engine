@@ -93,9 +93,8 @@ void processInput(void)
  lastInputSample=accum;
  inputAccum&=accum;
  /* GCC14: every pad, both ports, in order: port 1's devices then port 2's, each record an id,
-    a size and PER_SIZE_NCON_15 data bytes.  The k-th pad found is player k+1's.  With nothing
-    for a player, player 3 mirrors pad 1 and player 4 pad 2 (so 3-4p can be tried with two
-    pads); player 2 without a pad stands still.  START is kept for the players' own polling
+    a size and PER_SIZE_NCON_15 data bytes.  The k-th pad found is player k+1's; a player
+    without a pad stands still -- every player reads its own pad, none mirrors another.  START is kept for the players' own polling
     (lastInputSampleP) and stripped from their queues: on those pads it adds a player, it
     never opens the menu. */
  {unsigned short pad[MPMAX];
@@ -110,7 +109,7 @@ void processInput(void)
 	}
   mpPadsPresent=k;
   for (i=k;i<MPMAX;i++)
-     pad[i]=(i>=2)? pad[i-2]: 0xffff;
+     pad[i]=0xffff;
   for (i=1;i<MPMAX;i++)
      {lastInputSampleP[i]=pad[i];
       inputQP[i][(int)inputQHead]=pad[i]|PER_DGT_S;
