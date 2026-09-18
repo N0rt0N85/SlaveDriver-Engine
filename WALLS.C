@@ -1197,11 +1197,14 @@ static int nearSegment(XyInt *a,XyInt *b,int px,int py)
  if (n>m) m=n;
  return cr<=m;
 }
-#define LODVXY(Q,V,I) {(Q).x=(V)[I].x; (Q).y=(V)[I].y;}
 
-/* Extends a strip of black faces from f, fills q[] with the welded quad, returns the strip's
-   last index -- f itself if nothing welds. */
-static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,int *why)
+/* Extends a strip of black faces from f -- or, tile >= 0, of faces of that tile (far LOD) --, fills
+   q[] with the welded quad and gq with its corners' gouraud, returns the strip's last index -- f
+   itself if nothing welds.  why[] counts the black welds refused. */
+#define WELDS(n) (tile<0? faceIsBlack(n,V): level_face[n].tile==tile)
+#define LODVXYG(Q,L,V,I) {(Q).x=(V)[I].x; (Q).y=(V)[I].y; (L)=(V)[I].light;}
+static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,struct gourTable *gq,
+			 int *why,int tile)
 {int g,dir,j;
  unsigned short *a,*c;
  if (f>=wall->lastFace)
@@ -1214,13 +1217,13 @@ static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,int *why
 	dir=2;                     /* ... the other way */
      else
 	{dir=0;
-	 if (faceIsBlack(f+1,V))
+	 if (tile<0 && faceIsBlack(f+1,V))
 	    why[0]++;   /* next face was black, but not in the strip */
 	}
      g=f;
      while (dir && g<wall->lastFace)
 	{a=level_face[g].v; c=level_face[g+1].v;
-	 if (!faceIsBlack(g+1,V))
+	 if (!WELDS(g+1))
 	    break;
 	 if (dir==1 ? !(a[3]==c[0] && a[2]==c[1])
 		    : !(a[0]==c[1] && a[3]==c[2]))
@@ -1231,31 +1234,31 @@ static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,int *why
  if (g==f)
     dir=0;
  if (dir==1)
-    {LODVXY(q[0],V,level_face[f].v[0]);
-     LODVXY(q[1],V,level_face[f].v[1]);
-     LODVXY(q[2],V,level_face[g].v[2]);
-     LODVXY(q[3],V,level_face[g].v[3]);
+    {LODVXYG(q[0],gq->entry[0],V,level_face[f].v[0]);
+     LODVXYG(q[1],gq->entry[1],V,level_face[f].v[1]);
+     LODVXYG(q[2],gq->entry[2],V,level_face[g].v[2]);
+     LODVXYG(q[3],gq->entry[3],V,level_face[g].v[3]);
      for (j=f;j<g;j++)   /* the skipped vertices are the shared edges */
 	if (!nearSegment(q+0,q+3,V[level_face[j].v[3]].x,V[level_face[j].v[3]].y) ||
 	    !nearSegment(q+1,q+2,V[level_face[j].v[2]].x,V[level_face[j].v[2]].y))
-	   {dir=0; why[1]++; break;}
+	   {dir=0; if (tile<0) why[1]++; break;}
     }
  else
     if (dir==2)
-       {LODVXY(q[0],V,level_face[g].v[0]);
-	LODVXY(q[1],V,level_face[f].v[1]);
-	LODVXY(q[2],V,level_face[f].v[2]);
-	LODVXY(q[3],V,level_face[g].v[3]);
+       {LODVXYG(q[0],gq->entry[0],V,level_face[g].v[0]);
+	LODVXYG(q[1],gq->entry[1],V,level_face[f].v[1]);
+	LODVXYG(q[2],gq->entry[2],V,level_face[f].v[2]);
+	LODVXYG(q[3],gq->entry[3],V,level_face[g].v[3]);
 	for (j=f;j<g;j++)
 	   if (!nearSegment(q+0,q+1,V[level_face[j].v[0]].x,V[level_face[j].v[0]].y) ||
 	       !nearSegment(q+3,q+2,V[level_face[j].v[3]].x,V[level_face[j].v[3]].y))
-	      {dir=0; why[1]++; break;}
+	      {dir=0; if (tile<0) why[1]++; break;}
        }
  if (!dir)
-    {LODVXY(q[0],V,level_face[f].v[0]);
-     LODVXY(q[1],V,level_face[f].v[1]);
-     LODVXY(q[2],V,level_face[f].v[2]);
-     LODVXY(q[3],V,level_face[f].v[3]);
+    {LODVXYG(q[0],gq->entry[0],V,level_face[f].v[0]);
+     LODVXYG(q[1],gq->entry[1],V,level_face[f].v[1]);
+     LODVXYG(q[2],gq->entry[2],V,level_face[f].v[2]);
+     LODVXYG(q[3],gq->entry[3],V,level_face[f].v[3]);
      return f;
     }
  return g;
@@ -1299,13 +1302,52 @@ static int fuseWallPoly(MthXyz *coords,SectorDrawRecord *s,XyInt *q)
     project_point(coords+j,q+j);
  return clip_visible(q,s);
 }
+
+/* GCC14: far LOD.  A wall wholly beyond lodFar units (0 = off; SRUINS.C sets it per view) folds
+   like a black one, but painted: its first tile's first texel (PIC.C picFirstColour) under its
+   corners' own light.  A mesh wall welds its strips of one tile the same way.  Same vetoes as
+   the light LOD: dynamic lights, water. */
+int lodFar;
+static int wallIsFar(MthXyz *coords,int nmLit,int wavy)
+{int i;
+ if (!lodEnable || !lodFar || nmLit || wavy)
+    return 0;
+ for (i=0;i<4;i++)
+    if (coords[i].z<(lodFar<<16))
+       return 0;
+ return 1;
+}
+
+/* the gouraud of a folded wall's corners, grid vertices 0, W, H(W+1)+W and H(W+1), lit as the asm
+   lights them: static light less the fog, clamped */
+static void farCorners(sWallType *w,MthXyz *coords,struct gourTable *g)
+{int c,l,z,W=w->tileLength,H=w->tileHeight,idx[4];
+ idx[0]=0;
+ idx[1]=W;
+ idx[2]=H*(W+1)+W;
+ idx[3]=H*(W+1);
+ for (c=0;c<4;c++)
+    {z=coords[c].z>>24;
+     if (z>255)
+	z=255;
+     l=level_vertexLight[w->firstLight+idx[c]]-fogTable[z];
+     if (l<0)
+	l=0;
+     if (l>32)
+	l=32;
+     g->entry[c]=greyTable[l];
+    }
+}
+#define LODFARTILE(p) (-16-(p))     /* a slave record painted flat, of pic p (drawSlaveWalls) */
 /* LOD PAINTED gives each stage its own colour, to see at a glance which path a surface took:
       GREEN  a whole wall folded into one quad
          BLUE   a weld of black cells in a wall grid
-         RED    a mesh face -- floor, ceiling or curved wall */
+         RED    a mesh face -- floor, ceiling or curved wall
+         YELLOW the far LOD, folded wall or welded faces */
 #define LODCOL_FUSE ((lodEnable>1)? RGB(0,24,0): RGB(0,0,0))
 #define LODCOL_RECT ((lodEnable>1)? RGB(0,0,24): RGB(0,0,0))
 #define LODCOL_MESH ((lodEnable>1)? RGB(24,0,0): RGB(0,0,0))
+#define LODCOL_FAR(p) ((lodEnable>1)? RGB(24,24,0): picFirstColour(p))   /* YELLOW: the far LOD */
 
 /* GCC14: a textured wall cell, through the wall tiles' rule (PIC.H): its tile, or a flat quad in
    the tile's first texel's colour when the cache refuses it.  Its size is the smaller side of its
@@ -1369,6 +1411,19 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
      if (fuseWallPoly(coords,s,q) && vdp1Range(q))
 	{VDP1WALK(q);
 	 EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_FUSE,q,NULL);
+	 lodFused++;
+	 lodCells+=theWall->tileHeight*theWall->tileLength-1;
+	}
+     return;
+    }
+ if (wallIsFar(coords,nmWallLights,wavyIndex))
+    {XyInt q[4];
+     struct gourTable g;
+     if (fuseWallPoly(coords,s,q) && vdp1Range(q))
+	{farCorners(theWall,coords,&g);
+	 VDP1WALK(q);
+	 EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|DRAW_GOURAU,
+		    LODCOL_FAR(level_texture[theWall->textures+1]),q,&g);
 	 lodFused++;
 	 lodCells+=theWall->tileHeight*theWall->tileLength-1;
 	}
@@ -1551,8 +1606,8 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 }
 
 
-void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
-{int f,i,v,clip;
+void drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRecord *s)
+{int f,i,v,clip,far,black;
  XyInt poly[4];
  struct gourTable gtable;
  struct vCalc vCalc[MAXVPERWALL];
@@ -1571,6 +1626,7 @@ void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
  normTransform(level_vertex+wall->firstVertex,view,
 	       wall->lastVertex-wall->firstVertex+1,vCalc,
 	       (nmWallLights||wavyIndex)?&getLight:NULL,NEARCLIP);
+ far=wallIsFar(coords,nmWallLights,wavyIndex);
 
 #ifndef NDEBUG
  maxV=wall->lastVertex-wall->firstVertex+1;
@@ -1595,12 +1651,17 @@ void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 
      assert(getPicClass(level_face[f].tile)==TILE16BPP);
      nmMeshPolys++;
-     if (CELLISBLACK(gtable))
+     if ((black=CELLISBLACK(gtable)) || far)
 	{XyInt q[4];
-	 int g=weldFaceStrip(wall,f,vCalc,q,lodWeldWhy);
+	 struct gourTable gq;
+	 int g=weldFaceStrip(wall,f,vCalc,q,&gq,lodWeldWhy,black? -1: level_face[f].tile);
 	 if (clip_visible(q,s) && vdp1Range(q))
 	    {VDP1WALK(q);
-	     EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_MESH,q,NULL);
+	     if (black)
+		EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_MESH,q,NULL);
+	     else
+		EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|DRAW_GOURAU,
+			   LODCOL_FAR(level_face[f].tile),q,&gq);
 	     nmPolys++;
 	     lodFlat++;
 	    }
@@ -1709,7 +1770,6 @@ struct doorwayCache
  /* xmin=-32000 for walls that are totally rejected */
 } doorwayCache[MAXNMWALLS];
 
-#define MAXNMSLAVEPOLYS 1300
 
 /* if tile==-1 then gtable.entry[0]==sector that was just drawn */
 struct slaveDrawResult
@@ -1789,6 +1849,20 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
      if (fuseWallPoly(coords,s,q))
 	{cacheThruResult[nmSlavePolys].tile=-5;
 	 cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOL_FUSE;
+	 for (j=0;j<4;j++)
+	    cacheThruResult[nmSlavePolys].poly[j]=q[j];
+	 nmSlavePolys++;
+	 slave_lodFused++;
+	 slave_lodCells+=theWall->tileHeight*theWall->tileLength-1;
+	}
+     return;
+    }
+ if (wallIsFar(coords,snmWallLights,sWavyIndex))
+    {XyInt q[4];
+     int j;
+     if (fuseWallPoly(coords,s,q))
+	{cacheThruResult[nmSlavePolys].tile=LODFARTILE(level_texture[theWall->textures+1]);
+	 farCorners(theWall,coords,&cacheThruResult[nmSlavePolys].gtable);
 	 for (j=0;j<4;j++)
 	    cacheThruResult[nmSlavePolys].poly[j]=q[j];
 	 nmSlavePolys++;
@@ -1962,8 +2036,8 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
     }
 }
 
-void slave_drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
-{int f,i,v,clip;
+void slave_drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRecord *s)
+{int f,i,v,clip,far,black;
  XyInt poly[4];
  struct gourTable gtable;
  struct slaveDrawResult *cacheThruResult=
@@ -1979,6 +2053,7 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
  normTransform(level_vertex+wall->firstVertex,view,
 	       wall->lastVertex-wall->firstVertex+1,slave_vCalc,
 	       (snmWallLights||sWavyIndex)?&sgetLight:NULL,NEARCLIP);
+ far=wallIsFar(coords,snmWallLights,sWavyIndex);
 
  for (f=wall->firstFace;f<=wall->lastFace;f++)
     {clip=0x8000;
@@ -1993,12 +2068,19 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 	continue;
 
      slave_nmMeshPolys++;
-     if (CELLISBLACK(gtable))
+     if ((black=CELLISBLACK(gtable)) || far)
 	{XyInt q[4];
-	 int g=weldFaceStrip(wall,f,slave_vCalc,q,slave_lodWeldWhy);
+	 struct gourTable gq;
+	 int g=weldFaceStrip(wall,f,slave_vCalc,q,&gq,slave_lodWeldWhy,black? -1: level_face[f].tile);
 	 if (clip_visible(q,s))
-	    {cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOL_MESH;
-	     cacheThruResult[nmSlavePolys].tile=-5;
+	    {if (black)
+		{cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOL_MESH;
+		 cacheThruResult[nmSlavePolys].tile=-5;
+		}
+	     else
+		{cacheThruResult[nmSlavePolys].gtable=gq;
+		 cacheThruResult[nmSlavePolys].tile=LODFARTILE(level_face[f].tile);
+		}
 	     for (i=0;i<4;i++)
 		cacheThruResult[nmSlavePolys].poly[i]=q[i];
 	     nmSlavePolys++;
@@ -2222,7 +2304,7 @@ void drawSector(int sectorNm,MthMatrix *view,int slave)
 	 if (theWall->flags & WALLFLAG_PARALLELOGRAM)
 	    slave_drawRectWall(theWall,tformed,sectorDraw+sectorNm);
 	 else
-	    slave_drawWall(theWall,view,sectorDraw+sectorNm);
+	    slave_drawWall(theWall,view,tformed,sectorDraw+sectorNm);
 	}
      else
 	{if (level_sector[sectorNm].flags & SECFLAG_WATER)
@@ -2232,7 +2314,7 @@ void drawSector(int sectorNm,MthMatrix *view,int slave)
 	 if (theWall->flags & WALLFLAG_PARALLELOGRAM)
 	    drawRectWall(theWall,tformed,sectorDraw+sectorNm);
 	 else
-	    drawWall(theWall,view,sectorDraw+sectorNm);
+	    drawWall(theWall,view,tformed,sectorDraw+sectorNm);
 	}
 
     }
@@ -2619,7 +2701,17 @@ void drawSlaveWalls(void)
 #endif
 
  for (i=0;i<nmSlavePolys;i++)
-    {if (slaveResult[i].tile<0)
+    {if (slaveResult[i].tile<=LODFARTILE(0))
+	{/* far LOD: a folded wall, or a welded strip of faces, painted flat under its gouraud */
+	 if (vdp1Range(slaveResult[i].poly))
+	    {VDP1WALK(slaveResult[i].poly);
+	     EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|DRAW_GOURAU,
+			LODCOL_FAR(LODFARTILE(slaveResult[i].tile)),slaveResult[i].poly,
+			&slaveResult[i].gtable);
+	    }
+	 continue;
+	}
+     if (slaveResult[i].tile<0)
 	{switch (slaveResult[i].tile)
 	    {
 	     case -5:

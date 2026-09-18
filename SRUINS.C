@@ -1925,7 +1925,7 @@ static void mpSetViewport(int k,int emit)
 static MthXyz mpSpawnPos[MPMAX];
 static int mpSpawnSector[MPMAX];
 static Orient mpSpawnAngle[MPMAX];
-static int mpSoloFog=4096;      /* solo's fog (the L+R+Z toggle), kept while split screen runs */
+static int mpFogCap=4096;       /* the L+R+Z toggle's fog: a ceiling on every view's (mpSetViewFog) */
 static char mpBuilt[MPMAX];     /* slot k holds a player whose state goes on to the next level */
 static char mpInLevel[MPMAX];   /* ... and whose body exists in THIS level */
 
@@ -2071,6 +2071,8 @@ static void mpShowBodies(int viewer)
     mpBody[k]->sequence=(k==viewer)? -1: CFG_MP_BODYSEQ(mpBody[k],mpBody[viewer],mpPeekInt(k,&currentState.health));
 }
 
+static void mpFogOut(void);
+
 /* START on pad 2, in a level: one more player, and from 4 back to 1.  The traversal started in
    the last image's tail was made for the old view 0, whose window changes with the count. */
 static void mpPollStart(void)
@@ -2079,8 +2081,6 @@ static void mpPollStart(void)
  if (down && !held && mpPadsPresent>=2 && !playerIsDead)
     {wallsPipeDiscard();
      mpSwitch(0);
-     if (mpPlayers==1)
-	mpSoloFog=fogDist;       /* split screen steers the fog per view: keep solo's */
      if (mpPlayers<MPMAX)
 	{mpPlayers++;
 	 mpBuild(mpPlayers-1);
@@ -2091,7 +2091,8 @@ static void mpPollStart(void)
 	 for (k=1;k<mpPlayers;k++)
 	    mpPark(k);
 	 mpPlayers=1;
-	 setFog(mpSoloFog);
+	 mpFogOut();
+	 setFog(mpFogCap);
 	}
      mpArmed=mpPlayers;
      mpSetBanks();
@@ -2115,29 +2116,56 @@ static void mpPollStart(void)
    weapons, HUD and overlay.  The frame rate does not steer it: on the console the split image is
    master-bound (traversal, sprites, logic), not cell-bound, and fog driven by the fps darkened
    every view to 512 for a few percent (HW, 4p: 7 fps either way).  So the fog closes in only
-   where the list would overflow.  Solo is left alone: its fog stays the L+R+Z toggle. */
+   where the list would overflow -- or the slave's cell records (MAXNMSLAVEPOLYS), past which it
+   drops whole walls.
+   One rule for every view, solo included (gameparams SOLO_FOG = budget; toggle keeps PowerSlave's
+   solo, the L+R+Z fog alone): the budget steers the view's fog, no fog while it holds, the L+R+Z
+   toggle's fog is a ceiling, and the far LOD (FAR_LOD, WALLS.C wallIsFar) sits at FAR_LOD, or at
+   the fog when the fog is nearer. */
 #define MPFOGMIN 512
 #define MPFOGMAX 4096
+#define MPQUADLIM (MAXNMSLAVEPOLYS-50-(MAXNMSLAVEPOLYS>>4))
 static int mpView;              /* the view being drawn */
 static int mpFog[MPMAX]={MPFOGMAX,MPFOGMAX,MPFOGMAX,MPFOGMAX};
-static int mpCells[MPMAX],mpShare[MPMAX];
+static int mpCells[MPMAX],mpShare[MPMAX],mpQuads[MPMAX];
 static int mpBudget;
 
 static void mpSetViewFog(int k)
-{if (mpPlayers>1)
-    setFog(mpFog[k]);
+{int f=mpFog[k];
+#ifndef GP_SOLO_FOG_BUDGET
+ if (mpPlayers==1)
+    f=MPFOGMAX;                 /* solo's fog is the toggle's alone */
+#endif
+ if (f>mpFogCap)
+    f=mpFogCap;
+ if (f!=fogDist)
+    {setFog(f);
+     if (mpPlayers==1)          /* split screen has no sky: it lends the sky's bank to a player */
+	setPlaxFade(skyFadeFor(f));
+    }
+ lodFar=GP_FAR_LOD? (GP_FAR_LOD<f? GP_FAR_LOD: f): 0;
 }
 
 static void mpViewDone(int k)
 {mpCells[k]=nmPolys+nmSlavePolys;
+ mpQuads[k]=nmSlavePolys;
+}
+
+/* back to one player: solo starts without fog */
+static void mpFogOut(void)
+{int k;
+ for (k=0;k<MPMAX;k++)
+    mpFog[k]=MPFOGMAX;
 }
 
 /* once per image, after the VDP1 is done */
 static void mpBalance(void)
 {int k,n,left,changed,eq,cells=0;
  int want[MPMAX],done[MPMAX];
+#ifndef GP_SOLO_FOG_BUDGET
  if (mpPlayers==1)
     return;
+#endif
  for (k=0;k<mpPlayers;k++)
     cells+=mpCells[k];
  mpBudget=EZ_cmdsCap()-(EZ_cmdsUsed()-cells)-32;
@@ -2161,9 +2189,9 @@ static void mpBalance(void)
        mpShare[k]=left/n;
  /* each view closes in on its share: fog in by 1/16 an image, out by 1/32 */
  for (k=0;k<mpPlayers;k++)
-    {if (mpCells[k]>mpShare[k])
+    {if (mpCells[k]>mpShare[k] || mpQuads[k]>MPQUADLIM)
 	mpFog[k]-=mpFog[k]>>4;
-     else if (mpCells[k]<mpShare[k]-(mpShare[k]>>3))
+     else if (mpCells[k]<mpShare[k]-(mpShare[k]>>3) && mpQuads[k]<MPQUADLIM-(MPQUADLIM>>3))
 	mpFog[k]+=(mpFog[k]>>5)+1;
      if (mpFog[k]<MPFOGMIN) mpFog[k]=MPFOGMIN;
      if (mpFog[k]>MPFOGMAX) mpFog[k]=MPFOGMAX;
@@ -2434,7 +2462,8 @@ int runLevel(char *filename,int levelNm)
      }
      {/* GCC14: hold L+R+Z -- or A+C+Z, for pads whose triggers are analog only -- to cycle the
 	  depth fog: original, then black at 2048, 1024 and 512 units.  A deliberate departure
-	  from Doom, which never darkens a fully lit sector: the point is to judge it on screen. */
+	  from Doom, which never darkens a fully lit sector: the point is to judge it on screen.
+	  It is a ceiling: the budget may bring a view's fog nearer (mpSetViewFog). */
       static char fogChord=0;
       static char fogIndex=0;
       if (((((~lastInputSample)&(PER_DGT_TL|PER_DGT_TR|PER_DGT_Z)))==
@@ -2445,6 +2474,7 @@ int runLevel(char *filename,int levelNm)
 	     {static char *fogName[4]={"FOG OFF (4096)","FOG 2048","FOG 1024","FOG 512"};
 	      static short fogVal[4]={4096,2048,1024,512};
 	      fogIndex=(fogIndex+1)&3;
+	      mpFogCap=fogVal[(int)fogIndex];
 	      setFog(fogVal[(int)fogIndex]);
 	      if (mpPlayers==1)   /* split screen lends bank 7 to a player (MPLAYER.C) */
 	         setPlaxFade(skyFadeFor(fogVal[(int)fogIndex]));
@@ -2662,6 +2692,8 @@ int runLevel(char *filename,int levelNm)
 		 lod : fused walls / cells the fusion avoided / cells emitted
 		       FLAT.  The first two are no longer in polys; the third still
 		       is -- it keeps its VDP1 command and loses only its texture.
+		       Black under the fog, or painted beyond the far LOD (FAR_LOD;
+		       YELLOW under L+R+B's LOD PAINTED).
 	 The fps line used nine of the ~40 readable columns, and -50 to -30
 	 are taken (time, mem, then the profile tree): the LOD fits here. */
      CFG_PROF("Overlay"); drawStringf(-158,-60,1,"fps:%d %d lod:%d/%d/%d",
@@ -2767,15 +2799,19 @@ int runLevel(char *filename,int levelNm)
 		       PIC_LOD_PX, or the size of the last tile that fits when more
 		       compete (PIC.H)
 		  flat: cells painted flat in their tile's first texel: too small /
-		       every slot taken by this image.  Solo only: split screen has
-		       its B: line there. */
+		       every slot taken by this image
+		  B:   the cell budget, the VDP1 list less what the image spends
+		       outside the cells.  Past it, or past the slave's records,
+		       the fog comes in (SOLO_FOG = budget, mpBalance).
+		  Solo only: split screen has its B: line there. */
       /* fog : distance in units at which a fully lit sector reaches black.  4096 is
 	 the original setting, beyond any line of sight -- L+R+Z cycles it.
 	 sky : 0-16 scale applied to the sky palette, READ in PLAX.C -- 16 = intact. */
       drawStringf(-158,-90,1,"tile:%d sw:%d fog:%d sky:%d",used[0],nmSwaps[0],
 		  fogDist,getPlaxFade());
       if (mpPlayers==1)
-	 drawStringf(-158,-110,1,"tex:%dpx flat:%d/%d",picLodNow,picLastSmall,picLastFull);
+	 drawStringf(-158,-110,1,"tex:%dpx flat:%d/%d B:%d",picLodNow,picLastSmall,picLastFull,
+		     mpBudget);
 #endif
 #ifndef NDEBUG
 #ifdef STATUSTEXT

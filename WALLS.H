@@ -24,6 +24,9 @@ void setFog(int dist);
    everywhere becomes ONE flat quad.  0 = never, 1 = fuse, 2 = fuse painted blue.
    lodFused/lodCells = walls fused and cells saved in the frame. */
 extern int lodEnable,lodFused,lodCells,lodFlat;
+/* GCC14: far LOD (WALLS.C wallIsFar): a wall wholly beyond lodFar units folds into one quad painted
+   in its first tile's first texel, a mesh wall welds its strips of one tile.  0 = off. */
+extern int lodFar;
 extern int nmMeshPolys;   /* cells from the mesh path: floors, ceilings, curved walls */
 extern int lodWeldWhy[2]; /* welds refused: [0] off the strip, [1] vertex off the edge */
 
@@ -71,6 +74,7 @@ void initWater(void);
 void stepWater(void);
 
 extern int nmPolys,nmSlavePolys;
+#define MAXNMSLAVEPOLYS 1300    /* the slave's cell records; it drops a wall past this less 50 */
 extern Sprite *autoTarget;
 extern MthXyz autoTFormedPos;
 

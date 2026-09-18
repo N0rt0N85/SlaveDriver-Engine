@@ -317,6 +317,10 @@ const unsigned char *doom_playerTranslation(int k);
 #ifndef GP_PIC_SLOTS
 #define GP_PIC_SLOTS 28,31,1,10,12
 #endif
+/* Far LOD, in world units (WALLS.C wallIsFar) -- gameparams key FAR_LOD, 0 = off. */
+#ifndef GP_FAR_LOD
+#define GP_FAR_LOD 0
+#endif
 
 #ifdef GP_CROUCH_BUTTON_WEPDN
 #define CFG_WEPDN          0                         /* that slot crouches now (SRUINS.C:987)   */
