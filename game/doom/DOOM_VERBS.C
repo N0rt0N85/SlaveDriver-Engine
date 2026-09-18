@@ -5,10 +5,11 @@
  * index = doom_action_t, [0] = NULL; M(n) = actor verb -> .mobj, P(n) = weapon verb -> .psp.  The
  * member is chosen at run time by doomStates[].flags & DOOM_SF_PSPRITE, never here.
  *
- * The E1M1 actor verbs are real (A_Look, A_Chase, A_FaceTarget, A_PosAttack,
- * A_SPosAttack, A_TroopAttack, A_Pain, A_Scream, A_XScream, A_Fall, A_Explode); the weapon
- * verbs (P) live in DOOM_WEAPON.C next to the psprite machine; the actor verbs E1M1 never
- * reaches and the shareware-less weapon verbs stay empty bodies (STUB_ lists below). */
+ * The episode 1 actor verbs are real (A_Look, A_Chase, A_FaceTarget, A_PosAttack,
+ * A_SPosAttack, A_TroopAttack, A_SargAttack, A_BruisAttack, A_BossDeath, A_Pain, A_Scream,
+ * A_XScream, A_Fall, A_Explode; A_HeadAttack too, the same shape); the weapon verbs (P) live in
+ * DOOM_WEAPON.C next to the psprite machine; the actor verbs the shareware never reaches and the
+ * shareware-less weapon verbs stay empty bodies (STUB_ lists below). */
 #include "util.h"
 #include "level.h"
 #include "sprite.h"
@@ -47,7 +48,6 @@ STUB_P(A_FireShotgun2)
 STUB_P(A_OpenShotgun2)
 STUB_P(A_LoadShotgun2)
 STUB_P(A_CloseShotgun2)
-STUB_P(A_Saw)
 STUB_P(A_BFGsound)
 STUB_P(A_FireBFG)
 STUB_M(A_BFGSpray)
@@ -67,12 +67,8 @@ STUB_M(A_FatRaise)
 STUB_M(A_FatAttack1)
 STUB_M(A_FatAttack2)
 STUB_M(A_FatAttack3)
-STUB_M(A_BossDeath)
 STUB_M(A_CPosAttack)
 STUB_M(A_CPosRefire)
-STUB_M(A_SargAttack)
-STUB_M(A_HeadAttack)
-STUB_M(A_BruisAttack)
 STUB_M(A_SkullAttack)
 STUB_M(A_Metal)
 STUB_M(A_SpidRefire)
@@ -340,12 +336,9 @@ static int doomBlocked(DoomActor *this)
  if (collide & COLLIDE_WALL)
     {int w=collide&0xffff;
      assert(w>=0 && w<level_nmWalls);
-     if ((level_wall[w].flags & WALLFLAG_DOORWALL) && level_wall[w].object &&
-	 !doom_wallIsSecret(w))
-	{signalObject((Object *)level_wall[w].object,SIGNAL_PRESS,0,0);
-	 return 0;                              /* the door is opening: keep pushing */
-	}
-     return 1;
+     if (doom_monsterUseDoor(w))
+	return 0;                               /* the door is opening: keep pushing */
+     return 1;                                  /* locked, secret or switch-only: P_Move fails */
     }
  return 0;
 }
@@ -546,6 +539,61 @@ void A_TroopAttack(DoomActor *this)
      return;
     }
  doom_spawnMissile(this,this->target,MT_TROOPSHOT);
+}
+
+/* A_SargAttack (p_enemy.c:922-935): the demon's (and the spectre's) bite, melee only -- its
+   sfx_sgtatk is the attacksound A_Chase plays on entering the melee state */
+void A_SargAttack(DoomActor *this)
+{Sprite *ts;
+ assert(this);
+ if (!this->target)
+    return;
+ A_FaceTarget(this);
+ if (doom_meleeRange(this))
+    {int damage=((P_Random()%10)+1)*4;
+     ts=doom_targetSprite(this->target);
+     if (ts)
+	doom_damage(ts,(Object *)this,(Object *)this,damage);
+    }
+}
+
+/* A_HeadAttack (p_enemy.c:937-954): the cacodemon bites in melee range, else spits */
+void A_HeadAttack(DoomActor *this)
+{assert(this);
+ if (!this->target)
+    return;
+ A_FaceTarget(this);
+ if (doom_meleeRange(this))
+    {Sprite *ts=doom_targetSprite(this->target);
+     int damage=(P_Random()%6+1)*10;
+     if (ts)
+	doom_damage(ts,(Object *)this,(Object *)this,damage);
+     return;
+    }
+ doom_spawnMissile(this,this->target,MT_HEADSHOT);
+}
+
+/* A_BruisAttack (p_enemy.c:966-983): the Baron's claw in melee range, else a green ball -- no
+   A_FaceTarget here, the states before it turn him */
+void A_BruisAttack(DoomActor *this)
+{assert(this);
+ if (!this->target)
+    return;
+ if (doom_meleeRange(this))
+    {Sprite *ts=doom_targetSprite(this->target);
+     int damage=(P_Random()%8+1)*10;
+     doom_sound(this->sprite,sfx_claw);
+     if (ts)
+	doom_damage(ts,(Object *)this,(Object *)this,damage);
+     return;
+    }
+ doom_spawnMissile(this,this->target,MT_BRUISERSHOT);
+}
+
+/* A_BossDeath (p_enemy.c:1666-1760): the level's boss rule lives with the level (DOOM_GAME.C) */
+void A_BossDeath(DoomActor *this)
+{assert(this);
+ doom_bossDeath(this);
 }
 
 /* A_Scream (p_enemy.c:1541-1570): random variant of the death sound */

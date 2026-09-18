@@ -134,13 +134,15 @@ liste statique du contrat §3 l'index 1 est **SHOTGN** : coup de fusil en boucle
 SOUND.C:326-328 ne filtre qu'au sein d'une même trame). Retouche : `1` → macro `CFG_DEATH_SFX` (**11** =
 PLDETH) sur `:967`, et tout le bloc `:963-974` gardé par `if (!playerIsDead)` (le son, la poussée de caméra
 `:970-972` et `deathTimer=0` `:973` ne doivent courir qu'à l'entrée en mort). `doomPlayer` n'est pas dans
-`levStart` : c'est `doom_playerInit` au rechargement qui la remet (cohérent tant que l'inventaire n'est pas
-transporté, plan §2.7). Secteurs spéciaux 7 (nukage) : **SPEC_RUNTIME §6** (`OT_DOOM_DAMAGE`, appel de
+`levStart` : c'est `doom_playerInit` au rechargement qui la remet (`G_PlayerReborn`, comme Doom en solo). Secteurs spéciaux 7 (nukage) : **SPEC_RUNTIME §6** (`OT_DOOM_DAMAGE`, appel de
 `doom_playerDamage(5, NULL)` toutes les 32 tics depuis `doom_playerTic`) ; 9 (secret) : hors J3.
 
-**`doom_playerInit` s'exécute à chaque niveau** (SRUINS.C:2009-2012 est le corps de `runLevel`) ⇒ renaissance
-pistolet/50 balles aussi en passant E1M1 → E1M2, là où Doom conserve l'inventaire. Accepté pour la cible E1M1 ;
-transport = plan §2.7 (+8 o `SaveState`).
+**`doom_playerInit` s'exécute à chaque niveau** (SRUINS.C:2009-2012 est le corps de `runLevel`). Jusqu'au
+18-09 il faisait `G_PlayerReborn` à chaque fois : pistolet et 50 balles en passant E1M1 → E1M2 (vu sur console).
+Depuis, une sortie appelle `doom_playerFinishLevel` (`G_PlayerFinishLevel` : clés et pouvoirs perdus) et le
+niveau suivant garde santé, armure, armes, munitions et sac ; seules une nouvelle partie et la reprise après la
+mort font `G_PlayerReborn` (100 de santé, écrasant la santé que `levStart` remet). Pas de `SaveState` : le
+transport vit dans `doomPlayer`, en RAM, d'un `runLevel` au suivant (SPEC_RUNTIME §6).
 
 ## 2. Armes
 

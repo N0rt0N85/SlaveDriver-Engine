@@ -382,6 +382,39 @@ void A_Punch(DoomPlayer *p,int ps)
  damage=(P_Random()%10+1)<<1;
  yaw=playerAngle.yaw+(P_Random()-P_Random())*DOOM_SPREAD_UNIT;
  doom_aimSlope(&pitch);
+/* A_Saw (p_pspr.c:490-534): damage 2*(P_Random()%10+1), spread, MELEERANGE + 1 (so the puff
+   does not skip the flash).  No target: sfx_sawful.  A target: sfx_sawhit, the view locks on it
+   -- snapped to within ANG90/21 when it is farther than ANG90/20, else turned by ANG90/20 --
+   and the next tic pulls the player forward (MF_JUSTATTACKED, doom_playerSawPull).  Angles in
+   the player convention (sprite angle - 90), which turns the same way as Doom's. */
+#define DOOM_ANG90_20 (F(9)/2)            /* ANG90/20 = 4.5 degrees  */
+#define DOOM_ANG90_21 (F(90)/21)          /* ANG90/21 = 4.29 degrees */
+void A_Saw(DoomPlayer *p,int ps)
+{int damage,yaw,an,delta;
+ Fixed32 pitch;
+ Sprite *t;
+ assert(p);
+ (void)ps;
+ damage=2*(P_Random()%10+1);
+ yaw=playerAngle.yaw+(P_Random()-P_Random())*DOOM_SPREAD_UNIT;
+ doom_aimSlope(&pitch);
+ t=doom_playerLineAttack(normalizeAngle(yaw),pitch,DOOM_MELEERANGE+F(1),damage,1);
+ if (!t)
+    {doom_playerSound(sfx_sawful);
+     return;
+    }
+ doom_playerSound(sfx_sawhit);
+ an=normalizeAngle(getAngle(t->pos.x-camera->pos.x,t->pos.z-camera->pos.z)-F(90));
+ delta=normalizeAngle(an-playerAngle.yaw);
+ if (delta<0)
+    playerAngle.yaw=normalizeAngle((delta<-DOOM_ANG90_20)?an+DOOM_ANG90_21:
+				   playerAngle.yaw-DOOM_ANG90_20);
+ else
+    playerAngle.yaw=normalizeAngle((delta>DOOM_ANG90_20)?an-DOOM_ANG90_21:
+				   playerAngle.yaw+DOOM_ANG90_20);
+ doom_playerSawPull();
+}
+
  t=doom_playerLineAttack(normalizeAngle(yaw),pitch,DOOM_MELEERANGE,damage,1);
  if (t)
     {doom_playerSound(sfx_punch);

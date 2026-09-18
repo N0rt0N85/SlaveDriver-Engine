@@ -71,7 +71,8 @@ de STIM, MEDI, CLIP, SHOT, SHEL, AMMO, SBOX ont `tics = −1` (info.c:968-1012) 
 ramassages d'E1M1 seraient imprenables (§6).
 
 **Spawn** — `int game_placeObject(int ot)` (crochet OBJECT.C:212, contrat §1) : `ot` moteur ⇒ 0 ;
-`OT_DOOM_EXIT/SECRETEXIT/LIGHT/DAMAGE` ⇒ constructeurs de DOOM_GAME.C ; sinon `mt = doomOtToMt[ot]`, lit
+`OT_DOOM_EXIT/SECRETEXIT/LIGHT/DAMAGE/SECRETWALL/TELEPORT/FLOOR` et les interrupteurs 204-226 ⇒ constructeurs de
+DOOM_GAME.C (§6) ; sinon `mt = doomOtToMt[ot]`, lit
 **6 shorts** `sector,x,y,z,angle,flags` (`suckShort`, contrat §1) et appelle `doom_spawn`.
 `doom_spawn(mt, sector, pos, angle, flags)` : `getFreeObject(game_actor_func, ot, class)` avec class =
 `CLASS_MONSTER` si `MF_SHOOTABLE` (monstres **et barils** : `autoTarget` élit les `CLASS_MONSTER`,
@@ -242,8 +243,17 @@ S_BLOOD2`, `< 9 ⇒ S_BLOOD3`. Secteur = `hitSec` du hitscan (`findSectorContain
 ITEMUP/WPNUP, message `GOT*`, visage, `doomPlayer.bonusCount += 6`) ; retour 1 ⇒ `delayKill`. L'objet reste
 dans `objectRunList` (§2). **État joueur = `DoomPlayer` de SPEC_PLAYER §1.2, un seul typedef dans `DOOM.H`**
 (`ammo[4]`, `maxAmmo[4]`, `armorPoints/armorType`, `weaponOwned`, `keys` bits BKEY/YKEY/RKEY, `backpack`,
-`bonusCount`) ; santé = `currentState.health` ; armure/clés non sauvées (E1M1). La table des effets par `SPR`
+`bonusCount`) ; santé = `currentState.health`. La table des effets par `SPR`
 (p_inter.c:335-662) vit dans SPEC_PLAYER §4.3 — pas de `doom_touch` ici.
+
+**D'une carte à l'autre** (2026-09-18 ; avant, chaque carte repartait au pistolet — vu sur console) :
+une sortie (`exit_func` ou la salle 11) appelle `doom_playerFinishLevel` = `G_PlayerFinishLevel` (les clés et
+les pouvoirs restent derrière) avant `playerHitTeleport`, et le `doom_playerInit` suivant garde santé, armure,
+armes, munitions, sac à dos et arme en main. Une nouvelle partie et une reprise après la mort font
+`G_PlayerReborn` : pistolet, 50 balles, 100 de santé, sans armure — la reprise remet aussi
+`currentState = levStart` (SRUINS.C `main`), dont la santé est donc écrasée par les 100 de Doom. Les armes du
+joueur sont dans `STATIC.DAT` (toutes les cartes) et ses sons hors du bloc statique (la tronçonneuse :
+`wad2snd.PLAYER_SOUNDS`) sont ajoutés à chaque carte.
 
 Le `playerGetObject` moteur (SRUINS.C:1583) n'est pas appelé. Drops (P_KillMobj :690-716 : POSS → CLIP,
 SPOS → SHOT) : `doom_spawn(mt, sector, pos, 0, 0)` + `DF_DROPPED`, dans `doom_damageActor`, avec
@@ -257,6 +267,63 @@ pose `doomSectorDamage[sectorNm] = hp` (char[MAXNMSECTORS], 0 sinon) ; dans **`d
 §1.2), `if (doomSectorDamage[camera->s] && !(leveltime & 0x1f)) doom_playerDamage(doomSectorDamage[camera->s],
 NULL)` = `P_PlayerInSpecialSector` (p_spec.c, special 7 : 5 hp / 32 tics ; pas de combinaison anti-radiation en
 E1M1). ~20 lignes ; sans cela les secteurs 13, 55, 57, 61 (nukage) ne blessent pas — écart visible avec Mimas.
+
+**Téléporteurs de ligne** — `OT_DOOM_TELEPORT` (181, contrat §6, 8 shorts). Un objet par feuille du côté
+**arrière** d'une ligne 39/97 : EV_Teleport (p_telept.c) ne part que si l'on franchit la ligne depuis sa face
+avant, ce qui mène dans le secteur arrière. `game_placeObject` le pose en `level_sector[s].object` ;
+`collideSprite` lui envoie `SIGNAL_ENTER` quand la caméra entre dans la feuille (SPRITE.C:731). Le
+handler : brouillard `MT_TFOG` + `sfx_telept` aux pieds du joueur, `moveSpriteTo(camera, dest, pos)` au sol de
+la feuille d'arrivée (œil = sol + rayon + survol), vélocité et `doomPlayer.mom` à zéro, `camera->floorSector =
+dest`, cap = l'angle du `MT_TELEPORTMAN` converti comme le départ (`short × 5760 − F(90)`, OBJECT.C:194,
+AI.C:51), brouillard d'arrivée 20 u devant. `moveSpriteTo` n'envoie rien : arriver sur un autre pad ne
+redéclenche pas, en ressortir puis y revenir oui (Doom idem). **Écarts** : les monstres ne se téléportent pas (le
+moteur ne signale que la caméra) ; pas de gel de 18 tics du joueur (`reactiontime`, p_telept.c) — il faudrait
+toucher `DOOM_PLAYER.C` ; les lignes 125/126 (monstres seuls) ne sont pas converties.
+
+**Portes** — `OT_DOOM_DOOR` (183, contrat §6, 6 shorts ; 2026-09-18). La porte du moteur (`door_func`,
+AI.C:4313) ne savait qu'un déclencheur — un canal y coupe l'appui — et refermait toujours après 128 tics : sur
+E1M2 la porte 97 (manuelle 31 et interrupteur 103) avait perdu son canal, la porte 21 vers dehors (tag 5,
+interrupteur à ~1 500 u) se refermait avant qu'on arrive, et les 51 lignes à clé de l'épisode s'ouvraient sans
+clé. `doomDoor_func` porte le genre de l'**appui** (`EV_VerticalDoor` : clé carte ou crâne, sinon
+`PD_BLUEK`/`PD_YELLOWK`/`PD_REDK` et `sfx_oof` ; sur une porte en route, 1/26-28/117 repartent vers le haut
+si elle descend, vers le bas sinon — jamais pour un monstre ; les genres « open » effacent leur ligne) et
+celui du **tag** (`EV_DoDoor` : `SIGNAL_SWITCH(channel)`, sans effet sur une porte en route). `T_VerticalDoor` :
+2 u/tic (blaze × 4), attente 150 tics pour normal / blazeRaise, les genres open restent ouverts ; le plafond qui
+redescend sur la caméra la renvoie en haut (`SIGNAL_CEILCONTACT`) ; fermée, elle réarme les interrupteurs de son
+canal (`SIGNAL_SWITCHRESET`, la convention du moteur). Un monstre (`doomBlocked` → `doom_monsterUseDoor`)
+n'ouvre qu'une porte manuelle normale sans clé (`P_UseSpecialLine` : le special 1) ; ailleurs il est bloqué et
+change de direction. **Écarts** : les portes qui ferment (3, 16, 42, 50, 75, 76, 107, 110, 113, 116) partent
+ouvertes dans le WAD et ne sont pas converties ; un interrupteur S1 se réarme quand sa porte est refermée.
+
+**Mort du boss** — `A_BossDeath` → `doom_bossDeath` (`DOOM_GAME.C`) : sur E1M8, quand le dernier `MT_BRUISER`
+meurt et que le joueur vit, `SIGNAL_SWITCH(666)` — le sol du tag 666 (secteur 30, le mur qui cache le
+téléporteur) descend au plus bas voisin (`lowerFloorToLowest`, doom2ps `BOSS_TAGS`). Fermé au chargement (sol =
+plafond dans le WAD), ce sol ne laisse qu'une fente de 1 u par où le rendu traversait les 118 secteurs de derrière
+(MESURE 18-09 : l'ordre du peintre y passait de 0 à 81 % de positions fautives) : doom2ps pose
+`WALLFLAG_BLOCKSSIGHT` sur ses portails (le drapeau des murs explosables de PowerSlave, respecté par le rendu,
+WALLS.C:2138, et la ligne de vue, HITSCAN.C:289) et `doomPbOpenSight` l'enlève quand il part. Le téléporteur mène à la
+salle **special 11** : `OT_DOOM_DAMAGE` avec le bit `0x100`, 20 hp toutes les 32 tics, mode dieu coupé, et la
+carte se termine dès que la santé passe à 10 ou moins — E1M8 finit l'épisode (retour au titre, pas d'écran de
+fin).
+
+**Sols qui montent et qui descendent** — `OT_DOOM_FLOOR` (182, contrat §6, 6 shorts ; un escalier = un objet
+par marche, même canal, chacun sa course). **Qui descend** (`throw` < 0 : 36/98/70/71 turbo, 38/82/37/84/23/60
+au plus bas voisin, 83/45/102 au plus haut, le tag 666) : émis à l'état du WAD, il descend de `−throw` à
+FLOORSPEED ou turbo, mêmes sons — l'ascenseur du moteur qu'il était (`OT_STUCKDOWNELEVATOR`) allait à 5 u/tic
+sur le son de PowerSlave ; `lowerAndChange` (37/84) descend sans changer de flat. **Qui monte** : doom2ps émet
+le secteur **à sa destination**
+(un ascenseur en haut : parois de cage fixes que son sol cache, dalles rigides chez les voisins plus bas, fente
+sous un plafond voisin — la géométrie des ascenseurs d'E1M1 déjà validée sur console) ; l'objet
+(`registerPBObject`, préfixe `PushBlockObject`) la redescend de `throw` au placement, puis
+`updatePushBlockPositions()` tout de suite — aucun sprite n'a encore de `floorSector` (SPRITE.C:87), seuls les
+sommets bougent : le niveau démarre dans l'état du WAD. `floorLevel` des feuilles et drapeaux de portails
+(`post_flags`) sont ceux de cet état chargé. Sur `SIGNAL_SWITCH(channel)` : variante *AndChange* d'abord (le
+flat de la face `donorFace` recopié dans les faces de sol du push block, dégâts du secteur remplacés), puis
+montée de `speed`/8 u par tic jusqu'à l'offset 0, `sfx_stnmov` toutes les 8 tics, `sfx_pstop` en haut,
+`doom_pbBlockBits` à chaque pas (T_MoveFloor, T_PlatRaise). Un aller : l'objet reste en haut. **Écarts** : il
+ne s'arrête pas devant un obstacle (Doom le retient, une plate-forme redescend) — le moteur pousse les sprites
+avec lui ; un sol qui monterait jusqu'à son propre plafond s'arrête à la fente de 1 u ; les écraseurs
+(55/56/65/94) et `raiseToTexture` (30/96) ne sont pas convertis.
 
 ## 7. Rotations
 
@@ -294,13 +361,16 @@ qu'appeler ces deux fonctions.
 | AI.C:4673 | `+1` à l'arrêt d'ascenseur | `+3` (PSTOP, contrat §3 ; listé aussi SPEC_PLAYER §5) |
 | **WALLS.C:2701** | `if (tformed.z<F(32)) continue;` | `<CFG_SPRITE_NEARCLIP` (F(10)) : un CLIP/BON1/MEDI (height 16, rayon 8) est ramassé à 16 + 8 = 24 u de la caméra et disparaîtrait à 32 u, 8 u **avant** le ramassage — pop visible sur les 53 ramassages ; `NEAR_CLIP` 10 (doom.cfg:34) est la cohérence |
 | OBJECT.C:212 | `assert(level_object[o].firstParam==objectPPos);` | `… ; if (CFG_PLACE(level_object[o].type)) continue;` (crochet contrat §1) |
+| OBJECT.C:213 | `switch (level_object[o].type)` | `CFG_ENGINE_PLACE switch (…)` = `if (0) switch (…)` : `game_placeObject` pose **tous** les objets Doom (les types moteur qu'émet doom2ps compris : `OT_PLAYER`, `OT_SECTORSWITCH`, `OT_SW1..4`, ascenseurs) et la table des constructeurs de PowerSlave n'est plus compilée (2026-09-18) |
+| SRUINS.C:916, 966, 1978-1979, 1987, 2439, 2656 | eau, pouvoir des poupées, images de l'air meter, `initRoutePlotter`, question du chameau, `runMap` | `CFG_WATER` 0, `CFG_DOLLPOWER` 0, `CFG_AIR_PICS(x)` vide, `CFG_ROUTE_INIT()` rien, `CFG_CAMEL` 0, `CFG_RUN_MAP(l)` `(l)` — chemins qu'un niveau Doom ne prend jamais, compilés hors du binaire |
+| Makefile (bloc `GAME = doom`) | — | `-ffunction-sections -fdata-sections`, `--gc-sections` sur MAIN.elf seul ; les symboles que les membres COFF de la SBL attendent de nous deviennent des racines (`tools/sbl_refs.py --roots`) et le lien est vérifié (`--check`, le build échoue s'il en manque un). MESURE 18-09, build debug : MAIN.BIN 388 028 → 268 608 o, `_end` −124 304 o ≈ 30 tuiles par carte (IA des monstres de PowerSlave 35 Ko, art du HUD 15,6 Ko, air meter 16,5 Ko, armes, eau, carte…). PowerSlave et Duke : code identique à l'octet |
 | AICOMMON.C | — | **aucune modification** : `getFacingAngle`, `findPlayer`, `PlotCourseToObject` sont publics (AICOMMON.H:15-24) |
 | AI.C:3819-3836 | `thing_func` | **non modifié** (`doom_item_func` séparé, §6) |
 | Makefile:164 / après :174 | `MAIN_C := …` | `GAME_C`, `MAIN_C += $(GAME_C)`, `vpath %.C game/doom`, `CDDIR := cd_doom`, règle `doom_art.h` (contrat §8) |
 | **BIGMAP.C:84-86** (`getLevelName`) | `return levelGraph[lNm].levelFile;` | `return doomLevelNames[lNm];` (`DOOM_GAME.C`, contrat §9, borné `DOOM_NMLEVELS`) |
 | **SRUINS.C:2491-2500** (`runMap`) | `level=runMap(currentState.currentLevel);` | `level=0;` (warp direct, comme `TESTCODE` :2499) |
 | **INITMAIN.C:185-246** | logos + `OPEN.MOV` | sautés (`#ifndef GP_GAME_DOOM`) |
-| `exit_func` (`DOOM_GAME.C`) | — | `next = currentLevel+1 ; next < DOOM_NMLEVELS ? playerHitTeleport(next) : playerHitTeleport(2−200)` (action 2 = quit → intro, SRUINS.C:2544-2546 ; contrat §6/§9) |
+| `exit_func` (`DOOM_GAME.C`) | — | `next = (secrète ? doomLevelSecret : doomLevelNext)[currentLevel] ; next >= 0 ? playerHitTeleport(next) : playerHitTeleport(2−200)` — l'ordre de Doom (g_game.c : E1M3 secrète → E1M9 → E1M4, −1 après E1M8), action 2 = quit → intro, SRUINS.C:2544-2546 ; contrat §6/§9 |
 
 ## 10. Signatures publiques — `game/doom/DOOM.H`
 

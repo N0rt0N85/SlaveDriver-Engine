@@ -91,30 +91,53 @@ static const char *GOTSHOTGUN2="You got the super shotgun!";
 
 /* --- init ----------------------------------------------------------------------------------- */
 
-/* Every level (SRUINS.C:2010 after initWeapon(), CFG_LEVEL_PLAYER_INIT): G_PlayerReborn +
-   P_SetupPsprites.  Health stays currentState.health (the stat bar and the death branch read
-   it); the engine's new game sets 200 (nmBowls*200, SRUINS.C:2531), Doom starts at 100, so it
-   is capped here (E1M1 target: no inventory transport, plan section 2.7). */
+/* Set by an exit (doom_playerFinishLevel), read once by the next doom_playerInit. */
+static char doomCarry;
+/* A_Saw hit its target: the next tic's move is the saw's pull (doomMoveTic) */
+static char doomSawPull;
+
+void doom_playerSawPull(void)
+{doomSawPull=1;
+}
+
+/* G_PlayerFinishLevel (g_game.c), from DOOM_GAME.C's exit towards a next level: keys and powers
+   stay behind, the rest of the arsenal goes on. */
+void doom_playerFinishLevel(void)
+{doomCarry=1;
+ doomPlayer.keys=0;
+}
+
+/* Every level (SRUINS.C:2010 after initWeapon(), CFG_LEVEL_PLAYER_INIT): P_SpawnPlayer +
+   P_SetupPsprites, and G_PlayerReborn unless the level before was left by an exit.  A new game
+   and a restart after death start as Doom's single player does -- pistol, 50 bullets, 100 health,
+   no armour; an exit keeps health, armour, weapons, ammo and backpack (seen on console 09-18:
+   every level started with the pistol).  Health itself is currentState.health (the stat bar and
+   the death branch read it): the engine's new game sets 200 (nmBowls*200, SRUINS.C:2531) and a
+   restart puts back the value the level started with (main, `levStart`), so a reborn player is
+   set to 100 here. */
 void doom_playerInit(void)
 {int i;
  assert(camera);
- if (currentState.health>DOOM_MAXHEALTH)
-    currentState.health=DOOM_MAXHEALTH;
+ if (!doomCarry)
+    {currentState.health=DOOM_MAXHEALTH;       /* G_PlayerReborn */
+     doomPlayer.armorPoints=0;
+     doomPlayer.armorType=0;
+     for (i=0;i<DOOM_NUMAMMO;i++)
+	{doomPlayer.ammo[i]=0;
+	 doomPlayer.maxAmmo[i]=doomMaxAmmo[i];
+	}
+     doomPlayer.ammo[am_clip]=50;
+     doomPlayer.weaponOwned=(1<<wp_fist)|(1<<wp_pistol);
+     doomPlayer.readyWeapon=wp_pistol;
+     doomPlayer.backpack=0;
+    }
+ doomCarry=0;
+ doomSawPull=0;
  doomPlayer.momx=doomPlayer.momz=0;
  doomPlayer.turnHeld=0;
  doomPlayer.health=currentState.health;
- doomPlayer.armorPoints=0;
- doomPlayer.armorType=0;
- for (i=0;i<DOOM_NUMAMMO;i++)
-    {doomPlayer.ammo[i]=0;
-     doomPlayer.maxAmmo[i]=doomMaxAmmo[i];
-    }
- doomPlayer.ammo[am_clip]=50;
- doomPlayer.weaponOwned=(1<<wp_fist)|(1<<wp_pistol);
  doomPlayer.keys=0;
- doomPlayer.readyWeapon=wp_pistol;
- doomPlayer.pendingWeapon=wp_pistol;   /* P_SetupPsprites: pendingweapon = readyweapon */
- doomPlayer.backpack=0;
+ doomPlayer.pendingWeapon=doomPlayer.readyWeapon;   /* P_SetupPsprites: pendingweapon = readyweapon */
  doomPlayer.refire=0;
  doomPlayer.attackDown=0;
  doomPlayer.muzzleTics=0;              /* lightInit() a deja vide la liste du moteur */
@@ -225,6 +248,14 @@ static void doomMoveTic(void)
  if (side>doomForwardMove[1])
     side=doomForwardMove[1];
  if (side<-doomForwardMove[1])
+ /* P_PlayerThink: MF_JUSTATTACKED, set by the chainsaw on a hit -- this tic no turn, no strafe,
+    forwardmove 0xc800/512 = 100 (twice the run): the saw pulls the player into what it cuts */
+ if (doomSawPull)
+    {turning=0;
+     forward=100;
+     side=0;
+     doomSawPull=0;
+    }
     side=-doomForwardMove[1];
 
  /* turning without inertia: 3.5 degrees per tic, 7 running, 1.75 the first 6 tics */
@@ -391,6 +422,12 @@ static void doomCheatTic(void)
     }
  if (doomChord(input,PER_DGT_TL|PER_DGT_TR|PER_DGT_L,PER_DGT_B|PER_DGT_C|PER_DGT_X,&clipHeld))
     {noClipCheat=!noClipCheat;
+/* P_PlayerInSpecialSector case 11 (E1M8's last room): `cheats &= ~CF_GODMODE`, or the level
+   that ends at 10 health would never end */
+void doom_playerGodOff(void)
+{doomCheatGod=0;
+}
+
      doom_setMessage(noClipCheat?"NO CLIPPING MODE ON":"NO CLIPPING MODE OFF");
     }
 }

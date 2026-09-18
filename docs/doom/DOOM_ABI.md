@@ -52,9 +52,15 @@ et posés sur les valeurs croissantes **[14..47] ∪ [64..90] ∪ [92..162] ∪ 
 MT 1..34 → 14..47 (POSS 14, SPOS 15, … TROOP = MT 11 → 24), MT 35..61 → 64..90, MT 62..132 → 92..162,
 MT 133..136 → 172..175. Objets Doom non-mobj : `OT_DOOM_EXIT` 176, `OT_DOOM_SECRETEXIT` 177,
 `OT_DOOM_LIGHT` 178, **`OT_DOOM_DAMAGE` 179** (secteur à dégâts, §6), **`OT_DOOM_SECRETWALL` 180** (1 short = mur
-DOORWALL d'une ligne ML_SECRET, que les monstres ne pressent pas ; fix 2026-09-14, E1M1 : ligne 247 → 2 murs). Réservés au moteur (réutilisés tels
-quels) : 13 joueur, 48 `OT_NORMALDOOR`, 49 / 61-63 ascenseurs, 57-58 portes bloquées, 59-60,
-91 `OT_SECTORSWITCH`, 163-171 téléporteurs et `OT_SW1..4`.
+DOORWALL d'une ligne ML_SECRET, que les monstres ne pressent pas ; fix 2026-09-14, E1M1 : ligne 247 → 2 murs),
+**`OT_DOOM_TELEPORT` 181** (téléporteur de ligne, 8 shorts, §6), **`OT_DOOM_FLOOR` 182** (sol qui monte
+ou qui descend, 6 shorts, §6) et **`OT_DOOM_DOOR` 183** (porte, 6 shorts, §6) — ces trois-là ne vivent que
+dans `DOOM_GAME.C`. Réservés au moteur (réutilisés tels quels) : 13 joueur, 48 `OT_NORMALDOOR` (plus émis
+pour Doom depuis le 18-09), 49 / 61-63 ascenseurs, 57-58 portes bloquées, 59-60,
+91 `OT_SECTORSWITCH`, 163-171 téléporteurs et `OT_SW1..4`. **Interrupteurs 5..27 : 204-226**
+(`OT_DOLL1..23`, poupées de PowerSlave, que Doom n'a pas) — `game_placeObject` les passe à
+`constructSwitch` avec les mêmes 5 params (fix 2026-09-18 : un type = UNE apparence de mur, et E1M2
+en voulait 10 ; `doom_specials.OT_SWITCH_TYPES`).
 
 **Ce que ça touche dans le moteur** : une ligne en tête de la boucle de `placeObjects` (OBJECT.C:212,
 après l'assert `firstParam == objectPPos`) : `if (game_placeObject(type)) continue;` — le crochet
@@ -68,8 +74,10 @@ suckSpriteParams :183-194 ; `assemble.py:14-16, 204`), + `flags` = bits THINGS (
 `y` = `floorLevel` du secteur (mesuré sur 23 niveaux retail, `assemble.py:198-201`) : `shiftSprites`
 ajoute le rayon après placement (SPRITE.C:60-66) et le dessin pose les pieds à `pos.y − radius`
 (WALLS.C:2697-2698). `sector` = feuille BSP du WAD remappée (`doom3d.py:660-661`). Angle mobj =
-`round(deg × 4096/360)` ; **joueur seulement** : `+90°` avant conversion (`constructPlayer` retire
-F(90), AI.C:51 ; `doom3d.py:665-670`).
+`round(deg × 4096/360)`, **joueur compris** : c'est la convention des sprites (direction (cos, sin),
+AI.C:528-529) et `constructPlayer` retire F(90) (AI.C:51) pour passer à celle de la caméra (regard
+(−sin yaw, cos yaw), SRUINS.C:389). Le `+90°` d'avant faisait arriver le joueur tourné de 90° à gauche
+(console, 2026-09-18).
 
 ## 2. Séquences — un état = une séquence par vue, tics au runtime
 
@@ -83,7 +91,7 @@ angle croissant dans le même sens (repère `doom3d.py:667-668`) ⇒ **vue moteu
 
 **Carte** `level_sequenceMap` (227 shorts, SEQUENCE.C:72) : indexée par **`spritenum_t` (0..137)** pour
 Doom, entrées 163-171 laissées au moteur (`constructSwitch` lit `level_sequenceMap[OT_SW1..4]`,
-AI2.C:598). Valeur : `base | 0x8000` si la famille a des rotations (convention `HB` de AI.C:2478,
+AI2.C:598), et 204-226 aux interrupteurs 5..27 (§1). Valeur : `base | 0x8000` si la famille a des rotations (convention `HB` de AI.C:2478,
 AICOMMON.H:5), `−2` si absente. **Formule, identique en Python et en C** :
 
 ```
@@ -260,13 +268,15 @@ bloquées **même ouvertes** tant que le seuil vaut 80. Contrat : `80` → **`GP
 
 | objet | OT | params (shorts, dans l'ordre `suckShort`) | source | E1M1 |
 |---|---|---|---|---|
-| porte manuelle | `OT_NORMALDOOR` 48 | `pb`, `channel = −1`, `doorHeight` | OBJECT.C:269-272 ; `constructDoor` AI.C:4384-4398 (`door_func` :4313-4382) | 4 ; `doorHeight` = min plafond voisin − 4 − sol − fente (1 u) = **67** (fix 2026-09-14 : le fichier ferme à sol + 1, `door_func` monte de `doorHeight` ⇒ plafond ouvert à sol + 68, règle Doom) ; 2 u/trame, attente 128 trames (AI.C:4312, 4358) ≈ Doom 2 u/tic, 150 tics |
+| porte (manuelle 1, 26-28, 31-34, 117-118 ; à tag 2, 4, 86, 90, 105-109 W, 29, 61, 63, 103, 111-115 S ; tag 666 d'A_BossDeath en E4M6) | `OT_DOOM_DOOR` 183 | `pb`, `channel` (tag, −1 = aucun), `doorHeight`, genre de l'appui, clé (0, 1 bleue, 2 jaune, 3 rouge : carte ou crâne), genre du tag — **6 shorts** ; genres = `vldoor_e` : 1 normal, 2 open, 3 blazeRaise, 4 blazeOpen, 0 = pas d'appui / pas de tag | nouveau, `game/doom` (SPEC_RUNTIME §6) : `doomDoor_func` = `EV_VerticalDoor` + `EV_DoDoor` + `T_VerticalDoor` | 4 manuelles ; `doorHeight` = min plafond voisin − 4 − sol − fente (1 u) = **67**. Avant le 18-09 : `OT_NORMALDOOR` 48 (`door_func` AI.C:4313, 3 shorts), qui ne savait qu'**un** des deux (un canal y coupe l'appui) et refermait toujours après 128 tics — E1M2 : porte 97 (manuelle 31 + interrupteur 103) sans canal, porte 21 vers dehors refermée avant qu'on arrive, et les 51 lignes à clé de l'épisode ouvertes sans clé |
 | ascenseur WR (88) | `OT_NORMALELEVATOR` 49 | `pb`, `lower`, `upper`, `channel = tag` | OBJECT.C:255-262 ; AI.C:4686-4699 | secteur 70 : `lower` = plus bas sol voisin (−48), `upper` = sol (104), throw = 152 ; 5 u/trame (AI.C:4659). **Réarmement** : `sswitch_func` passe ON au 1er `SIGNAL_ENTER` et ne repasse OFF que sur `SIGNAL_SWITCHRESET(channel)` (AI2.C:648-661), que seul `door_func` émet (AI.C:4375-4376) ⇒ sans retouche, **un seul cycle**. Décision : `elevator_func` émet `signalAllObjects(SIGNAL_SWITCHRESET, channel, 0)` au retour en haut (`direction==1 && offset>=0`, AI.C:4660-4663) si `channel != −1` — 1 ligne sous `GP_GAME_DOOM` (SPEC_RUNTIME §9). Repli : `--lift-contact` (SPEC_CONVERTER E7) = `channel = −1`, déclenchement au contact/press (AI.C:4593-4624), sans sector-switch |
-| sol W1 (36) | `OT_STUCKDOWNELEVATOR` 61 | idem, `channel = 1` | AI.C:4649-4653 (`offset <= −throw` → `moveTo(−throw)` ; STUCKDOWN → idle : un aller, reste en bas) | secteur 59 : type 36 = **turboLower, destination = plus HAUT sol voisin + 8** (p_spec.c:655 → `EV_DoFloor(turboLower)` ; p_floor.c:298-305) : sol 96, voisins −48/−48 → `lower = −40`, `upper = 96`, **throw 136** (`throw = upper − lower`, AI.C:4696) |
+| sol qui descend (36/98 W, 70/71 S turbo ; 38/82/37/84 W, 23/60 S plus bas voisin ; 83 W, 45/102 S plus haut voisin ; tag 666 d'A_BossDeath en E1M8, E4M8, MAP07) | `OT_DOOM_FLOOR` 182, **`throw` < 0** | comme le sol qui monte ci-dessous ; `speed` 8 (FLOORSPEED) ou 32 (turbo), `donorFace = damage = −1` | nouveau, `game/doom` : émis à l'état du WAD, descend de `−throw` sur `SIGNAL_SWITCH(channel)` | secteur 59 : type 36 = **turboLower, destination = plus HAUT sol voisin + 8** (p_spec.c:655 → `EV_DoFloor(turboLower)` ; p_floor.c:298-305) : sol 96, voisins −48/−48 → **throw −136** à 4 u/tic. Avant le 18-09 : `OT_STUCKDOWNELEVATOR` 61, 5 u/tic sur le son de PowerSlave |
 | déclencheur de ligne W | `OT_SECTORSWITCH` 91 | **`sectorNm`, `channel = tag` — 2 shorts exactement** (`constructSectorSwitch` AI2.C:665-676 ; `case OT_SECTORSWITCH: constructSectorSwitch(); break;` OBJECT.C:213-215 — `constructForceField(suckShort())` est le `case OT_FORCEFIELD` :249-250, sans rapport) | AI2.C:648-653 (`SIGNAL_ENTER` → `SIGNAL_SWITCH`) | 2 (tags 1, 2) : secteur d'entrée = côté traversé (une par feuille bordant la ligne) |
 | interrupteur S | `OT_SW1` 168 | `sectorNm`, `channel`, `ox, oy, oz` | AI2.C:582-596 ; press < 40 u de l'orifice :535-538 | 1 (sortie) : orifice = centre du mur |
 | sortie | `OT_DOOM_EXIT` 176 | `channel = 900` (901 secrète) | nouveau, `game/doom` | 1 |
-| secteur à dégâts | `OT_DOOM_DAMAGE` 179 | `sectorNm`, `hp` (5 pour special 7 ; p_spec.c `P_PlayerInSpecialSector` : `hp` toutes les 32 tics, `!(leveltime & 0x1f)`) | nouveau, `game/doom` (SPEC_RUNTIME §6) | 1 par feuille des secteurs 13, 55, 57, 61 |
+| secteur à dégâts | `OT_DOOM_DAMAGE` 179 | `sectorNm`, `hp` (5 pour special 7 ; p_spec.c `P_PlayerInSpecialSector` : `hp` toutes les 32 tics, `!(leveltime & 0x1f)`) ; **bit 0x100** = special 11 (20 hp, fin de la carte dès que la santé passe à 10 ou moins, mode dieu coupé : la salle finale d'E1M8) | nouveau, `game/doom` (SPEC_RUNTIME §6) | 1 par feuille des secteurs 13, 55, 57, 61 |
+| téléporteur de ligne (39 W1, 97 WR) | `OT_DOOM_TELEPORT` 181 | `sectorNm` (feuille qui déclenche), `destSector`, `x`, `z`, `angle` (celle du départ : l'angle Doom, −90° pour la caméra comme AI.C:51), `fogX`, `fogZ`, `flags` (1 = une fois) — **8 shorts** | nouveau, `game/doom` (SPEC_RUNTIME §6) : `level_sector[sectorNm].object`, `SIGNAL_ENTER` (SPRITE.C:731) → `moveSpriteTo` | E1M5 ×10 lignes, E1M8 ×8, E1M9 ×2 ; déclenche = feuilles du côté **arrière** de la ligne (EV_Teleport `if (side == 1) return`) ; arrivée = 1er `MT_TELEPORTMAN` (DoomEd 14) d'un secteur du tag ; brouillard d'arrivée 20 u devant |
+| sol qui monte (5/91 W, 101/64 S au plus bas plafond voisin ; 119/128 W, 18/69 S au prochain sol ; turbo 129/130/131/132 ; plates-formes 22/95 W, 20/68 S prochain sol + flat ; +24/+32/+512 : 58/92/59/93 W, 15/66/14/67/140 S ; **escaliers** 8/100 W, 7/127 S : une marche = un objet, destination de la chaîne d'EV_BuildStairs, `doom_specials.stair_steps`) | `OT_DOOM_FLOOR` 182 | `pb`, `throw`, `channel = tag`, `speed` (1/8 u par tic : 8 = FLOORSPEED, 4 = plates-formes, 32 = turbo), `donorFace` (face dont le flat remplace le sien au départ, −1 = aucun), `damage` (hp ensuite, −1 = inchangés) — **6 shorts** | nouveau, `game/doom` : géométrie émise **en haut** (un ascenseur en haut, `doom3d.raise_floors`), descendue de `throw` au placement, montée une fois sur `SIGNAL_SWITCH(channel)` | E1M3 ×3 (20), E1M4 ×3 (5, 18), E1M5 ×1 (22), E1M7 ×1 (22), E1M8 ×1 (91), E1M9 ×1 (20) ; les 91 d'E1M5 et E1M7 visent un sol déjà à destination (Doom ne le bouge pas) : aucun objet |
 
 Interrupteur = **4 séquences** de tuiles de géométrie (16 bpp, 0x32) : `base` OFF, `+1` anim ON, `+2`
 anim OFF, `+3` ON (AI2.C:524-545 ; :549 écrit la tuile dans la cellule) ; tuile OFF **unique dans le
@@ -274,11 +284,12 @@ secteur** (recherche :606-632). Canaux :
 tags Doom = 1..999, sortie 900/901 ; le moteur s'en réserve 1000-1005, 1010, 10000+, 11000+
 (AI.C:3879, 2799, 4730, 5830). Sortie : `exit_func` reçoit `SIGNAL_SWITCH(900)` → `playerHitTeleport(next)` (SRUINS.C:1413-1415) ⇒
 `runLevel` retourne `200+next` (:2266-2270), la boucle charge `getLevelName(next)` (:2533-2541) ;
-`next = courant+1` **si `next < DOOM_NMLEVELS`** (taille de `doomLevelNames[]`, §9) ; **dernier niveau ⇒
-`playerHitTeleport(2 − 200)`** = action 2 = *quit* → `goto intro` (:2544-2546). Jamais −1 : `playerHitTeleport(−1)`
+`next` = **l'ordre de Doom** (g_game.c `G_DoCompleted`), tables `doomLevelNext[]` / `doomLevelSecret[]`
+de `DOOM_GAME.C` (la seconde pour un `OT_DOOM_SECRETEXIT`) : E1M3 secrète → E1M9, E1M9 → E1M4 ;
+**−1 (après E1M8) ⇒ `playerHitTeleport(2 − 200)`** = action 2 = *quit* → `goto intro` (:2544-2546). Jamais −1 : `playerHitTeleport(−1)`
 donnerait 199 = branche camel (`case 100 ... 199`, `levFlags[hitCamel−100]` avec `hitCamel = 0` ⇒ `levFlags[−100]`
-corrompu, :2527-2533) ; et `next` hors disque ⇒ `fs_open` asserte (FILE.C:155-157). Clés : `getKeyMask()` bit = type − `OT_BUGDOOR` (AI.C:4329) — pas de
-porte à clé dans E1M1.
+corrompu, :2527-2533) ; et `next` hors disque ⇒ `fs_open` asserte (FILE.C:155-157). Clés : pas celles du moteur (`getKeyMask()`, bit = type − `OT_BUGDOOR`, AI.C:4329) — une porte à clé est un
+`OT_DOOM_DOOR` qui lit `doomPlayer.keys` (carte ou crâne de la couleur), depuis le 18-09.
 
 ## 7. `params/doom.cfg` — clés `GP_*`
 

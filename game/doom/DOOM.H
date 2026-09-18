@@ -18,7 +18,7 @@
 #include "doom_tables.h"
 
 /* --- levels (contract section 9) ------------------------------------------------------------ */
-#define DOOM_NMLEVELS 1                 /* size of doomLevelNames[]; last level => quit (section 6) */
+#define DOOM_NMLEVELS 9                 /* size of doomLevelNames[]: the shareware episode (section 9) */
 
 /* --- object types that are not mobjs (contract section 1) ----------------------------------- */
 #define OT_DOOM_EXIT        176         /* params: channel (900)                                  */
@@ -134,6 +134,8 @@ void        doom_sectorDamageTic(void);        /* 35 Hz from doom_playerTic: lev
 extern int  doomLevelTime;                     /* THE 35 Hz level clock (Doom leveltime)         */
 extern const char *doomLevelNames[DOOM_NMLEVELS];      /* "+E1M1.LEV", ... (8.3, root)           */
 int         doom_wallIsSecret(int w);          /* OT_DOOM_SECRETWALL: 1 = monsters do not press it */
+int         doom_monsterUseDoor(int w);        /* doomBlocked: 1 = the door wall answers (P_UseSpecialLine) */
+void        doom_bossDeath(DoomActor *mo);     /* A_BossDeath: the level's boss rule (E1M8 tag 666) */
 
 /* ============================================================================================ */
 /* DOOM_ACTOR.C -- the generic object (SPEC_RUNTIME sections 2, 4, 5, 7)                        */
@@ -171,6 +173,9 @@ void        doom_newChaseDir(DoomActor *this);
 /* DOOM_PLAYER.C -- integrator, health/armour, pickups (SPEC_PLAYER 1.2, 1.3, 4.3)              */
 /* ============================================================================================ */
 void        doom_playerInit(void);             /* SRUINS.C:2010, after initWeapon(); every level */
+void        doom_playerFinishLevel(void);      /* G_PlayerFinishLevel: the next level keeps the arsenal */
+void        doom_playerGodOff(void);           /* special 11 (E1M8's end): cheats &= ~CF_GODMODE */
+void        doom_playerSawPull(void);          /* A_Saw hit: MF_JUSTATTACKED, the next tic pulls forward */
 void        doom_playerTic(void);              /* 35 Hz, CFG_PLAYER_TIC, BEFORE runObjects()     */
 void        doom_playerFrame(unsigned short input,unsigned short pushed);   /* 60 Hz, before moveCamera() */
 void        doom_playerDamage(int damage,Object *source);   /* replaces playerHurt; ONLY armour calc */
