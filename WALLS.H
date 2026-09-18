@@ -33,7 +33,10 @@ int vdp1MaxCoord;   /* kept for display compatibility */
 int vdp1MaxX,vdp1MaxY;  /* separate: says WHICH AXIS leaves the range */
 static __inline__ int vdp1TakeMaxX(void){int m=vdp1MaxX; vdp1MaxX=0; return m;}
 static __inline__ int vdp1TakeMaxY(void){int m=vdp1MaxY; vdp1MaxY=0; return m;}
-#define PROJECT(x,z) ( ((x)*(FOCALDIST>>4))/(int)((z)>>4) )
+/* GCC14: split screen.  The window of the view being drawn, and its focal (65 deg over 160 px
+   in 2-4p, 90 deg over 320 in solo).  Set per view by SRUINS.C mpSetViewport. */
+extern int viewXmin,viewXmax,viewYmin,viewYmax,viewCx,viewCy,focalDist;
+#define PROJECT(x,z) ( ((x)*(focalDist>>4))/(int)((z)>>4) )
 
 void drawWalls(MthMatrix *view);
 void drawWallsFinish(void);

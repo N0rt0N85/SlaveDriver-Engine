@@ -117,7 +117,7 @@ void project_point(MthXyz *v,XyInt *p)
   p->y = -f(MTH_Mul(r,v->y));
  }
 #if 0
- Set_Hardware_Divide(v->y*(-FOCALDIST>>4),newZ>>4);
+ Set_Hardware_Divide(v->y*(-focalDist>>4),newZ>>4);
  p->x = PROJECT(v->x,newZ);
  p->y = Get_Hardware_Divide();
 /* p->y = -PROJECT(v->y,newZ); */
@@ -125,10 +125,28 @@ void project_point(MthXyz *v,XyInt *p)
 }
 #endif
 
-#define XMIN        -160
-#define YMIN        CFG_YMIN   /* GP_GAME_DOOM: -112 (3D window = screen lines 0..191, SPEC_PLAYER 3.1) */
-#define XMAX        160
-#define YMAX        CFG_YMAX   /* GP_GAME_DOOM: 80 */
+/* GCC14: the view window, one per view in split screen (SRUINS.C mpSetViewport).  Local
+   coordinates; the local origin sits at (viewCx,viewCy) on screen.  Solo keeps the original
+   320-wide window: -160..160 x CFG_YMIN..CFG_YMAX, origin (160, CFG_YCENTER), focal 160. */
+int viewXmin=-160,viewXmax=160,viewYmin=CFG_YMIN,viewYmax=CFG_YMAX;
+int viewCx=160,viewCy=CFG_YCENTER;
+int focalDist=FOCALDIST;       /* read by the asm projection too (wallasm_gnu.s, 3 sites) */
+#define XMIN        viewXmin
+#define YMIN        viewYmin   /* GP_GAME_DOOM: -112 (3D window = screen lines 0..191, SPEC_PLAYER 3.1) */
+#define XMAX        viewXmax
+#define YMAX        viewYmax   /* GP_GAME_DOOM: 80 */
+
+/* GCC14: the viewer this image is built from, copied once per view.  The slave reads it while
+   the master runs the game logic, which moves the camera and, in split screen, switches it to
+   another player: reading `camera` there would cull view 0 against someone else's position. */
+static Sprite *viewCamera;
+static MthXyz viewPos;
+static int viewSector;
+static void setViewer(Sprite *c)
+{viewCamera=c;
+ viewPos=c->pos;
+ viewSector=c->s;
+}
 Bool clip_visible( XyInt *poly,SectorDrawRecord *s);
 
 #if 0
@@ -1995,8 +2013,8 @@ void drawSector(int sectorNm,MthMatrix *view,int slave)
  sec = &(level_sector[sectorNm]);
  sec->flags|=SECFLAG_SEEN;
 
- assert(camera->pos.x<F(16000) && camera->pos.x>F(-16000) &&
-	camera->pos.y<F(16000) && camera->pos.y>F(-16000));
+ assert(viewPos.x<F(16000) && viewPos.x>F(-16000) &&
+	viewPos.y<F(16000) && viewPos.y>F(-16000));
 
  assert(sectorNm>=0 && sectorNm<level_nmSectors);
  /* draw walls */
@@ -2012,9 +2030,9 @@ void drawSector(int sectorNm,MthMatrix *view,int slave)
      /* back face clipping */
      getVertex(theWall->v[0],wallV+0);
 
-     if ((f(camera->pos.x-wallV[0].x))*theWall->normal[0]+
-	 (f(camera->pos.y-wallV[0].y))*theWall->normal[1]+
-	 (f(camera->pos.z-wallV[0].z))*theWall->normal[2]<0)
+     if ((f(viewPos.x-wallV[0].x))*theWall->normal[0]+
+	 (f(viewPos.y-wallV[0].y))*theWall->normal[1]+
+	 (f(viewPos.z-wallV[0].z))*theWall->normal[2]<0)
 	continue;
 
      /* far plane clipping */
@@ -2143,17 +2161,17 @@ void findDoorways(int sectorNm,MthMatrix *view)
 	 /* back face clipping */
 	 getVertex(theWall->v[0],wallV+0);
 
-	 wallDist=(f(camera->pos.x-wallV[0].x))*theWall->normal[0]+
-	          (f(camera->pos.y-wallV[0].y))*theWall->normal[1]+
-	          (f(camera->pos.z-wallV[0].z))*theWall->normal[2];
-	 if (sectorNm!=camera->s /* we may apear to be behind walls of the
+	 wallDist=(f(viewPos.x-wallV[0].x))*theWall->normal[0]+
+	          (f(viewPos.y-wallV[0].y))*theWall->normal[1]+
+	          (f(viewPos.z-wallV[0].z))*theWall->normal[2];
+	 if (sectorNm!=viewSector /* we may apear to be behind walls of the
 				    sector we are in, but we really aren't */
 	     && wallDist<=0) /* increase this number to increase
 					protection from draw loops */
 	    continue;
-	 if (theWall->nextSector==camera->s)
+	 if (theWall->nextSector==viewSector)
 	    /* we know that we can not see thru a wall into the sector the
-	       camera is in */
+	       viewCamera is in */
 	    continue;
 
 
@@ -2200,7 +2218,7 @@ void findDoorways(int sectorNm,MthMatrix *view)
 
 	     polyGood=1;
 	     if (!clip_visible(probeVDP1(poly),
-			       sectorDraw+camera->s/*so cache will be good */))
+			       sectorDraw+viewSector/*so cache will be good */))
 		continue;
 	    }
 	 /* find bounding box for opening */
@@ -2438,8 +2456,8 @@ void drawSlaveWalls(void)
  if (nmSlavePolys==0)
     return;
 #if RECTCLIP
- parms[0].x=updateList[s]->xmin+160;parms[0].y=updateList[s]->ymin+CFG_YCENTER;
- parms[1].x=updateList[s]->xmax+160;parms[1].y=updateList[s]->ymax+CFG_YCENTER;
+ parms[0].x=updateList[s]->xmin+viewCx;parms[0].y=updateList[s]->ymin+viewCy;
+ parms[1].x=updateList[s]->xmax+viewCx;parms[1].y=updateList[s]->ymax+viewCy;
  EZ_userClip(parms);
 #endif
 
@@ -2495,7 +2513,7 @@ void drawSlaveWalls(void)
 	     case -1:
 		{/* its an end of sector marker */
 		 slaveDrawStart--;
-		 /* drawSprites(&(camera->pos),slaveView,
+		 /* drawSprites(&(viewPos),slaveView,
 		    slaveResult[i].gtable.entry[0]); */
 		 if (updateList[s]->spriteCommandStart)
 		    EZ_linkCommand(EZ_getNextCmdNm()-1,JUMP_CALL,
@@ -2506,10 +2524,10 @@ void drawSlaveWalls(void)
 		 s--;
 #if RECTCLIP
 		 if (s>=0)
-		    {parms[0].x=updateList[s]->xmin+160;
-		     parms[0].y=updateList[s]->ymin+CFG_YCENTER;
-		     parms[1].x=updateList[s]->xmax+160;
-		     parms[1].y=updateList[s]->ymax+CFG_YCENTER;
+		    {parms[0].x=updateList[s]->xmin+viewCx;
+		     parms[0].y=updateList[s]->ymin+viewCy;
+		     parms[1].x=updateList[s]->xmax+viewCx;
+		     parms[1].y=updateList[s]->ymax+viewCy;
 		     EZ_userClip(parms);
 		    }
 #endif
@@ -2622,10 +2640,10 @@ void buildTree(void)
      cutWall=level_wall+(((plane & 0x80)?level_sector[b].firstWall
 				       :level_sector[a].firstWall)+(plane & 0x7f));
      getVertex(cutWall->v[0],&testV);
-     p.x=camera->pos.x-testV.x;
-     p.y=camera->pos.y-testV.y;
-     p.z=camera->pos.z-testV.z;
-     /* the normal points INTO the wall's own sector, so the camera on that side means that
+     p.x=viewPos.x-testV.x;
+     p.y=viewPos.y-testV.y;
+     p.z=viewPos.z-testV.z;
+     /* the normal points INTO the wall's own sector, so the viewCamera on that side means that
 	sector is the near one */
      if (MTH_Product((Fixed32 *)&p,(Fixed32 *)cutWall->normal)>0)
 	front=(plane & 0x80)?b:a;
@@ -2689,9 +2707,9 @@ static void sortLeafList(SectorDrawRecord **leafList,int leafListSize)
 		     cutWall->normal[2]);
 	     } */
 	  getVertex(cutWall->v[0],&testV);
-	  p.x=camera->pos.x-testV.x;
-	  p.y=camera->pos.y-testV.y;
-	  p.z=camera->pos.z-testV.z;
+	  p.x=viewPos.x-testV.x;
+	  p.y=viewPos.y-testV.y;
+	  p.z=viewPos.z-testV.z;
 	  if (((plane & 0x80)
 	       && MTH_Product((Fixed32 *)&p,(Fixed32 *)cutWall->normal)<0)||
 	      (!(plane & 0x80)
@@ -2738,20 +2756,20 @@ void wallsTraverse(MthMatrix *view,int onSlave)
 
  for (i=0;i<level_nmSectors;i++)
     sectorDraw[i].flags=0;
- assert(camera->s>=0 && camera->s<level_nmSectors);
+ assert(viewSector>=0 && viewSector<level_nmSectors);
 
- sectorDraw[camera->s].xmin=XMIN;
- sectorDraw[camera->s].ymin=YMIN;
- sectorDraw[camera->s].xmax=XMAX;
- sectorDraw[camera->s].ymax=YMAX;
- sectorDraw[camera->s].flags|=SDFLAG_BBVALID;
- /* No portal reaches the camera's sector, so findDoorways never sets its distance:
+ sectorDraw[viewSector].xmin=XMIN;
+ sectorDraw[viewSector].ymin=YMIN;
+ sectorDraw[viewSector].xmax=XMAX;
+ sectorDraw[viewSector].ymax=YMAX;
+ sectorDraw[viewSector].flags|=SDFLAG_BBVALID;
+ /* No portal reaches the viewCamera's sector, so findDoorways never sets its distance:
     without this it kept an old frame's value (read by the leaf sort). */
- sectorDraw[camera->s].distance=0;
+ sectorDraw[viewSector].distance=0;
  updateListSize=1;
- updateList[0]=sectorDraw+camera->s;
+ updateList[0]=sectorDraw+viewSector;
  if (!onSlave) pushProfile("Find Doorways");
- findDoorways(camera->s,view);
+ findDoorways(viewSector,view);
  do
     {done=1;
      for (i=0;i<updateListSize;i++)
@@ -2792,9 +2810,9 @@ void wallsTraverse(MthMatrix *view,int onSlave)
  /* if currentSector ended up with any ancestors (which can only
     happen when we are standing right on a sector boundry)
     then remove them */
- for (i=0;i<sectorDraw[camera->s].nmAncestors;i++)
-    sectorDraw[sectorDraw[camera->s].ancestor[i]].nmChildren--;
- sectorDraw[camera->s].nmAncestors=0;
+ for (i=0;i<sectorDraw[viewSector].nmAncestors;i++)
+    sectorDraw[sectorDraw[viewSector].ancestor[i]].nmChildren--;
+ sectorDraw[viewSector].nmAncestors=0;
 #endif
 
 #if 0
@@ -2818,7 +2836,7 @@ void wallsTraverse(MthMatrix *view,int onSlave)
     for (i=0;i<updateListSize;i++)
        assert(updateList[i]->nmChildren>0 || updateList[i]->nmAncestors>0);
  for (i=0;i<updateListSize;i++)
-    assert(updateList[i]==&sectorDraw[camera->s] ||
+    assert(updateList[i]==&sectorDraw[viewSector] ||
 	   updateList[i]->nmAncestors>0);
 #endif
 
@@ -2906,6 +2924,7 @@ void wallsPipeKick(MthMatrix *view)
     return;                     /* already in flight: never relaunch without a join */
  for (k=0;k<(int)sizeof(MthMatrix);k++)
     d[k]=s[k];
+ setViewer(camera);           /* view 0 of the next frame: the caller loaded player 0 */
  pipeDone=0;
  slaveJob=1;
  pipeInFlight=1;
@@ -2961,6 +2980,7 @@ void drawWalls(MthMatrix *view)
  XyInt parms[2];
  int lastWallCmd;
  checkStack();
+ setViewer(camera);
 
  plaxBBxmin=160;
  plaxBBymin=120;
@@ -2995,20 +3015,20 @@ void drawWalls(MthMatrix *view)
  /* start slave */
  *(Uint16 volatile *)0x21000000=0xffff; CFG_PROF("Master Draw");
  for (i=updateListSize-1;i>slaveDrawStart;i--)
-    {parms[0].x=updateList[i]->xmin+160;parms[0].y=updateList[i]->ymin+CFG_YCENTER;
-     parms[1].x=updateList[i]->xmax+160;parms[1].y=updateList[i]->ymax+CFG_YCENTER;
+    {parms[0].x=updateList[i]->xmin+viewCx;parms[0].y=updateList[i]->ymin+viewCy;
+     parms[1].x=updateList[i]->xmax+viewCx;parms[1].y=updateList[i]->ymax+viewCy;
 #if RECTCLIP
      EZ_userClip(parms);
 #endif
      drawSector(updateList[i]-sectorDraw,view,0);
-     drawSprites(&(camera->pos),view,updateList[i]-sectorDraw);
+     drawSprites(&(viewPos),view,updateList[i]-sectorDraw);
     }
 
  lastWallCmd=EZ_getNextCmdNm()-1;
  /* draw sprites in slave rendered sectors */
  for (;i>=0;i--)
     {int last=EZ_getNextCmdNm();
-     drawSprites(&(camera->pos),view,updateList[i]-sectorDraw);
+     drawSprites(&(viewPos),view,updateList[i]-sectorDraw);
      if (EZ_getNextCmdNm()!=last)
 	{EZ_linkCommand(EZ_getNextCmdNm()-1,JUMP_RETURN,0);
 	 updateList[i]->spriteCommandStart=last;
@@ -3173,7 +3193,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
  nmDraw=0;
  assert(sector>=0 && sector<level_nmSectors);
 
- assert(camera->sequence==-1);
+ assert(viewSectorequence==-1);
  for (o=CFG_SPR_FIRST(sector);nmDraw<100 && o;o=CFG_SPR_NEXT(o))
     if (o->sequence!=-1 && !(o->flags & SPRITEFLAG_INVISIBLE))
        drawList[nmDraw++]=o;
@@ -3216,8 +3236,8 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 /* assert(nmDraw<=1);*/
 
 #if RECTCLIP
- pos[0].x=XMIN+160; pos[0].y=YMIN+CFG_YCENTER;
- pos[1].x=XMAX+160; pos[1].y=YMAX+CFG_YCENTER;
+ pos[0].x=XMIN+viewCx; pos[0].y=YMIN+viewCy;
+ pos[1].x=XMAX+viewCx; pos[1].y=YMAX+viewCy;
  EZ_userClip(pos);
 #endif
 
@@ -3268,7 +3288,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	    continue;
 	 project_point(&p1,pos);
 	 project_point(&p2,pos+1);
-	 width=f(MTH_Div(2*F(FOCALDIST),p2.z));
+	 width=f(MTH_Div(2*F(focalDist),p2.z));
 	 pos[2].x=pos[1].x;
 	 pos[2].y=pos[1].y-width;
 	 pos[3].x=pos[0].x;
@@ -3327,7 +3347,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
      /* tformed is center of sprite */
      project_point(&tformed,&feetScreenPos);
      scale=o->scale;
-     scale=MTH_Div(scale*FOCALDIST,tformed.z);
+     scale=MTH_Div(scale*focalDist,tformed.z);
      if (o->flags & SPRITEFLAG_NOSCALE)
 	scale=65536;
      /* if (o->flags & SPRITEFLAG_32x32)
@@ -3379,10 +3399,10 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	}
      if (o->flags & SPRITEFLAG_FOOTCLIP)
 	{if (feetScreenPos.y<sectorDraw[sector].ymax)
-	    {pos[0].x=sectorDraw[sector].xmin+160;
-	     pos[0].y=sectorDraw[sector].ymin+CFG_YCENTER;
-	     pos[1].x=sectorDraw[sector].xmax+160;
-	     pos[1].y=feetScreenPos.y+CFG_YCENTER;
+	    {pos[0].x=sectorDraw[sector].xmin+viewCx;
+	     pos[0].y=sectorDraw[sector].ymin+viewCy;
+	     pos[1].x=sectorDraw[sector].xmax+viewCx;
+	     pos[1].y=feetScreenPos.y+viewCy;
 	     EZ_userClip(pos);
 	    }
 	}
@@ -3461,12 +3481,12 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	}
      /* done drawing sprite */
      if (o->flags & SPRITEFLAG_FOOTCLIP)
-	{/* pos[0].x=sectorDraw[sector].xmin+160;
+	{/* pos[0].x=sectorDraw[sector].xmin+viewCx;
 	    pos[0].y=sectorDraw[sector].ymin+120;
-	    pos[1].x=sectorDraw[sector].xmax+160;
+	    pos[1].x=sectorDraw[sector].xmax+viewCx;
 	    pos[1].y=sectorDraw[sector].ymax+120; */
-	 pos[0].x=XMIN+160; pos[0].y=YMIN+CFG_YCENTER;
-	 pos[1].x=XMAX+160; pos[1].y=YMAX+CFG_YCENTER;
+	 pos[0].x=XMIN+viewCx; pos[0].y=YMIN+viewCy;
+	 pos[1].x=XMAX+viewCx; pos[1].y=YMAX+viewCy;
 	 EZ_userClip(pos);
 	}
     }

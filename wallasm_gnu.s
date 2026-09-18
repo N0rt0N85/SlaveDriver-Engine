@@ -38,8 +38,8 @@ _project_point:
 .Lpp_1:	! ... r0 now holds the z coord or F(1), whichever is greater
 	! ... start the hardware divide
 	mov.l r0,@(0,gbr)	! GCC14: was  mov.l r0,@(gbr,0)
-	mov #80,r0		! GCC14: was  mov.l #80,r0
-	shll r0
+	mov.l .Lpp_focal,r0	! GCC14: the focal is a variable (WALLS.C focalDist): split screen
+	mov.l @r0,r0		!        160 in solo, 126 = 65 deg over a 160-wide view
 	mov.l r0,@(16,gbr)	! GCC14: was  mov.l r0,@(gbr,16)
 	mov #0,r0		! GCC14: was  mov.l #0,r0
 	mov.l r0,@(20,gbr)	! GCC14: was  mov.l r0,@(gbr,20)
@@ -64,6 +64,7 @@ _project_point:
 	.align 2,0		! GCC14: fill 0 (SNASM padded with 0x0000, GNU as pads code with nop 0x0009)
 !	littab
 .Lpp_divu:	.long 0xffffff00	! GCC14: literal pool of project_point (=$0ffffff00 -> 32-bit 0xffffff00)
+.Lpp_focal:	.long _focalDist
 
 !rectTransform(Fixed32 wx,Fixed32 wy,Fixed32 wz,
 ! 	       int light,int h,int w,
@@ -123,8 +124,8 @@ _rectTransform:
 	! ... start the hardware divide
 	mov.l r0,@(0,gbr)	! GCC14: @(gbr,0)
 	mov r0,r3		! save r0 for depth cue calculation below   GCC14: was mov.l
-	mov #80,r0		! GCC14: was mov.l #80,r0
-	shll r0
+	mov.l .Lrt_focal,r0	! GCC14: the focal is a variable (WALLS.C focalDist): split screen
+	mov.l @r0,r0		!        160 in solo, 126 = 65 deg over a 160-wide view
 	mov.l r0,@(16,gbr)	! GCC14: @(gbr,16)
 	mov #0,r0		! GCC14: was mov.l #0,r0
 	mov.l r0,@(20,gbr)	! GCC14: @(gbr,20)
@@ -230,6 +231,7 @@ _rectTransform:
 .Lrt_divu:	.long 0xffffff00
 .Lrt_grey:	.long _greyTable
 .Lrt_fog:	.long _fogTable		! GCC14: 256 bytes, indexed by z>>24 (WALLS.C)
+.Lrt_focal:	.long _focalDist
 
 	.align 2
 .Lrt_callLit:	! perform function call to @r13
@@ -320,8 +322,8 @@ _normTransform:
 .Lnt_2:	! ... r0 now holds the z coord or the near floor, whichever is greater
 	! ... start the hardware divide
 	mov.l r0,@(0,gbr)	! GCC14: @(gbr,0)
-	mov #80,r0		! GCC14: was mov.l #80,r0
-	shll r0
+	mov.l .Lnt_focal,r0	! GCC14: the focal is a variable (WALLS.C focalDist): split screen
+	mov.l @r0,r0		!        160 in solo, 126 = 65 deg over a 160-wide view
 	mov.l r0,@(16,gbr)	! GCC14: @(gbr,16)
 	mov #0,r0		! GCC14: was mov.l #0,r0
 	mov.l r0,@(20,gbr)	! GCC14: @(gbr,20)
@@ -445,3 +447,4 @@ _normTransform:
 .Lnt_divu:	.long 0xffffff00	! GCC14: literal pool of normTransform
 .Lnt_grey:	.long _greyTable
 .Lnt_fog:	.long _fogTable		! GCC14: 256 bytes, indexed by z>>24 (WALLS.C)
+.Lnt_focal:	.long _focalDist
