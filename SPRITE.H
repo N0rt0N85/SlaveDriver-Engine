@@ -191,6 +191,12 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_LIGHTRADIUS        181                               /* subtractive lights only (addLight); Doom: params LIGHT_* */
 #define CFG_LIGHTSHIFT         10                                /* subtractive lights only: 181^2>>10 = 31 */
 #define CFG_LIGHTSMOOTH        1                                 /* WALLS.C lightApply: s^2 falloff, soft edge */
+/* SPRITE.C:658: a thing below its floor stands on it at once, as in Doom (P_ZMovement: z =
+   floorz).  The engine rises 1/8 of the depth a tic, and against Doom's gravity of 1 u a tic --
+   exactly the value where neither snap test above it fires -- that held every awake monster 7 u
+   under its floor (d = 7/8 (d+1)).  The camera keeps the 1/8: Doom eases the view up a step the
+   same way (deltaviewheight). */
+#define CFG_FLOOR_RISE(o,d)    ((o)==camera? (d)>>3: (d))
 #else
 #define CFG_TIC_ADD(v)       (v)
 #define CFG_TIC_UNIT         2
@@ -209,6 +215,7 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_LIGHTRADIUS      256
 #define CFG_LIGHTSHIFT       11
 #define CFG_LIGHTSMOOTH      1
+#define CFG_FLOOR_RISE(o,d)  ((d)>>3)
 #define CFG_LEVEL_NAME(l)    getLevelName(l)
 #define CFG_PLAY_INTRO()     playIntro()
 #define CFG_CONTROL(in,ch,p)   controlInput(in,ch)

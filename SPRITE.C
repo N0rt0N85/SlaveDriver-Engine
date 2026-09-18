@@ -655,7 +655,7 @@ int collideSprite(Sprite *o)
 	     || spriteCollideNm!=-1 /* or we collided with a sprite */)
 	    o->pos.y+=floorDistance;
 	 else
-	    o->pos.y+=floorDistance>>3;
+	    o->pos.y+=CFG_FLOOR_RISE(o,floorDistance);
 	 floorCollideNm=bestFloor-level_wall;
 	 assert(floorCollideNm>=0 && floorCollideNm<level_nmWalls);
 	 if (0/*floorNormal*/)
