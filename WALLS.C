@@ -3021,6 +3021,10 @@ static void sortLeafList(SectorDrawRecord **leafList,int leafListSize)
 
 
 int slaveSize=1;
+/* GCC14: one split per view.  In split screen view 0 runs the game logic between drawWalls and
+   drawWallsFinish, views 1.. run nothing: a single servo for all of them never settled, and the
+   master waited for the slave (Slave Wait) in every view but the first. */
+static int slaveSplit[MPMAX]={1,1,1,1},wallsView;
 /* --- GCC14: TRAVERSAL half ----------------------------------------------------------
    Split from the DRAW half so it can run on the slave, in the tail of the PREVIOUS frame
    (WALLPIPE).  Writes only sectorDraw[], updateList[], drawList[], doorwayCache and
@@ -3365,6 +3369,8 @@ void drawWalls(int k,MthMatrix *view)
  for (i=0;i<nmLights;i++)
     MTH_CoordTrans(view,&(lightSource[i]->pos),tLightPos+i);
 
+ slaveSize=slaveSplit[k];
+ wallsView=k;
  if (slaveSize>updateListSize-1)
     slaveSize=updateListSize-1;
  slaveDrawStart=slaveSize;
@@ -3413,6 +3419,7 @@ void drawWallsFinish(void)
     slaveSize--;
  if (i<100 && slaveSize<50)
     slaveSize++;
+ slaveSplit[wallsView]=slaveSize;
  CFG_PROF("Slave Cmds"); drawSlaveWalls(); CFG_PROF_END();
 #ifndef NDEBUG
  drawDebugLines();
