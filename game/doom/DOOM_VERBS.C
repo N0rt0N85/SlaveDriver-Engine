@@ -21,6 +21,7 @@
 #include "gamestat.h"
 #include "doom.h"
 #include "mplayer.h"
+#include "profile.h"
 #include "doom_lights.h"
 #include "doom_actions.h"
 
@@ -103,6 +104,15 @@ const DoomAction doomActions[DOOM_NUMACTIONS]=
 
 /* --- A_Chase helpers (SPEC_RUNTIME sections 3, 3.2) ----------------------------------------- */
 
+/* GCC14: canSee, timed as Sight in the L+R+Y tree (under Run Objects) */
+static int doomSee(Sprite *a,Sprite *b)
+{int r;
+ CFG_PROF("Sight");
+ r=canSee(a,b);
+ CFG_PROF_END();
+ return r;
+}
+
 /* P_LookForPlayers (p_enemy.c:495-560), one player: alive, in sight, and in front unless
    allaround (behind = |angle| > 90 degrees and farther than MELEERANGE) */
 int doom_lookForPlayer(DoomActor *this,int allaround)
@@ -117,7 +127,7 @@ int doom_lookForPlayer(DoomActor *this,int allaround)
      p=mpBody[k];
      if (mpPeekInt(k,&currentState.health)<=0)
 	continue;                               /* dead */
-     if (!canSee(s,p))
+     if (!doomSee(s,p))
 	continue;                               /* out of sight */
      if (!allaround)
 	{an=normalizeAngle(getAngle(p->pos.x-s->pos.x,p->pos.z-s->pos.z)-s->angle);
@@ -146,7 +156,7 @@ int doom_meleeRange(DoomActor *this)
  if (doom_approxDist2(ts->pos.x-this->sprite->pos.x,ts->pos.z-this->sprite->pos.z)>=
      F(64-20)+((mpIsPlayer(ts))?ts->radius:F(doomMobjInfo[((DoomActor *)this->target)->mt].radius)))
     return 0;
- if (!canSee(this->sprite,ts))
+ if (!doomSee(this->sprite,ts))
     return 0;
  return 1;
 }
@@ -161,7 +171,7 @@ int doom_missileRange(DoomActor *this)
  ts=doom_targetSprite(this->target);
  if (!ts)
     return 0;
- if (!canSee(this->sprite,ts))
+ if (!doomSee(this->sprite,ts))
     return 0;
  if (this->mflags & DF_JUSTHIT)
     {this->mflags&=~DF_JUSTHIT;                 /* the target just hit us: fight back */
@@ -367,7 +377,7 @@ void A_Look(DoomActor *this)
  if (targ && doom_targetAlive(targ))
     {this->target=targ;
      if (this->mflags & DF_AMBUSH)
-	{if (canSee(this->sprite,doom_targetSprite(targ)))
+	{if (doomSee(this->sprite,doom_targetSprite(targ)))
 	    goto seeyou;
 	}
      else

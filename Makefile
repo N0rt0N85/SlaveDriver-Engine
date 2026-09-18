@@ -67,6 +67,13 @@ ifeq ($(STATUSTEXT),1)
   BUILD   := $(BUILD)/stext
   DEFINES += -DSTATUSTEXT
 endif
+# NOWALK=1, with STATUSTEXT=1: the overlay without the VDP1 walk probe (WALLASM.H), which runs
+# inside every cell's command -- to time SLAVECMDS without it.  Own tree, like the others; its
+# name stays at 5 letters: the ISO keeps the ABS/CPY/BIB.TXT paths under 38 characters.
+ifeq ($(NOWALK),1)
+  BUILD   := $(BUILD)/nwalk
+  DEFINES += -DNOWALKPROBE
+endif
 # PAL=1: the European (Exhumed) configuration -- 50 Hz timing, the PAL logo and title picture
 # indexes and the PAL credits layout.  The picture sets differ between the two releases, so
 # this has to match the disc the data in cd/ came from.  Own tree, like the other switches.

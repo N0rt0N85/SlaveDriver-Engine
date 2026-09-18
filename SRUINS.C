@@ -2567,18 +2567,18 @@ int runLevel(char *filename,int levelNm)
 	 if (mpView==0)
 	    {int k;
 	     pushProfile("Motion");
-	     for (k=0;k<mpPlayers;k++)
+	     CFG_PROF("Move Player"); for (k=0;k<mpPlayers;k++)
 		{mpSwitch(k);
 		 movePlayer(inputEnd,framesElapsed);
 		 camera->angle=playerAngle.yaw;
 		 if (mvRespawn)
 		    mpRespawn(k);
 		}
-	     if (monsterMoveCounter>CFG_TIC_CAP)
+	     CFG_PROF_END(); if (monsterMoveCounter>CFG_TIC_CAP)
 		monsterMoveCounter=CFG_TIC_CAP;
 	     mmcSave=monsterMoveCounter;
 	     for (;monsterMoveCounter>CFG_TIC_UNIT-1;monsterMoveCounter-=CFG_TIC_UNIT)
-		{for (k=0;k<mpPlayers;k++)
+		{CFG_PROF("Player Tic"); for (k=0;k<mpPlayers;k++)
 		    {mpSwitch(k);
 		     CFG_PLAYER_TIC(); if (ltHurtTime>0)
 			{ltHurtTime--;
@@ -2587,14 +2587,14 @@ int runLevel(char *filename,int levelNm)
 			    stopAllSound(69);
 			}
 		    }
-		 mpSwitch(0);
+		 CFG_PROF_END(); mpSwitch(0);
 		 pushProfile("Run Objects");
 		 runObjects();
 		 popProfile();
 		 if (mpPlayers>1)       /* the VDP2 colour offset is every view's: kept neutral */
 		    changeColorOffset(0,0,0,3);
 		 stepColorOffset();
-		 for (k=0;k<mpPlayers;k++)
+		 CFG_PROF("Post Tic"); for (k=0;k<mpPlayers;k++)
 		    {mpSwitch(k);
 		     stepPlayerHeight();
 		     ouchTime--;
@@ -2637,7 +2637,7 @@ int runLevel(char *filename,int levelNm)
 				SCL_SetColMixRate(SCL_NBG0,invisibleCounter);
 			    }
 			}
-		    }
+		    } CFG_PROF_END();
 		}
 	     mpSwitch(mpView);
 	     popProfile();
@@ -2765,9 +2765,12 @@ int runLevel(char *filename,int levelNm)
 		 rot  : walk if the walls were drawn from patterns turned a quarter --
 			vertical lines -- the rest as drawn (WALLASM.H vdp1WalkProbe)
 	 Solo only: split screen has its c: line on this row.  The ASSERT build has extra: at
-	 its left end, so the line moves right there. */
+	 its left end, so the line moves right there.  walk:off: a disc built without the probe
+	 (make NOWALK=1), to time SLAVECMDS without it. */
      if (mpPlayers==1)
-#ifdef NDEBUG
+#ifdef NOWALKPROBE
+	drawString(-158,-100,1,(unsigned char *)"walk:off");
+#elif defined(NDEBUG)
 	drawStringf(-158,-100,1,"walk:%dk big:%d/%dk rot:%dk",vdp1Walk>>4,vdp1Big,
 		    vdp1BigWalk>>4,vdp1RotWalk>>4);
 #else

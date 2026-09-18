@@ -189,6 +189,11 @@ extern int doomViewBob;                              /* DOOM_PLAYER.C: P_CalcHei
 #define CFG_VIEW_BOB           doomViewBob                       /* SRUINS.C:2117: the view rides the walk bob */
 #define CFG_PROF(id)           pushProfile(id)                   /* SRUINS.C:2196-2245: the frame after the walls, in the L+R+Y tree */
 #define CFG_PROF_END()         popProfile()
+/* the collision's three sub-nodes (SPRITE.C bumpSectorBoundries, bumpWalls, collideSprite)
+   leave the Doom tree: 6 of its 24 lines, given to MOTION's parts, and a push per sector
+   penetrated */
+#define CFG_PROF_SUB(id)
+#define CFG_PROF_SUB_END()
 extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, the slave's share   */
 #define CFG_STATUS_SECTOR()    drawStringf(-158,-80,1,"sector:%d vis:%d sl:%d/%d",camera->s,updateListSize,slaveSize+1,nmSlavePolys)   /* SRUINS.C:2220 */
 #define CFG_LIGHTRADIUS        181                               /* subtractive lights only (addLight); Doom: params LIGHT_* */
@@ -239,6 +244,8 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_VIEW_BOB           0
 #define CFG_PROF(id)
 #define CFG_PROF_END()
+#define CFG_PROF_SUB(id)       pushProfile(id)
+#define CFG_PROF_SUB_END()     popProfile()
 #define CFG_STATUS_SECTOR()    drawStringf(-158,-80,1,"sector:%d",camera->s)
 #endif
 

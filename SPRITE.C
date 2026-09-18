@@ -408,7 +408,7 @@ void bumpFloor(sWallType *floor,Sprite *o,int sector)
 void bumpSectorBoundries(int s,Sprite *o,short *penetrate,int *nmPenetrate)
 {sSectorType *sec=level_sector+s;
  int w,i;
- pushProfile("SectorBndry");
+ CFG_PROF_SUB("SectorBndry");
  for (w=sec->firstWall;w<=sec->lastWall;w++)
     {if (level_wall[w].nextSector==-1)
 	break;
@@ -425,13 +425,13 @@ void bumpSectorBoundries(int s,Sprite *o,short *penetrate,int *nmPenetrate)
      /* otherwise add to penetrate list */
      penetrate[(*nmPenetrate)++]=level_wall[w].nextSector;
     }
- popProfile();
+ CFG_PROF_SUB_END();
 }
 
 void bumpWalls(int s,Sprite *o)
 {sSectorType *sec=level_sector+s;
  int w;
- pushProfile("Walls");
+ CFG_PROF_SUB("Walls");
  for (w=sec->firstWall;w<=sec->lastWall;w++)
     {if (!((level_wall[w].flags & o->flags) & WALLFLAG_BLOCKBITS))
 	continue;
@@ -453,7 +453,7 @@ void bumpWalls(int s,Sprite *o)
 	bumpFloor(&level_wall[w],o,s);
 #endif
     }
- popProfile();
+ CFG_PROF_SUB_END();
 }
 
 #ifndef PAL
@@ -612,7 +612,7 @@ int collideSprite(Sprite *o)
  if (newSector==o->s && behindWall && wallCollideNm==-1)
     wallCollideNm=behindWall-level_wall;
 
- pushProfile("Sprite");
+ CFG_PROF_SUB("Sprite");
  /* check for collision with other sprites */
  spriteCollideNm=-1;
  for (i=0;i<nmPenetrate;i++)
@@ -624,7 +624,7 @@ int collideSprite(Sprite *o)
 	 collideSpriteSprite(o,s);
 	}
     }
- popProfile();
+ CFG_PROF_SUB_END();
 
  if (o->flags & SPRITEFLAG_IMMOBILE)
     goto skipWallCollision;

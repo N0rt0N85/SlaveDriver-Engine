@@ -49,8 +49,9 @@ static __inline__ XyInt *probeVDP1(XyInt *poly)
                   lines from edge A-B to edge D-C, vertical on a wall (a wall = its V edges
                   A-D and B-C vertical on screen), everything else counted as drawn
    Units of 64 pixels.  The window is the view's, not the sector box of RECTCLIP: a line only
-   that box would pre-clip still counts. */
-#ifdef STATUSTEXT
+   that box would pre-clip still counts.  NOWALKPROBE (make NOWALK=1) leaves the probe out: it
+   runs inside every cell's command, and SLAVECMDS is then timed without it. */
+#if defined(STATUSTEXT) && !defined(NOWALKPROBE)
 #define VDP1BIGWALK 16384
 static __inline__ int vdp1Abs(int a)
 {return a<0? -a: a;
