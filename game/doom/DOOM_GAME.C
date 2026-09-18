@@ -17,6 +17,7 @@
 #include "sound.h"
 #include "gamestat.h"
 #include "doom.h"
+#include "mplayer.h"
 
 /* Objects that exist only in this file (doom2ps doom_specials.OT_DOOM_TELEPORT / OT_DOOM_FLOOR,
    params big-endian shorts in that order):
@@ -676,22 +677,34 @@ int game_placeObject(int ot)
    doom_playerGetObject(mt, dropped) does the effects; 1 => delayKill. */
 void doom_item_func(Object *_this,int message,int param1,int param2)
 {DoomActor *this=(DoomActor *)_this;
- Sprite *s;
+ Sprite *s,*c;
  Fixed32 reach,delta;
+ int k,prev,got;
  game_actor_func(_this,message,param1,param2);
- if (message!=SIGNAL_MOVE || this->type==OT_DEAD || !camera || currentState.health<=0)
-    return;
- if (!camera->vel.x && !camera->vel.z)
+ if (message!=SIGNAL_MOVE || this->type==OT_DEAD || !camera)
     return;
  s=this->sprite;
  reach=F(doomMobjInfo[this->mt].radius+GP_PLAYER_RADIUS);
- if (abs(s->pos.x-camera->pos.x)>=reach || abs(s->pos.z-camera->pos.z)>=reach)
-    return;
- delta=(s->pos.y-s->radius)-(camera->pos.y-F(GP_PLAYER_RADIUS+GP_PLAYER_EYE_HOVER));
- if (delta>F(56) || delta<F(-8))
-    return;
- if (doom_playerGetObject(this->mt,(this->mflags & DF_DROPPED)?1:0))
-    delayKill(_this);
+ /* every living player in turn, the first to touch takes it -- with ITS state loaded, so the
+    ammo goes in the right pocket (MPLAYER.H).  Solo: player 1, as before. */
+ for (k=0;k<mpPlayers;k++)
+    {c=mpBody[k];
+     if (mpPeekInt(k,&currentState.health)<=0)
+	continue;
+     if (!c->vel.x && !c->vel.z)
+	continue;
+     if (abs(s->pos.x-c->pos.x)>=reach || abs(s->pos.z-c->pos.z)>=reach)
+	continue;
+     delta=(s->pos.y-s->radius)-(c->pos.y-F(GP_PLAYER_RADIUS+GP_PLAYER_EYE_HOVER));
+     if (delta>F(56) || delta<F(-8))
+	continue;
+     prev=mpBegin(k);
+     got=doom_playerGetObject(this->mt,(this->mflags & DF_DROPPED)?1:0);
+     mpEnd(prev);
+     if (got)
+	delayKill(_this);
+     return;
+    }
 }
 
 /* Exit switch (contract section 6 / 9): SIGNAL_SWITCH(channel) from the exit switch press.
@@ -729,7 +742,7 @@ void exit_func(Object *_this,int message,int param1,int param2)
    10 or less -- E1M8 ends the episode (doomLevelNext -1). */
 void doom_sectorDamageTic(void)
 {int s;
- doomLevelTime++;
+ if (mpCur==0) doomLevelTime++;   /* doom_playerTic runs per player: one clock (MPLAYER.H) */
  if (!camera)
     return;
  s=camera->s;

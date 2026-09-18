@@ -31,6 +31,7 @@
 #include "pic.h"
 #include "gamestat.h"
 #include "level.h"
+#include "mplayer.h"
 
 static int const weaponMap[]=
 {
@@ -125,6 +126,14 @@ static void moveWeapon(void)
 static int weaponState=1;
 void switchWeapons(int on)
 {weaponState=on;
+}
+
+/* GCC14: the engine weapon's state belongs to a player (MPLAYER.H) */
+void weaponMpRegister(void)
+{MPREG(weaponPos); MPREG(weaponVel); MPREG(currentWeapon);
+ MPREG(grenadeHoldTime); MPREG(swordForeSwing); MPREG(recoverInProgress);
+ MPREG(weaponSwitchTimer); MPREG(ringDepletion); MPREG(ringCharging);
+ MPREG(weaponState);
 }
 
 static int weaponOK(void)

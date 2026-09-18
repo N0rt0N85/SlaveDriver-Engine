@@ -21,6 +21,7 @@
 #include "local.h"
 
 #include "aicommon.h"
+#include "mplayer.h"
 
 static int kilmaatPuzzleNumber=0;
 
@@ -31,7 +32,12 @@ static int kilmaatPuzzleNumber=0;
 void player_func(Object *o,int message,int param1,int param2)
 {switch (message)
     {case SIGNAL_HURT:
-	CFG_PLAYER_HURT(param1,param2);
+	{/* GCC14: the player hit, whoever is loaded (MPLAYER.H) -- solo: player 1 */
+	 int k=mpIndexOfObject(o);
+	 int prev=mpBegin(k>=0? k: mpCur);
+	 CFG_PLAYER_HURT(param1,param2);
+	 mpEnd(prev);
+	}
 	break;
        }
 }

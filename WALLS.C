@@ -12,6 +12,7 @@
 #include "level.h"
 #include "sprite.h"
 #include "walls.h"
+#include "mplayer.h"
 #include "util.h"
 #include "spr.h"
 #include "print.h"
@@ -2407,15 +2408,22 @@ volatile int slaveDrawStart;
 unsigned char fogTable[256];
 int fogDist=4096;      /* distance at which a fully lit sector (16) reaches black */
 
+/* GCC14: called once per view per image in split screen (SRUINS.C mpSetViewFog), so no divide
+   per entry: one reciprocal, then entries until the table saturates at 31 -- 32 at most. */
 void setFog(int dist)
-{int i;
+{int i,v,step;
  if (dist<256)
     dist=256;
  fogDist=dist;
+ step=(4096<<16)/dist;          /* i indexes 256-unit steps: v = i*4096/dist */
  for (i=0;i<256;i++)
-    {int v=(i*256*16)/dist;     /* i indexes 256-unit steps */
-     fogTable[i]=(v>31)? 31: v;
+    {v=(i*step)>>16;
+     if (v>=31)
+	break;
+     fogTable[i]=v;
     }
+ for (;i<256;i++)
+    fogTable[i]=31;
 }
 
 volatile int slaveJob;         /* 0 = draw, 1 = traverse */
@@ -3300,6 +3308,8 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	signalObject(o->owner,SIGNAL_VIEW,0,0);
      feetPos.x=o->pos.x;
      feetPos.y=o->pos.y-o->radius;
+     if (mpIsPlayer(o))            /* GCC14: a player's pos is its eye, which hovers (SPR_HOVER) */
+	feetPos.y-=SPR_HOVER(o);
      feetPos.z=o->pos.z;
      MTH_CoordTrans(view,&feetPos,&tformed);
      if (tformed.z<CFG_SPRITE_NEARCLIP)

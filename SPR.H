@@ -126,6 +126,8 @@ void EZ_executeCommand(void);
 void EZ_clearCommand(void);
 
 int EZ_getNextCmdNm(void);
+int EZ_cmdsUsed(void);          /* GCC14: commands emitted this image */
+int EZ_cmdsCap(void);           /* GCC14: the command list's size */
 int EZ_getCmdRoom(void);
 void EZ_specialDistSpr2(short charNm,XyInt *xy,struct gourTable *gTable);
 void EZ_specialDistSpr2V(short charNm,int t0,int t1,XyInt *xy,

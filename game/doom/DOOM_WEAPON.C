@@ -24,6 +24,7 @@
 #include "walls.h"
 #include "gamestat.h"
 #include "doom.h"
+#include "mplayer.h"
 #include "doom_lights.h"
 #include "doom_actions.h"
 
@@ -40,6 +41,11 @@ DOOM_ACTIONS_PROTOTYPES
 #define DOOM_FINE_UNIT     2880         /* one of FINEANGLES = 8192 steps = 360/8192 degrees */
 
 static Fixed32 doomBulletPitch;         /* bulletslope of P_BulletSlope, as an engine pitch */
+
+/* GCC14: MPLAYER.H -- the autoaim slope is the shooter's */
+void doom_weaponMpRegister(void)
+{MPREG(doomBulletPitch);
+}
 
 /* --- P_SetPsprite (p_pspr.c:50-115) --------------------------------------------------------- */
 

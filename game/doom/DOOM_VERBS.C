@@ -20,6 +20,7 @@
 #include "hitscan.h"
 #include "gamestat.h"
 #include "doom.h"
+#include "mplayer.h"
 #include "doom_lights.h"
 #include "doom_actions.h"
 
@@ -105,23 +106,32 @@ const DoomAction doomActions[DOOM_NUMACTIONS]=
 /* P_LookForPlayers (p_enemy.c:495-560), one player: alive, in sight, and in front unless
    allaround (behind = |angle| > 90 degrees and farther than MELEERANGE) */
 int doom_lookForPlayer(DoomActor *this,int allaround)
-{Sprite *s;
- int an;
+{Sprite *s,*p;
+ int an,i,k;
  assert(this);
  s=this->sprite;
- if (currentState.health<=0)
-    return 0;                                   /* dead */
- if (!canSee(s,camera))
-    return 0;                                   /* out of sight */
- if (!allaround)
-    {an=normalizeAngle(getAngle(camera->pos.x-s->pos.x,camera->pos.z-s->pos.z)-s->angle);
-     if (an>F(90) || an<F(-90))
-	{if (doom_approxDist2(camera->pos.x-s->pos.x,camera->pos.z-s->pos.z)>F(64))
-	    return 0;                           /* behind back */
+ /* P_LookForPlayers: the players in turn from lastlook, two at most per call (MPLAYER.H: they
+    are read whoever is loaded).  Solo is the one-player case of the same loop. */
+ for (i=0;i<mpPlayers && i<2;i++)
+    {k=((this->lastlook&3)+i)%mpPlayers;
+     p=mpBody[k];
+     if (mpPeekInt(k,&currentState.health)<=0)
+	continue;                               /* dead */
+     if (!canSee(s,p))
+	continue;                               /* out of sight */
+     if (!allaround)
+	{an=normalizeAngle(getAngle(p->pos.x-s->pos.x,p->pos.z-s->pos.z)-s->angle);
+	 if (an>F(90) || an<F(-90))
+	    {if (doom_approxDist2(p->pos.x-s->pos.x,p->pos.z-s->pos.z)>F(64))
+		continue;                       /* behind back */
+	    }
 	}
+     this->lastlook=(short)k;
+     this->target=mpObj[k];
+     return 1;
     }
- this->target=(Object *)player;
- return 1;
+ this->lastlook=(short)(((this->lastlook&3)+i)%mpPlayers);
+ return 0;
 }
 
 /* P_CheckMeleeRange (p_enemy.c:170-186): closer than MELEERANGE-20 + the target radius */
@@ -134,7 +144,7 @@ int doom_meleeRange(DoomActor *this)
  /* Doom radius of the target: the camera's is the Doom player's (16); an actor's sphere is
     height/2 (DOOM_ACTOR.C doom_spawn), not its Doom radius */
  if (doom_approxDist2(ts->pos.x-this->sprite->pos.x,ts->pos.z-this->sprite->pos.z)>=
-     F(64-20)+((ts==camera)?ts->radius:F(doomMobjInfo[((DoomActor *)this->target)->mt].radius)))
+     F(64-20)+((mpIsPlayer(ts))?ts->radius:F(doomMobjInfo[((DoomActor *)this->target)->mt].radius)))
     return 0;
  if (!canSee(this->sprite,ts))
     return 0;

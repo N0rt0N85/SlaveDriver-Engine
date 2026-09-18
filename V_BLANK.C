@@ -8,6 +8,7 @@
 #include <sega_sys.h>
 #include "v_blank.h"
 #include "util.h"
+#include "mplayer.h"
 
 #define INPUTQSIZE 16 /* dont change this */
 volatile unsigned short inputQ[INPUTQSIZE]; /* GCC14: header declares it volatile */
@@ -21,6 +22,12 @@ volatile char analogIndexButtonsPresent;
 volatile short analogTR;
 volatile short analogTL;
 volatile char inputQHead,inputQTail;
+/* GCC14: local multiplayer (MPLAYER.H).  One queue per player, written at the same head as
+   inputQ; slot 0 is never read (player 1 keeps inputQ, and everything P1-only with it: the
+   analog pad, the soft reset, the menu). */
+volatile unsigned short inputQP[MPMAX][INPUTQSIZE];
+volatile unsigned short lastInputSampleP[MPMAX];
+int mpPadsPresent;
 
 volatile int fadeDir,fadePos,fadeEnd;
 volatile int abcResetEnable=0; /* GCC14: header declares it volatile */
@@ -85,6 +92,31 @@ void processInput(void)
     abcResetDisable=0;
  lastInputSample=accum;
  inputAccum&=accum;
+ /* GCC14: every pad, both ports, in order: port 1's devices then port 2's, each record an id,
+    a size and PER_SIZE_NCON_15 data bytes.  The k-th pad found is player k+1's.  With nothing
+    for a player, player 3 mirrors pad 1 and player 4 pad 2 (so 3-4p can be tried with two
+    pads); player 2 without a pad stands still.  START is kept for the players' own polling
+    (lastInputSampleP) and stripped from their queues: on those pads it adds a player, it
+    never opens the menu. */
+ {unsigned short pad[MPMAX];
+  int port,k=0,p=0;
+  for (port=0;port<2;port++)
+     for (i=0;i<Mul[port].con;i++)
+	{id=Pad[p];
+	 size=Pad[p+1];
+	 if (k<MPMAX && (id==PER_ID_DGT || (id==PER_ID_ANL && size!=3)))
+	    pad[k++]=(Pad[p+2]<<8)|Pad[p+3];
+	 p+=2+15;
+	}
+  mpPadsPresent=k;
+  for (i=k;i<MPMAX;i++)
+     pad[i]=(i>=2)? pad[i-2]: 0xffff;
+  for (i=1;i<MPMAX;i++)
+     {lastInputSampleP[i]=pad[i];
+      inputQP[i][(int)inputQHead]=pad[i]|PER_DGT_S;
+     }
+  lastInputSampleP[0]=accum;
+ }
  /* add input sample */
  inputQ[(int)inputQHead]=accum;
  inputQHead=(inputQHead+1)&0xf;

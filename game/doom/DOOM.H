@@ -130,6 +130,8 @@ void        doom_item_func(Object *this,int message,int param1,int param2);   /*
 void        exit_func(Object *this,int message,int param1,int param2);        /* OT_DOOM_EXIT   */
 char       *doom_levelName(int lNm);           /* CFG_LEVEL_NAME: doomLevelNames[lNm], bounded   */
 extern unsigned char doomSectorDamage[MAXNMSECTORS];   /* OT_DOOM_DAMAGE: hp per 32 tics, 0 = none */
+void        doom_weaponMpRegister(void);        /* GCC14: MPLAYER.H, per-player state of DOOM_WEAPON.C */
+void        doom_hudMpRegister(void);           /* GCC14: ... of DOOM_HUD.C */
 void        doom_sectorDamageTic(void);        /* 35 Hz from doom_playerTic: leveltime++, nukage */
 extern int  doomLevelTime;                     /* THE 35 Hz level clock (Doom leveltime)         */
 extern const char *doomLevelNames[DOOM_NMLEVELS];      /* "+E1M1.LEV", ... (8.3, root)           */

@@ -469,6 +469,21 @@ int EZ_getCmdRoom(void)
 #endif
 }
 
+/* GCC14: the image's command ledger, for the split-screen budget (SRUINS.C mpBalance): what is
+   emitted so far, and the list's size -- past it flushCmdBuffer drops the tail silently. */
+int EZ_cmdsUsed(void)
+{
+#if BUFFERWRITES
+ return totCommand+cmdBufferUsed;
+#else
+ return (ccommand-commandStart[bank])>>5;
+#endif
+}
+
+int EZ_cmdsCap(void)
+{return commandAreaSize;
+}
+
 int EZ_getNextCmdNm(void)
 {
 #if BUFFERWRITES

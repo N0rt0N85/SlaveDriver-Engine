@@ -10,6 +10,8 @@
 #include"sprite.h"
 #include "grenpal.h"
 #include "manpal.h"
+#include "mplayer.h"
+extern int viewXmin,viewXmax,viewYmin,viewYmax,viewCx,viewCy;   /* WALLS.C: the view being drawn */
 
 
 int level_nmSequences;
@@ -145,6 +147,12 @@ static int frame;
 static int clock;
 static int sequenceOver;
 
+/* GCC14: the weapon's animation queue belongs to a player (MPLAYER.H) */
+void sequenceMpRegister(void)
+{MPREG(sequenceQ); MPREG(qHead); MPREG(qTail);
+ MPREG(frame); MPREG(clock); MPREG(sequenceOver);
+}
+
 
 void initWeaponQ(void)
 {sequenceQ[0].seq=-1;
@@ -251,11 +259,11 @@ int advanceWeaponSequence(int xbase,int ybase,int hack)
  overlay=0;
  if (sequence>=CFG_WOVERLAY_FROM)
     overlay=0x4000;
- {XyInt pos[2];
-  pos[0].x=0;
-  pos[0].y=0;
-  pos[1].x=320;
-  pos[1].y=CFG_WCLIP_BOTTOM;
+ {XyInt pos[2];                  /* GCC14: the view being drawn; solo = 0,0-320,192 */
+  pos[0].x=viewCx+viewXmin;
+  pos[0].y=viewCy+viewYmin;
+  pos[1].x=viewCx+viewXmax;
+  pos[1].y=viewCy+viewYmax;
   EZ_userClip(pos);
  }
  while (1)
@@ -293,16 +301,30 @@ int advanceWeaponSequence(int xbase,int ybase,int hack)
 		break;
 	    }
 	 else
-	    {pos.x=xo-320/2+c->chunkx;
-	     pos.y=yo-CFG_YCENTER+c->chunky;
+	    {int vw=viewXmax-viewXmin;
 	     flip=0;
 	     if (c->flags & 1)
 		flip|=DIR_LRREV;
 	     if (c->flags & 2)
 		flip|=DIR_TBREV;
 	     assert(getPicClass(c->tile)==TILE8BPP);
-	     EZ_normSpr(flip,UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE,
-			overlay,mapPic(c->tile),&pos,NULL);
+	     if (vw==320)
+		{pos.x=xo-320/2+c->chunkx;
+		 pos.y=yo-CFG_YCENTER+c->chunky;
+		 EZ_normSpr(flip,UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE,
+			    overlay,mapPic(c->tile),&pos,NULL);
+		}
+	     else
+		{/* GCC14: split screen.  The gun is laid out for 320 x 192; scaled by the view's
+		    width and sat on its bottom edge, as Doom scales its psprites (pspritescale). */
+		 XyInt sp[2];
+		 sp[0].x=((xo+c->chunkx-320/2)*vw)/320;
+		 sp[0].y=viewYmax+((yo+c->chunky-CFG_WCLIP_BOTTOM)*vw)/320;
+		 sp[1].x=(64*vw)/320;
+		 sp[1].y=(64*vw)/320;
+		 EZ_scaleSpr(ZOOM_TL|flip,UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE,
+			     overlay,mapPic(c->tile),sp,NULL);
+		}
 	    }
 	}
      if (sequenceQ[qTail].seqWith==-1 || sequence==sequenceQ[qTail].seqWith)

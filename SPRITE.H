@@ -260,6 +260,14 @@ extern int mapOn;                                    /* SRUINS.C:85             
 #define CFG_BOWLDOTS_GUARD     return;                           /* SRUINS.C:1171: never poke bowls into STBAR */
 #define CFG_DRAW_MESSAGE()     doom_drawMessage()                /* SRUINS.C:2211 (after drawMessage) */
 #define CFG_DRAW_STATBAR(f)    doom_drawStatBar()                /* SRUINS.C:2212                 */
+void doom_mpRegister(void);                          /* DOOM_PLAYER.C: the Doom player, per player (MPLAYER.H) */
+void doom_mpNewPlayer(void);
+void doom_drawSplitHud(int view,int nmViews);         /* DOOM_HUD.C */
+#define CFG_MP_REGISTER()      doom_mpRegister()                 /* SRUINS.C mpRegisterEngine: the Doom player per player (MPLAYER.H) */
+#define CFG_MP_NEWPLAYER()     doom_mpNewPlayer()                /* SRUINS.C mpBuild/mpRespawn: nothing carried, G_PlayerReborn */
+#define CFG_DRAW_SPLITHUD(k,n) doom_drawSplitHud(k,n)           /* SRUINS.C view loop, 2-4 players: the compact HUD of view k */
+short doom_playerBodySeq(Sprite *body,Sprite *viewer,int health);
+#define CFG_MP_BODYSEQ(b,v,h) doom_playerBodySeq(b,v,h)       /* SRUINS.C mpShowBodies: the frame of a player's body seen from a view */
 #define CFG_DRAW_AIRMETER(f)                                     /* SRUINS.C:2214: no air meter   */
 #define CFG_AIR_PICS(x)                                          /* SRUINS.C:1978-1979: nor its two pics -- meter_bubble/back, 16 KB, leave the link */
 /* PowerSlave paths a Doom level never takes, compiled out so their code leaves the link: water
@@ -288,6 +296,10 @@ extern int mapOn;                                    /* SRUINS.C:85             
 #define CFG_BOWLDOTS_GUARD
 #define CFG_DRAW_MESSAGE()
 #define CFG_DRAW_STATBAR(f)    drawStatBar(f)
+#define CFG_MP_REGISTER()                                        /* the engine's player is all PowerSlave has */
+#define CFG_MP_NEWPLAYER()
+#define CFG_DRAW_SPLITHUD(k,n)
+#define CFG_MP_BODYSEQ(b,v,h) (-1)                              /* PowerSlave has no body to show */
 #define CFG_DRAW_AIRMETER(f)   drawAirMeter(f)
 #define CFG_AIR_PICS(x)        x
 #define CFG_WATER              1

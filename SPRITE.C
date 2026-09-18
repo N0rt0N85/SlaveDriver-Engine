@@ -8,6 +8,7 @@
 #include "profile.h"
 #include "sound.h"
 #include "ai.h"
+#include "mplayer.h"
 
 #define MAXNMSPRITES 450
 extern Sprite *camera;
@@ -728,9 +729,16 @@ int collideSprite(Sprite *o)
      o->next=sectorSpriteList[newSector];
      sectorSpriteList[newSector]=o;
      o->s=newSector;
-     if (o==camera && level_sector[newSector].object)
-	signalObject((Object *)level_sector[newSector].object,
-		     SIGNAL_ENTER,0,0);
+     if (level_sector[newSector].object)
+	{/* GCC14: any player entering, with ITS state loaded (MPLAYER.H) -- solo: the camera */
+	 int k=(o==camera)? mpCur: mpIndexOfSprite(o);
+	 if (k>=0)
+	    {int prev=mpBegin(k);
+	     signalObject((Object *)level_sector[newSector].object,
+			  SIGNAL_ENTER,0,0);
+	     mpEnd(prev);
+	    }
+	}
     }
 
  if (level_sector[o->s].flags & SECFLAG_WATER)

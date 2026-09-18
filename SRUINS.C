@@ -60,6 +60,7 @@
 #include "dma.h"
 #include "local.h"
 #include "bigmap.h"
+#include "mplayer.h"
 #include "profile.h"
 #include "gamestat.h"
 #include "intro.h"
@@ -864,18 +865,21 @@ static void push(void)
     }
 }
 
+/* GCC14: movePlayer's edge state, per player (registered in mpRegisterEngine) */
+static unsigned short lastInput=0;
+static char wasUnderWater=0;
+static char mvRespawn;          /* a dead player asked to come back (multiplayer only) */
+
 void movePlayer(int inputEnd,int nmFrames)
 {unsigned short input;
  unsigned short changeInput=0;
  unsigned short pushed;
- static unsigned short lastInput=0;
- static char wasUnderWater=0;
  int inputPos,i;
  inputPos=inputEnd-nmFrames;
  if (inputPos<0) inputPos+=INPUTQSIZE;
  while (inputPos!=inputEnd)
-    {/* control input */
-     input=inputQ[inputPos];
+    {/* control input: player 1 keeps the engine's queue, the others read their own pad */
+     input=mpCur? inputQP[mpCur][inputPos]: inputQ[inputPos];
 
      if (mapOn && !(input & IMASK(ACTION_PUSH)))
 	{if (!(input & PER_DGT_L))
@@ -899,7 +903,11 @@ void movePlayer(int inputEnd,int nmFrames)
 	     i=15-((playerIsDead-120)>>2);
 	     if (i<0) i=0;
 	     if (i>15)i=15;
-	     setMasterVolume(i);
+	     if (mpPlayers==1)          /* the master volume is everybody's */
+		setMasterVolume(i);
+	     else if (playerIsDead>60 &&
+		      (pushed & (IMASK(ACTION_FIRE)|IMASK(ACTION_PUSH))))
+		mvRespawn=1;            /* Doom co-op: use or fire brings you back */
 	     currentState.health=0;
 	     weaponSetVel(0,F(4));
 	     if (playerAngle.pitch<CFG_DEATH_PITCH)
@@ -970,9 +978,11 @@ void movePlayer(int inputEnd,int nmFrames)
 	   }
 	 if (currentState.health<=0)
 	    {playerIsDead=1;
-	     colorCenter[0]=-255;
-	     colorCenter[1]=-255;
-	     colorCenter[2]=-255;
+	     if (mpPlayers==1)          /* the VDP2 colour offset fades every view: solo only */
+		{colorCenter[0]=-255;
+		 colorCenter[1]=-255;
+		 colorCenter[2]=-255;
+		}
 
 	     playStaticSound(ST_JOHN,CFG_DEATH_SFX);
 	     switchPlayerMotion(0);
@@ -1854,9 +1864,306 @@ void stunPlayer(int ticks)
  colorOffset[2]=128;
 }
 
+/* --- local multiplayer: the engine's side (MPLAYER.H) ------------------------------------------
+   The engine's player is the set of globals below; each player gets its own copy, swapped by
+   mpSwitch.  The game registers its own player through CFG_MP_REGISTER. */
+static void mpRegisterEngine(void)
+{MPREG(player); MPREG(camera); MPREG(playerAngle);
+ MPREG(xavel); MPREG(yavel);
+ MPREG(keyMask); MPREG(playerIsDead); MPREG(playerMotionEnable); MPREG(stunCounter);
+ MPREG(invisibleCounter); MPREG(weaponPowerUpCounter); MPREG(deathTimer);
+ MPREG(ouchTime); MPREG(ltHurtAmount); MPREG(ltHurtTime);
+ MPREG(playerHeightOffset); MPREG(playerHeightVel);
+ MPREG(lastInput); MPREG(wasUnderWater); MPREG(mvRespawn);
+ MPREG(currentState.health); MPREG(currentState.inventory);
+ MPREG(currentState.weaponAmmo); MPREG(currentState.desiredWeapon);
+ MPREG(autoTarget);             /* autoTFormedPos is declared in WALLS.H but defined nowhere: unused */
+ MPREG(currentMessage); MPREG(messageAge); MPREG(messageXPos);
+ sequenceMpRegister();          /* SEQUENCE.C: the weapon's animation queue */
+ weaponMpRegister();            /* WEAPON.C: its position, velocity, current weapon */
+ CFG_MP_REGISTER();             /* the game's own player */
+}
+
+/* The views.  Solo: the original window, 320 x 192 over the 32-line status bar, focal 160 (90 deg).
+   2 players: two 160 x 192 halves side by side, each over half of the bar.  3-4 players:
+   quadrants of 160 x 112, a 160 x 96 view over a 16-line band; the 4th quadrant stays black
+   in 3p.  Split screen uses focal 126, 65 deg over 160 pixels.  The horizon sits where solo
+   puts it, 112/192 of the way down, so a view is the same picture at any size. */
+typedef struct {short x0,y0,w,h,cy;} MpView;
+static void mpViewGeometry(int k,MpView *v)
+{if (mpPlayers==1)
+    {v->x0=0; v->y0=0; v->w=320; v->h=192; v->cy=CFG_YCENTER;}
+ else if (mpPlayers==2)
+    {v->x0=160*k; v->y0=0; v->w=160; v->h=192; v->cy=CFG_YCENTER;}
+ else
+    {v->x0=160*(k&1); v->y0=112*(k>>1); v->w=160; v->h=96; v->cy=56;}
+}
+
+/* Window, focal and local origin of view k.  emit=0 sets the renderer's globals only (the tail
+   kick traverses view 0 of the next image with them); emit=1 also puts the VDP1 local origin
+   and user clip on the view, for what is drawn next. */
+static void mpSetViewport(int k,int emit)
+{MpView v;
+ mpViewGeometry(k,&v);
+ viewCx=v.x0+v.w/2;
+ viewCy=v.y0+v.cy;
+ viewXmin=-v.w/2;
+ viewXmax=v.w/2;
+ viewYmin=-v.cy;
+ viewYmax=v.h-v.cy;
+ focalDist=(mpPlayers==1)? FOCALDIST: 126;
+ if (emit)
+    {XyInt r[2];
+     r[0].x=v.x0; r[0].y=v.y0;
+     r[1].x=v.x0+v.w-1; r[1].y=v.y0+v.h-1;
+     EZ_localCoord(viewCx,viewCy);
+     EZ_userClip(r);
+    }
+}
+
+static MthXyz mpSpawnPos[MPMAX];
+static int mpSpawnSector[MPMAX];
+static Orient mpSpawnAngle[MPMAX];
+static int mpSoloFog=4096;      /* solo's fog (the L+R+Z toggle), kept while split screen runs */
+static char mpBuilt[MPMAX];     /* slot k holds a player whose state goes on to the next level */
+static char mpInLevel[MPMAX];   /* ... and whose body exists in THIS level */
+
+/* Player k's body next to player 1's.  The converter keeps only Doom's start 1, so the others
+   step a few paces away from it through the engine's own collision -- never through a wall.
+   The other bodies are made transparent for the move, as for a missile leaving its shooter. */
+static void mpPlaceNear(Sprite *s,int k)
+{static const signed char dir[MPMAX][2]={{0,0},{1,0},{-1,0},{0,-1}};
+ Sprite *ref=mpBody[0];
+ int saved[MPMAX],j,step;
+ moveSpriteTo(s,ref->s,&ref->pos);
+ for (j=0;j<mpPlayers;j++)
+    if (mpBody[j] && mpInLevel[j])
+       {saved[j]=mpBody[j]->flags;
+	mpBody[j]->flags|=SPRITEFLAG_NOSPRCOLLISION;
+       }
+ for (step=0;step<4;step++)
+    {s->vel.x=F(12)*dir[k][0];
+     s->vel.y=0;
+     s->vel.z=F(12)*dir[k][1];
+     moveSprite(s);
+    }
+ s->vel.x=s->vel.y=s->vel.z=0;
+ for (j=0;j<mpPlayers;j++)
+    if (mpBody[j] && mpInLevel[j])
+       mpBody[j]->flags=saved[j];
+}
+
+/* The per-player part of the level start, the same calls in the same order as for player 1. */
+static void mpPlayerLevelInit(void)
+{autoTarget=NULL;               /* a carried slot holds last level's pointer */
+ playerIsDead=0; mvRespawn=0; deathTimer=0; stunCounter=0;
+ xavel=0; yavel=0;
+ playerHeightOffset=0; playerHeightVel=0;
+ ouchTime=0; ltHurtTime=0;
+ switchPlayerMotion(1);
+ initWeapon(); CFG_LEVEL_PLAYER_INIT();
+ switchWeapons(1);
+}
+
+/* Build player k in this level: a body, a place, and either the state it carried from the
+   level before or a fresh one copied from player 1's and reset by the game's own init. */
+static void mpBuild(int k)
+{int prev=mpCur;
+ assert(k>0 && k<MPMAX);
+ if (mpInLevel[k])
+    {/* already has a body here (it left and came back): revive it where player 1 stands */
+     mpSwitch(k);
+     camera->flags&=~(SPRITEFLAG_INVISIBLE|SPRITEFLAG_NOSPRCOLLISION);
+     mpPlaceNear(camera,k);
+     mpSwitch(prev);
+     return;
+    }
+ if (!mpBuilt[k])
+    mpStoreAs(k);               /* template: player 1's copies */
+ mpSwitch(k);
+ if (!mpBuilt[k])
+    CFG_MP_NEWPLAYER();         /* nothing to carry: the game's init gives the starting kit */
+ player=constructPlayer(mpBody[0]->s,0);
+ camera=player->sprite;
+ mpBody[k]=camera;
+ mpObj[k]=(Object *)player;
+ mpInLevel[k]=1;
+ mpPlaceNear(camera,k);
+ mpPeek(0,&playerAngle,sizeof(playerAngle),&playerAngle);
+ camera->angle=playerAngle.yaw;
+ mpSpawnPos[k]=camera->pos;
+ mpSpawnSector[k]=camera->s;
+ mpSpawnAngle[k]=playerAngle;
+ mpPlayerLevelInit();
+ mpBuilt[k]=1;
+ mpSwitch(prev);
+}
+
+/* Players 2..mpPlayers at level start, once player 1 is fully set up. */
+static void mpLevelBuild(void)
+{int k;
+ mpRegisterEngine();
+ assert(mpCur==0);
+ mpBody[0]=camera;
+ mpObj[0]=(Object *)player;
+ mpInLevel[0]=1;
+ mpBuilt[0]=1;
+ mpSpawnPos[0]=camera->pos;
+ mpSpawnSector[0]=camera->s;
+ mpSpawnAngle[0]=playerAngle;
+ for (k=1;k<MPMAX;k++)
+    mpInLevel[k]=0;
+ for (k=1;k<mpPlayers;k++)
+    mpBuild(k);
+}
+
+/* A new game: the count armed at the menu, and no player carries anything into it. */
+static void mpNewGame(void)
+{int k;
+ mpPlayers=mpArmed;
+ for (k=0;k<MPMAX;k++)
+    mpBuilt[k]=0;
+}
+
+/* A dead player back at its spawn point with the starting kit (Doom co-op: G_DoReborn). */
+static void mpRespawn(int k)
+{removeLight(camera);           /* died firing: doom_playerInit zeroes muzzleTics, not the light */
+ moveSpriteTo(camera,mpSpawnSector[k],&mpSpawnPos[k]);
+ camera->vel.x=camera->vel.y=camera->vel.z=0;
+ playerAngle=mpSpawnAngle[k];
+ camera->angle=playerAngle.yaw;
+ CFG_MP_NEWPLAYER();
+ mpPlayerLevelInit();
+}
+
+/* A player who leaves keeps its body, parked: invisible, untouchable, never iterated.  Freeing
+   it would leave every monster that targets it holding a dangling pointer. */
+static void mpPark(int k)
+{mpBody[k]->flags|=SPRITEFLAG_INVISIBLE|SPRITEFLAG_NOSPRCOLLISION;
+ mpBody[k]->sequence=-1;
+}
+
+/* The others' bodies as view `viewer` sees them, its own hidden.  The game picks the frame
+   (CFG_MP_BODYSEQ); -1 = not drawn.  Solo: the camera keeps its -1, as it always had. */
+static void mpShowBodies(int viewer)
+{int k;
+ if (mpPlayers==1)
+    return;
+ for (k=0;k<mpPlayers;k++)
+    mpBody[k]->sequence=(k==viewer)? -1: CFG_MP_BODYSEQ(mpBody[k],mpBody[viewer],mpPeekInt(k,&currentState.health));
+}
+
+/* START on pad 2, in a level: one more player, and from 4 back to 1.  The traversal started in
+   the last image's tail was made for the old view 0, whose window changes with the count. */
+static void mpPollStart(void)
+{static char held=1;
+ int down=!(lastInputSampleP[1] & PER_DGT_S);
+ if (down && !held && mpPadsPresent>=2 && !playerIsDead)
+    {wallsPipeDiscard();
+     mpSwitch(0);
+     if (mpPlayers==1)
+	mpSoloFog=fogDist;       /* split screen steers the fog per view: keep solo's */
+     if (mpPlayers<MPMAX)
+	{mpPlayers++;
+	 mpBuild(mpPlayers-1);
+	}
+     else
+	{int k;
+	 for (k=1;k<mpPlayers;k++)
+	    mpPark(k);
+	 mpPlayers=1;
+	 setFog(mpSoloFog);
+	}
+     mpArmed=mpPlayers;
+     mpSetViewport(0,0);
+     {static char *msg[MPMAX]={"1 PLAYER","2 PLAYERS","3 PLAYERS","4 PLAYERS"};
+      changeMessage(msg[mpPlayers-1]);
+     }
+    }
+ held=down;
+}
+
+/* --- adaptive LOD in split screen -------------------------------------------------------------
+   The currency is the cell: what the VDP1 list holds -- 1448 commands an image, the tail dropped
+   silently past that (SPR.C flushCmdBuffer) -- and what the two CPUs pay per image.  ONE budget
+   for all the views, shared out max-min: a view that needs less than an equal share keeps only
+   what it uses, and what it leaves goes to the others.  Each view then steers its OWN fog
+   distance, continuously between 4096 and 512, so that its cell count tracks its share: the fog
+   IS the LOD, since the light LOD folds and welds whatever the fog has blacked out.
+
+   The budget starts at the hardware ceiling -- the command list, less what the image spends on
+   things, weapons, HUD and overlay -- and gives ground only when the image misses its frame
+   rate.  The frame rate aimed at is 30 fps; a target still missed with the budget at its floor
+   drops to 20, then 15, and climbs back once there is room to spare.  Solo is left alone: its
+   fog stays the L+R+Z toggle. */
+#define MPFOGMIN 512
+#define MPFOGMAX 4096
+static int mpView;              /* the view being drawn */
+static int mpFog[MPMAX]={MPFOGMAX,MPFOGMAX,MPFOGMAX,MPFOGMAX};
+static int mpCells[MPMAX],mpShare[MPMAX];
+static int mpBudget=0x7fff,mpBudgetMax,mpTargetFields=2,mpOver,mpUnder;
+
+static void mpSetViewFog(int k)
+{if (mpPlayers>1)
+    setFog(mpFog[k]);
+}
+
+static void mpViewDone(int k)
+{mpCells[k]=nmPolys+nmSlavePolys;
+}
+
+/* once per image, after the VDP1 is done: fields = what the last image took, work = the lines
+   this one needed until its list was drawn (calc + draw) */
+static void mpBalance(int fields,int work)
+{int k,n,left,changed,eq,cells=0;
+ int want[MPMAX],done[MPMAX];
+ if (mpPlayers==1)
+    return;
+ for (k=0;k<mpPlayers;k++)
+    cells+=mpCells[k];
+ mpBudgetMax=EZ_cmdsCap()-(EZ_cmdsUsed()-cells)-32;
+ if (fields>mpTargetFields)
+    {mpBudget-=mpBudget>>4; mpOver++; mpUnder=0;}
+ else if (work<mpTargetFields*263*3/4)
+    {mpBudget+=(mpBudget>>4)+1; mpUnder++; mpOver=0;}
+ else
+    {mpOver=0; mpUnder=0;}
+ if (mpBudget>mpBudgetMax) mpBudget=mpBudgetMax;
+ if (mpBudget<48*mpPlayers) mpBudget=48*mpPlayers;
+ if (mpOver>45 && mpTargetFields<4)        /* 1.5 s missed, budget long since at its floor */
+    {mpTargetFields++; mpOver=0;}
+ if (mpUnder>120 && mpTargetFields>2)      /* 4 s with a quarter of the frame to spare */
+    {mpTargetFields--; mpUnder=0;}
+ /* max-min: a view drawn without fog and under its share wants what it used, plus an eighth
+    to turn round in; a fogged view wants all it can get */
+ for (k=0;k<mpPlayers;k++)
+    {done[k]=0;
+     want[k]=(mpFog[k]>=MPFOGMAX && mpCells[k]<=mpShare[k])? mpCells[k]+(mpCells[k]>>3): 0x7fffffff;
+    }
+ left=mpBudget;
+ n=mpPlayers;
+ do {changed=0;
+     eq=left/n;
+     for (k=0;k<mpPlayers;k++)
+	if (!done[k] && want[k]<=eq)
+	   {mpShare[k]=want[k]; left-=want[k]; n--; done[k]=1; changed=1;}
+    } while (changed && n>0);
+ for (k=0;k<mpPlayers;k++)
+    if (!done[k])
+       mpShare[k]=left/n;
+ /* each view closes in on its share: fog in by 1/16 an image, out by 1/32 */
+ for (k=0;k<mpPlayers;k++)
+    {if (mpCells[k]>mpShare[k])
+	mpFog[k]-=mpFog[k]>>4;
+     else if (mpCells[k]<mpShare[k]-(mpShare[k]>>3))
+	mpFog[k]+=(mpFog[k]>>5)+1;
+     if (mpFog[k]<MPFOGMIN) mpFog[k]=MPFOGMIN;
+     if (mpFog[k]>MPFOGMAX) mpFog[k]=MPFOGMAX;
+    }
+}
+
 int runLevel(char *filename,int levelNm)
-{XyInt parms;
- XyInt noUserClip[2]={{0,0},{320-1,240-1}};
+{XyInt noUserClip[2]={{0,0},{320-1,240-1}};
  int i,monsterMoveCounter;
  int nmWeaponTiles,nmStaticSounds;
  int lastDraw=0,lastCalc=0;
@@ -1864,7 +2171,7 @@ int runLevel(char *filename,int levelNm)
  unsigned int smoothVTime;
  int vspeedSwitchCount;
  int lastLastCalc=0;
- int lastYaw,lastPitch,mmcSave;
+ int lastYaw,lastPitch,mmcSave=0;
 
  MthMatrixTbl viewTransform;
  MthMatrix matstack[4];
@@ -1999,6 +2306,10 @@ int runLevel(char *filename,int levelNm)
  colorCenter[1]=0;
  colorCenter[2]=0;
  player=NULL;
+ for (i=0;i<MPMAX;i++)             /* last level's bodies are gone: nobody is a player until */
+    {mpBody[i]=NULL;               /* mpLevelBuild says so (a stale pointer could name a     */
+     mpObj[i]=NULL;                /* monster of this level)                                  */
+    }
  playerAngle.pitch=0;
  playerAngle.yaw=F(0);
  placeObjects();
@@ -2073,9 +2384,11 @@ int runLevel(char *filename,int levelNm)
  mipBase=createMippedPics();
  setFog(fogDist);   /* fills the table; fogDist survives from one level to the next */
  setPlaxFade(skyFadeFor(fogDist));  /* initPlax restored the original palette on load */
+ mpLevelBuild();                    /* players 2..: player 1 is fully set up by now */
 
  while(1)
     {htimer=0;
+     mpPollStart();                 /* START on pad 2: one more player (or back to one) */
      {/* GCC14: hold L+R+X together -- or X+Y+Z, for pads whose triggers report only
 	 analog values -- to flip runtime mipmapping (mipEnable, WALLS.C) */
       static char mipChord=0;
@@ -2152,122 +2465,170 @@ int runLevel(char *filename,int levelNm)
      /* ok */
      if (framesElapsed>8)
 	framesElapsed=8;
-     /* move paralax sky */
-     MTH_PushMatrix(&viewTransform);
-     MTH_RotateMatrixZ(&viewTransform, playerAngle.roll );
-     MTH_RotateMatrixX(&viewTransform, playerAngle.pitch );
-     MTH_RotateMatrixY(&viewTransform, playerAngle.yaw );
-     if (earthQuake)
-	{camera->pos.x+=(MTH_GetRand()%(earthQuake<<15))-(earthQuake<<14);
-	 camera->pos.y+=(MTH_GetRand()%(earthQuake<<15))-(earthQuake<<14);
-	 camera->pos.z+=(MTH_GetRand()%(earthQuake<<15))-(earthQuake<<14);
-	 earthQuake--;
-	}
-     MTH_MoveMatrix(&viewTransform,
-		    -camera->pos.x,
-		    -camera->pos.y+playerHeightOffset+CFG_VIEW_BOB,
-		    -camera->pos.z);
-     /* ok */
+     /* GCC14: one pass per player (MPLAYER.H).  Solo is a single pass that emits exactly what
+	the loop always emitted.  The game logic still runs inside view 0's draw window, between
+	the master's walls and drawWallsFinish, while the slave finishes its share -- for every
+	player at once; views 1.. are then drawn from the world as this image left it. */
      EZ_openCommand();
-     /* ok */
-     parms.x = 320 - 1;
-     parms.y = 240 - 1;
      EZ_sysClip();
-     EZ_userClip(noUserClip);
-
-     EZ_localCoord(320/2,CFG_YCENTER);
-     pushProfile("Walls");
-     /* ok */
+     for (mpView=0;mpView<mpPlayers;mpView++)
+	{mpSwitch(mpView);
+	 mpSetViewport(mpView,mpPlayers>1);
+	 MTH_PushMatrix(&viewTransform);
+	 MTH_RotateMatrixZ(&viewTransform, playerAngle.roll );
+	 MTH_RotateMatrixX(&viewTransform, playerAngle.pitch );
+	 MTH_RotateMatrixY(&viewTransform, playerAngle.yaw );
+	 if (earthQuake && mpView==0)
+	    {camera->pos.x+=(MTH_GetRand()%(earthQuake<<15))-(earthQuake<<14);
+	     camera->pos.y+=(MTH_GetRand()%(earthQuake<<15))-(earthQuake<<14);
+	     camera->pos.z+=(MTH_GetRand()%(earthQuake<<15))-(earthQuake<<14);
+	     earthQuake--;
+	    }
+	 MTH_MoveMatrix(&viewTransform,
+			-camera->pos.x,
+			-camera->pos.y+playerHeightOffset+CFG_VIEW_BOB,
+			-camera->pos.z);
+	 if (mpPlayers==1)
+	    {EZ_userClip(noUserClip);
+	     EZ_localCoord(320/2,CFG_YCENTER);
+	    }
+	 pushProfile("Walls");
 #if WALLPIPE
-     /* collect the traversal started in last frame's tail, BEFORE the
-	master touches sectorDraw[] */
-     wallsPipeJoin();
+	 /* collect the traversal started in last frame's tail, BEFORE the
+	    master touches sectorDraw[] -- it was view 0's */
+	 if (mpView==0)
+	    wallsPipeJoin();
 #endif
-     drawWalls(viewTransform.current);
-     /* nok */
-     popProfile();
-
-     EZ_userClip(noUserClip);
-
-     pushProfile("Motion");
-     movePlayer(inputEnd,framesElapsed);
-     camera->angle=playerAngle.yaw;
-     if (monsterMoveCounter>CFG_TIC_CAP)
-	monsterMoveCounter=CFG_TIC_CAP;
-     mmcSave=monsterMoveCounter;
-     for (;monsterMoveCounter>CFG_TIC_UNIT-1;monsterMoveCounter-=CFG_TIC_UNIT)
-	{CFG_PLAYER_TIC(); if (ltHurtTime>0)
-	    {ltHurtTime--;
-	     playerHurt(ltHurtAmount);
-	     if (!ltHurtTime)
-		stopAllSound(69);
-	    }
-	 pushProfile("Run Objects");
-	 runObjects();
+	 mpSetViewFog(mpView);
+	 mpShowBodies(mpView);
+	 drawWalls(viewTransform.current);
 	 popProfile();
-	 stepColorOffset();
-	 stepPlayerHeight();
-	 ouchTime--;
-	 if (weaponPowerUpCounter &&
-	     !(currentState.gameFlags & GAMEFLAG_DOLLPOWERMODE))
-	    {weaponPowerUpCounter--;
-	     if (weaponPowerUpCounter<60 && !(weaponPowerUpCounter & 0xf))
-		playStaticSound(ST_ITEM,5);
-	     if (weaponPowerUpCounter&0x2)
-		SCL_SetColOffset(SCL_OFFSET_B,SCL_NBG0,
-				 255,60,60);
-	     else
-		SCL_SetColOffset(SCL_OFFSET_B,SCL_NBG0,
-				 0,0,0);
-	    }
-	 if (invisibleCounter)
-	    {int rev;
-	     invisibleCounter--;
-	     if (invisibleCounter<60 && !(invisibleCounter & 0xf))
-		playStaticSound(ST_ITEM,5);
-	     rev=INVISIBLEDOSE-invisibleCounter;
-	     if (rev>16 && rev<16+20)
-		{int c=rev-16;
-		 SCL_SetColMixRate(SCL_NBG0,c);
+
+	 if (mpPlayers==1)
+	    EZ_userClip(noUserClip);
+	 else
+	    mpSetViewport(mpView,1);    /* drawWalls moved the user clip about: back on the view */
+
+	 if (mpView==0)
+	    {int k;
+	     pushProfile("Motion");
+	     for (k=0;k<mpPlayers;k++)
+		{mpSwitch(k);
+		 movePlayer(inputEnd,framesElapsed);
+		 camera->angle=playerAngle.yaw;
+		 if (mvRespawn)
+		    mpRespawn(k);
 		}
-	     if (rev<32)
-		{int rg,b,o;
-		 o=16-abs(rev-16);
-		 rg=o<<4;
-		 if (rg>255) rg=255;
-		 b=o<<5;
-		 if (b>255) b=255;
-		 SCL_SetColOffset(SCL_OFFSET_B,SCL_NBG0,
-				  rg,rg,b);
+	     if (monsterMoveCounter>CFG_TIC_CAP)
+		monsterMoveCounter=CFG_TIC_CAP;
+	     mmcSave=monsterMoveCounter;
+	     for (;monsterMoveCounter>CFG_TIC_UNIT-1;monsterMoveCounter-=CFG_TIC_UNIT)
+		{for (k=0;k<mpPlayers;k++)
+		    {mpSwitch(k);
+		     CFG_PLAYER_TIC(); if (ltHurtTime>0)
+			{ltHurtTime--;
+			 playerHurt(ltHurtAmount);
+			 if (!ltHurtTime)
+			    stopAllSound(69);
+			}
+		    }
+		 mpSwitch(0);
+		 pushProfile("Run Objects");
+		 runObjects();
+		 popProfile();
+		 if (mpPlayers>1)       /* the VDP2 colour offset is every view's: kept neutral */
+		    changeColorOffset(0,0,0,3);
+		 stepColorOffset();
+		 for (k=0;k<mpPlayers;k++)
+		    {mpSwitch(k);
+		     stepPlayerHeight();
+		     ouchTime--;
+		     if (weaponPowerUpCounter &&
+			 !(currentState.gameFlags & GAMEFLAG_DOLLPOWERMODE))
+			{weaponPowerUpCounter--;
+			 if (weaponPowerUpCounter<60 && !(weaponPowerUpCounter & 0xf))
+			    playStaticSound(ST_ITEM,5);
+			 if (mpPlayers==1)
+			    {if (weaponPowerUpCounter&0x2)
+				SCL_SetColOffset(SCL_OFFSET_B,SCL_NBG0,
+						 255,60,60);
+			     else
+				SCL_SetColOffset(SCL_OFFSET_B,SCL_NBG0,
+						 0,0,0);
+			    }
+			}
+		     if (invisibleCounter)
+			{int rev;
+			 invisibleCounter--;
+			 if (invisibleCounter<60 && !(invisibleCounter & 0xf))
+			    playStaticSound(ST_ITEM,5);
+			 rev=INVISIBLEDOSE-invisibleCounter;
+			 if (mpPlayers==1)
+			    {if (rev>16 && rev<16+20)
+				{int c=rev-16;
+				 SCL_SetColMixRate(SCL_NBG0,c);
+				}
+			     if (rev<32)
+				{int rg,b,o;
+				 o=16-abs(rev-16);
+				 rg=o<<4;
+				 if (rg>255) rg=255;
+				 b=o<<5;
+				 if (b>255) b=255;
+				 SCL_SetColOffset(SCL_OFFSET_B,SCL_NBG0,
+						  rg,rg,b);
+				}
+			     if (invisibleCounter<20)
+				SCL_SetColMixRate(SCL_NBG0,invisibleCounter);
+			    }
+			}
+		    }
 		}
-	     if (invisibleCounter<20)
-		SCL_SetColMixRate(SCL_NBG0,invisibleCounter);
+	     mpSwitch(mpView);
+	     popProfile();
 	    }
+	 pushProfile("Walls");
+	 drawWallsFinish();
+	 popProfile();
+	 mpViewDone(mpView);            /* the slave's cells are only counted once it has joined */
+
+	 if (mpView==0)
+	    {CFG_PROF("Post"); for (;mmcSave>CFG_TIC_UNIT-1;mmcSave-=CFG_TIC_UNIT)
+		{advanceWallAnimations();
+		 stepWater();
+		}
+	     updatePushBlockPositions();
+	     processDelayedMoves(); CFG_PROF_END();
+	    }
+
+	 if (mapOn && mpPlayers==1)
+	    drawMap(camera->pos.x,camera->pos.z,camera->pos.y,playerAngle.yaw,
+		    camera->s);
+
+	 CFG_PROF("Weapon"); CFG_RUN_WEAPON(framesElapsed,invisibleCounter,weaponPowerUpCounter); CFG_PROF_END();
+
+	 MTH_PopMatrix(&viewTransform);
+
+	 CFG_PROF("HUD");
+	 if (mpPlayers==1)
+	    {drawMessage(framesElapsed); CFG_DRAW_MESSAGE();
+	     CFG_DRAW_STATBAR(framesElapsed);
+	    }
+	 else
+	    CFG_DRAW_SPLITHUD(mpView,mpPlayers);
+	 CFG_PROF_END();
+
+	 CFG_DRAW_AIRMETER(framesElapsed);
 	}
-     popProfile();
-     pushProfile("Walls");
-     drawWallsFinish();
-     popProfile();
-
-     CFG_PROF("Post"); for (;mmcSave>CFG_TIC_UNIT-1;mmcSave-=CFG_TIC_UNIT)
-	{advanceWallAnimations();
-	 stepWater();
+     /* the rest of the image is player 1's, drawn over the whole screen: the toggles' message,
+	the overlay, the kick of view 0's next traversal */
+     mpSwitch(0);
+     if (mpPlayers>1)
+	{mpSetViewport(0,0);
+	 EZ_localCoord(320/2,CFG_YCENTER);
+	 EZ_userClip(noUserClip);
+	 drawMessage(framesElapsed);
 	}
-     updatePushBlockPositions();
-     processDelayedMoves(); CFG_PROF_END();
-
-     if (mapOn)
-	drawMap(camera->pos.x,camera->pos.z,camera->pos.y,playerAngle.yaw,
-		camera->s);
-
-     CFG_PROF("Weapon"); CFG_RUN_WEAPON(framesElapsed,invisibleCounter,weaponPowerUpCounter); CFG_PROF_END();
-
-     MTH_PopMatrix(&viewTransform);
-
-     CFG_PROF("HUD"); drawMessage(framesElapsed); CFG_DRAW_MESSAGE();
-     CFG_DRAW_STATBAR(framesElapsed); CFG_PROF_END();
-
-     CFG_DRAW_AIRMETER(framesElapsed);
 
 
 #ifdef STATUSTEXT
@@ -2282,6 +2643,21 @@ int runLevel(char *filename,int levelNm)
 				      lodFused,lodCells,lodFlat);
 
      CFG_STATUS_SECTOR();
+
+     if (mpPlayers>1)
+	{/* LEGEND  B : the split-screen cell budget / its ceiling -- the 1448-command list less
+		     what this image spent outside the cells (things, guns, HUD, this overlay)
+		 t : fields aimed at per image: 2 = 30 fps, 3 = 20, 4 = 15
+		 f : each view's fog distance, 512..4096 (4096 = no fog)
+		 c : each view's cells in the last image / its share of B.  A view drawn
+		     without fog and under its share gives the rest to the others. */
+	 drawStringf(-158,-110,1,"B:%d/%d t:%d f:%d %d %d %d",mpBudget,mpBudgetMax,
+		     mpTargetFields,mpFog[0],mpFog[1],mpFog[2],mpFog[3]);
+	 if (mpRegisterLost)       /* a player's global had no copy: players would share it */
+	    drawStringf(60,-100,1,"MPLOST:%d",mpRegisterLost);
+	 drawStringf(-158,-100,1,"c:%d/%d %d/%d %d/%d %d/%d",mpCells[0],mpShare[0],
+		     mpCells[1],mpShare[1],mpCells[2],mpShare[2],mpCells[3],mpShare[3]);
+	}
 
 #ifndef NDEBUG
      drawStringf(-158,-100,1,"extra:%d",extraStuff);
@@ -2363,6 +2739,7 @@ int runLevel(char *filename,int levelNm)
      EZ_closeCommand();
      SPR_WaitDrawEnd();
      lastDraw=htimer-lastCalc;
+     mpBalance(framesElapsed,lastCalc+lastDraw);
 
 #if WALLPIPE
      /* GCC14: THE GAP.  VDP1 drawing is done and the master only waits for VBlank:
@@ -2435,7 +2812,7 @@ int runLevel(char *filename,int levelNm)
 	 return 1;
 	}
 
-     enablePlax(1);
+     enablePlax(mpPlayers==1);      /* one sky for four yaws does not exist: off in split screen */
      if (CFG_CAMEL && hitCamel)
 	{/* the travel question hands control elsewhere, or later: what the
 	    slave is traversing will be worthless */
@@ -2596,6 +2973,7 @@ void main(void)
 #ifndef TESTCODE
  abcResetEnable=1;
  playIntro();
+ mpNewGame();                   /* the players armed at the menu, none carrying anything */
 #else
  bup_initCurrentGame();
  currentState.inventory=0x00ffff;

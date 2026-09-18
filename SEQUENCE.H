@@ -27,6 +27,7 @@ int getWeaponFrame(void);
 void setWeaponFrame(int f);
 void queueWeaponSequence(int seqNm,int cx,int cy);
 int advanceWeaponSequence(int xbase,int ybase,int hack);
+void sequenceMpRegister(void);   /* GCC14: MPLAYER.H */
 int getWeaponSequenceQSize(void);
 void addWeaponSequence(int seqNm);
 void clearWeaponQ();

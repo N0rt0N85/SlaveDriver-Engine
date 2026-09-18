@@ -18,4 +18,5 @@ void runWeapon(int nmFrames,int invisible,int boost);
 
 void weaponChangeAmmo(int weapon,int deltaAmmo);
 void switchWeapons(int on);
+void weaponMpRegister(void);     /* GCC14: MPLAYER.H */
 #endif

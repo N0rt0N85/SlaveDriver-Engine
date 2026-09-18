@@ -25,6 +25,7 @@
 #include "sruins.h"
 #include "gamestat.h"
 #include "doom.h"
+#include "mplayer.h"
 #define DOOM_ART_DEFINE                 /* doom_stbar, doom_faces, doom_keys: MAIN only          */
 #define DOOM_ART_DEFINE_FONTS           /* the fonts too: PRINT.o only sees them through doomFontList */
 #include "doom_art.h"
@@ -279,5 +280,86 @@ void doom_drawMessage(void)
     }
 #else
  (void)x; (void)c; (void)w; (void)s;
+#endif
+}
+
+/* GCC14: local multiplayer (MPLAYER.H).  The HUD's per-player state -- the message and the face
+   animation.  faceUploaded stays global: it says which face sits in VDP1 memory. */
+void doom_hudMpRegister(void)
+{MPREG(doomMessage); MPREG(doomMessageOn); MPREG(doomMessageUntil);
+ MPREG(hudFirst);
+ MPREG(faceKind); MPREG(faceUntil); MPREG(faceNextLook); MPREG(faceStraight);
+ MPREG(faceOldOwned); MPREG(faceOldDamage);
+}
+
+/* The compact HUD of one split-screen view, cut from the real STBAR: three slices of it side by
+   side -- AMMO (bar x 0-47), HEALTH (48-103), ARMOR (178-233) -- make exactly the 160 pixels of
+   a view.  2 players: all 32 lines, under each half.  3-4 players: a 16-line band under each
+   quadrant, rows 3-18 of the bar, which is where the big numbers are.  Each slice is the same
+   STBAR char drawn under its own local origin and user clip, so the numbers are placed by the
+   same st_stuff.c coordinates as solo.  No face (one VDP1 char for everyone, re-uploaded at each
+   change), no arms, no ammo table; the keys sit in the view's bottom-right corner.  Doom flashes
+   damage and pickups through the palette -- one for the whole screen -- so here a pickup or a
+   hit washes the view alone, with a half-transparent quad. */
+void doom_drawSplitHud(int view,int nmViews)
+{
+#ifndef DOOM_ART_STUB
+ static const short src[3]={0,48,178},wid[3]={48,56,56};
+ XyInt clip[2],pos,quad[4];
+ int x0,y0,vh,yb,row0,rows,i,a,dx,n;
+ if (nmViews==2)
+    {x0=160*view; y0=0; vh=192; yb=192; row0=0; rows=32;}
+ else
+    {x0=160*(view&1); y0=112*(view>>1); vh=96; yb=y0+96; row0=3; rows=16;}
+
+ /* the flash, over the view it belongs to (drawn before the HUD so the band stays readable) */
+ if (doomPlayer.damageCount>=8 || doomPlayer.bonusCount>0)
+    {EZ_localCoord(0,0);
+     clip[0].x=x0; clip[0].y=y0; clip[1].x=x0+159; clip[1].y=y0+vh-1;
+     EZ_userClip(clip);
+     quad[0].x=x0;     quad[0].y=y0;
+     quad[1].x=x0+159; quad[1].y=y0;
+     quad[2].x=x0+159; quad[2].y=y0+vh-1;
+     quad[3].x=x0;     quad[3].y=y0+vh-1;
+     EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COMPO_TRANS|COLOR_5,
+		(doomPlayer.damageCount>=8)? RGB(31,0,0): RGB(31,24,0),quad,NULL);
+    }
+
+ for (i=0,dx=0;i<3;dx+=wid[i],i++)
+    {EZ_localCoord(x0+dx-src[i]+160,yb-row0-80);
+     clip[0].x=x0+dx; clip[0].y=yb;
+     clip[1].x=x0+dx+wid[i]-1; clip[1].y=yb+rows-1;
+     EZ_userClip(clip);
+     pos.x=HUD_X(0); pos.y=HUD_Y(168);
+     EZ_normSpr(DIR_NOREV,UCLPIN_ENABLE|COLOR_4,HUD_CWORD,CH_STBAR,&pos,NULL);
+     if (i==0)
+	{assert(doomPlayer.readyWeapon>=0 && doomPlayer.readyWeapon<NUMWEAPONS);
+	 a=doomWeaponInfo[(int)doomPlayer.readyWeapon].ammo;
+	 if (a>=0 && a<DOOM_NUMAMMO)
+	    doomHudNum(HUD_X(44),HUD_Y(171),FONT_TNUM,TNUM_PITCH,doomPlayer.ammo[a],3);
+	}
+     else if (i==1)
+	doomHudPercent(HUD_X(90),HUD_Y(171),currentState.health);
+     else
+	doomHudPercent(HUD_X(221),HUD_Y(171),doomPlayer.armorPoints);
+    }
+
+ EZ_localCoord(0,0);
+ clip[0].x=x0; clip[0].y=y0; clip[1].x=x0+159; clip[1].y=yb+rows-1;
+ EZ_userClip(clip);
+ for (i=0,n=0;i<DOOM_NMKEYS;i++)
+    if (doomPlayer.keys & ((1<<i)|(1<<(i+3))))
+       {pos.x=x0+160-2-(DOOM_KEY_W+2)*(++n);
+	pos.y=yb-DOOM_KEY_H-2;
+	EZ_normSpr(DIR_NOREV,COLOR_4,HUD_CWORD,CH_KEY0+i,&pos,NULL);
+       }
+
+ /* the pickup message at the view's top-left: Doom's (0,0) is the view's corner */
+ EZ_localCoord(x0+160,y0+CFG_YCENTER);
+ clip[0].x=x0; clip[0].y=y0; clip[1].x=x0+159; clip[1].y=y0+vh-1;
+ EZ_userClip(clip);
+ doom_drawMessage();
+#else
+ (void)view; (void)nmViews;
 #endif
 }

@@ -23,6 +23,9 @@
 #include "gamestat.h"
 #include "sound.h"
 #include "doom.h"
+#include "sequence.h"
+#include "aicommon.h"
+#include "mplayer.h"
 
 DoomPlayer doomPlayer;
 int doomViewBob;                        /* P_CalcHeight's bob, added to the view (CFG_VIEW_BOB)    */
@@ -103,8 +106,30 @@ void doom_playerSawPull(void)
 /* G_PlayerFinishLevel (g_game.c), from DOOM_GAME.C's exit towards a next level: keys and powers
    stay behind, the rest of the arsenal goes on. */
 void doom_playerFinishLevel(void)
-{doomCarry=1;
- doomPlayer.keys=0;
+{int k,prev=mpCur;
+ /* co-op: every player carries its arsenal, except one lying dead -- Doom reborns it with the
+    pistol kit at the next level (G_DoReborn).  Solo cannot exit dead: unchanged. */
+ for (k=0;k<mpPlayers;k++)
+    {mpSwitch(k);
+     doomCarry=(currentState.health>0);
+     doomPlayer.keys=0;
+    }
+ mpSwitch(prev);
+}
+
+/* GCC14: local multiplayer (MPLAYER.H).  The Doom player, every copy of it per player: its
+   struct, the view bob, and the three flags of this file; the weapon and HUD files register
+   theirs. */
+void doom_mpRegister(void)
+{MPREG(doomPlayer); MPREG(doomViewBob);
+ MPREG(doomCarry); MPREG(doomSawPull);
+ doom_weaponMpRegister();
+ doom_hudMpRegister();
+}
+
+/* a player with nothing to carry: the next doom_playerInit gives it Doom's starting kit */
+void doom_mpNewPlayer(void)
+{doomCarry=0;
 }
 
 /* Every level (SRUINS.C:2010 after initWeapon(), CFG_LEVEL_PLAYER_INIT): P_SpawnPlayer +
@@ -854,4 +879,31 @@ int doom_playerGetObject(int mt,int dropped)
  doomPlayer.bonusCount+=DOOM_BONUSADD;
  doom_sound(NULL,sound);
  return 1;
+}
+
+/* GCC14: a player's body as another player sees it (MPLAYER.H, SRUINS.C mpShowBodies).  Doom's
+   S_PLAY frames: standing, the four of S_PLAY_RUN while it moves (4 tics each), the corpse of
+   S_PLAY_DIE7 once dead.  getFacingAngle works in the sprite convention, and a player's body
+   carries the camera yaw, 90 degrees less (AI.C constructPlayer).  -1 = not drawn, which is
+   also the answer when the level has no PLAY frames at all (-2 from doom_seq). */
+short doom_playerBodySeq(Sprite *body,Sprite *viewer,int health)
+{int frame,view,saved,seq;
+ const DoomState *st;
+ body->scale=65536;                    /* 1 texel per unit, as every Doom thing */
+ body->flags|=SPRITEFLAG_NOSHADOW;
+ if (health<=0)
+    st=&doomStates[S_PLAY_DIE7];
+ else if (body->vel.x || body->vel.z)
+    st=&doomStates[S_PLAY_RUN1+((doomLevelTime>>2)&3)];
+ else
+    st=&doomStates[S_PLAY];
+ frame=st->frame&0x7fff;
+ saved=body->angle;
+ body->angle=normalizeAngle(body->angle+F(90));
+ view=getFacingAngle(body,viewer);
+ body->angle=saved;
+ seq=doom_seq(st->sprite,frame,view);
+ if (seq<0 || seq>=level_nmSequences)
+    return -1;
+ return (short)seq;
 }

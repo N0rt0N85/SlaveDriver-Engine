@@ -19,6 +19,7 @@
 #include "hitscan.h"
 #include "gamestat.h"
 #include "doom.h"
+#include "mplayer.h"
 #include "doom_lights.h"
 
 /* The plasma bolt carrying the stream's light, or NULL (doomLightMissile).  Declared here
@@ -39,20 +40,24 @@ static int doomMoveMissile(DoomActor *this);
 /* The usual target is the engine PlayerObject (AI.C:39-58), which is not a DoomActor: its
    sprite is the camera and its life is currentState.health (SPEC_RUNTIME section 3.2). */
 Sprite *doom_targetSprite(Object *t)
-{if (!t)
+{int k;
+ if (!t)
     return NULL;
- if (t==(Object *)player)
-    return camera;
+ if ((k=mpIndexOfObject(t))>=0)       /* any player, whoever is loaded (MPLAYER.H) */
+    return mpBody[k];
  if (t->func==game_actor_func || t->func==doom_item_func)
     return ((DoomActor *)t)->sprite;
  return NULL;
 }
 
 int doom_targetAlive(Object *t)
-{if (!t)
+{int k;
+ if (!t)
     return 0;
- if (t==(Object *)player)
-    return currentState.health>0;
+ if ((k=mpIndexOfObject(t))>=0)
+    return mpPeekInt(k,&currentState.health)>0;
+ if (t->func==player_func)
+    return 0;                           /* a player who left: parked, not a target */
  if (t->func==game_actor_func)
     {DoomActor *a=(DoomActor *)t;
      return a->health>0 && (a->mflags & DF_SHOOTABLE);
@@ -374,13 +379,17 @@ DoomActor *doom_spawn(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
    DoomActor => SIGNAL_HURT(damage, source): param2 is the SOURCE (a missile passes its
    shooter, p_inter.c:781), not the inflictor. */
 void doom_damage(Sprite *target,Object *inflictor,Object *source,int damage)
-{assert(target);
- if (target==camera)
-    {/* P_DamageMobj pushes the player away from the inflictor before the armour maths */
+{int k;
+ assert(target);
+ if ((k=mpIndexOfSprite(target))>=0)
+    {/* P_DamageMobj pushes the player away from the inflictor before the armour maths.  The hit
+	player's state is loaded for the damage, whoever was loaded when it came (MPLAYER.H). */
+     int prev=mpBegin(k);
      Sprite *is=doom_targetSprite(inflictor);
      if (is && is!=camera)
 	doom_playerThrust(is,damage);
      doom_playerDamage(damage,source);
+     mpEnd(prev);
     }
  else if (target->owner && target->owner->func==game_actor_func)
     signalObject(target->owner,SIGNAL_HURT,damage,(int)source);
@@ -484,7 +493,7 @@ void doom_radiusAttack(DoomActor *spot,Object *source,int damage)
 	d=(dx>dz)?dx:dz;
 	/* thing->radius of Doom: the camera's is the player's (16), an actor's sphere is
 	   height/2 -- take info->radius (POSS 20, barrel 10) */
-	dist=f(d-((spr==camera)?spr->radius:
+	dist=f(d-((mpIsPlayer(spr))?spr->radius:
 		  F(doomMobjInfo[((DoomActor *)spr->owner)->mt].radius)));
 	if (dist<0)
 	   dist=0;
@@ -586,7 +595,7 @@ static void doomMissileHit(DoomActor *this,int collide)
      int damage;
      if (o && o==this->target)
 	goto walls;                             /* shooter */
-     if (o && spr!=camera && (o->func==game_actor_func || o->func==doom_item_func))
+     if (o && !mpIsPlayer(spr) && (o->func==game_actor_func || o->func==doom_item_func))
 	{DoomActor *hit=(DoomActor *)o;
 	 if (this->target && this->target->func==game_actor_func &&
 	     ((DoomActor *)this->target)->mt==hit->mt)
@@ -602,7 +611,7 @@ static void doomMissileHit(DoomActor *this,int collide)
 	     goto walls;                        /* corpse, puff: not solid */
 	    }
 	}
-     else if (spr!=camera)
+     else if (!mpIsPlayer(spr))
 	goto walls;                             /* engine sprite: ignore */
      damage=(P_Random()%8+1)*info->damage;
      doom_damage(spr,(Object *)this,this->target,damage);
@@ -701,7 +710,7 @@ Object *doom_spawnMissile(DoomActor *src,Object *dest,int mt)
  if (dist<1)
     dist=1;
  {/* momz = (dest->z - source->z)/dist: feet to feet (the camera is the eye, 41 above) */
-  Fixed32 dfeet=(ds==camera)?ds->pos.y-F(41):ds->pos.y-ds->radius;
+  Fixed32 dfeet=(mpIsPlayer(ds))?ds->pos.y-F(41):ds->pos.y-ds->radius;
   th->sprite->vel.y=(dfeet-(src->sprite->pos.y-src->sprite->radius))/dist;
  }
 
@@ -844,7 +853,7 @@ int doom_lineAttack(DoomActor *src,int yaw,int damage)
     return 0;
  if (code & COLLIDE_SPRITE)
     {Sprite *spr=&sprites[code&0xffff];
-     if (spr==camera)
+     if (mpIsPlayer(spr))
 	{doom_spawnBlood(&hit,hitSec,damage);
 	 doom_damage(spr,(Object *)src,(Object *)src,damage);
 	}
