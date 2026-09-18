@@ -189,7 +189,7 @@ SHORTOPENING sur `v[1].y − v[2].y`, AI.C:4302-4307 → E3).
 | ascenseur WR 88 | 49 `OT_NORMALELEVATOR` | `pb, lower, upper, channel` (OBJECT.C:255-262 ; AI.C:4686-4699) | secteur 70 : `−48, 104, 2` (réarmé par le moteur, E7/ABI §6) — `−1` sous `--lift-contact` |
 | sol W1 36 | 61 `OT_STUCKDOWNELEVATOR` | idem, `channel = 1` ; un aller, reste en bas (AI.C:4649-4653) | secteur 59 : `−40, 96, 1` (E4) |
 | déclencheur W | 91 `OT_SECTORSWITCH` | **`sectorNm, channel` — 2 shorts** (E2 rejeté : AI2.C:665-676) ; `SIGNAL_ENTER` = la caméra entre dans la **feuille** (SPRITE.C:731-733) | ligne 308 : une par feuille bordant la ligne des deux côtés (`adjacency`), canal 1 ; ligne 195 idem canal 2 (aucune sous `--lift-contact`) |
-| interrupteur S1 | 168 `OT_SW1` | `sectorNm, channel = 900, ox, oy, oz` = centre du mur (press < 40 u, AI2.C:535-538) | ligne 330, feuille de 82 |
+| interrupteur S1 | 168 `OT_SW1` | `sectorNm, channel = 900, ox, oy, oz` = centre du mur (son de l'interrupteur ; le press vaut sur tout le mur, `CFG_SWITCH_AIM`) | ligne 330, feuille de 82 |
 | sortie | 176 `OT_DOOM_EXIT` | `channel = 900` | 1 |
 | secteur à dégâts | 179 `OT_DOOM_DAMAGE` | `sectorNm, hp` (ABI §6 ; special 7 → 5) | une par **feuille** des secteurs 13, 55, 57, 61 (`conv.remap`) |
 

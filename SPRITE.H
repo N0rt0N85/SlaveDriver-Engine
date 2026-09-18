@@ -182,6 +182,9 @@ void doom_weaponDraw(int nmFrames);                  /* the pinned psprite (adva
 void doom_useRefused(void);                          /* DOOM_PLAYER.C: sfx_noway                */
 #define CFG_DEATH_PITCH        0                                 /* SRUINS.C:895: dead view stays level (Doom has no pitch) */
 #define CFG_USE_REFUSED        else doom_useRefused();           /* SRUINS.C:853: use on a plain wall => sfx_noway (p_map.c PTR_UseTraverse) */
+/* AI2.C:535: Doom uses the whole line (P_UseSpecialLine), not a 40 u disc around the orifice --
+   the disc (L1-like approxDist) left 5-84 % of an episode-1 switch wall pressable */
+#define CFG_SWITCH_AIM         0
 extern int doomViewBob;                              /* DOOM_PLAYER.C: P_CalcHeight's bob       */
 #define CFG_VIEW_BOB           doomViewBob                       /* SRUINS.C:2117: the view rides the walk bob */
 #define CFG_PROF(id)           pushProfile(id)                   /* SRUINS.C:2196-2245: the frame after the walls, in the L+R+Y tree */
@@ -232,6 +235,7 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_ENGINE_FIRE        1
 #define CFG_DEATH_PITCH        F(80)
 #define CFG_USE_REFUSED
+#define CFG_SWITCH_AIM         1
 #define CFG_VIEW_BOB           0
 #define CFG_PROF(id)
 #define CFG_PROF_END()

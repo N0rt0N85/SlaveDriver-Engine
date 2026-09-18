@@ -639,13 +639,17 @@ def main(argv=None):
                  for o in obj if o["type"] == sp.OT_DOOM_DOOR]
         lifts = [(o["type"], struct.unpack(">4h", bytes(p[o["firstParam"]:o["firstParam"] + 8])))
                  for o in obj if o["type"] in (49, 61)]
+        # ascenseurs Doom : pb, course (< 0), canal, vitesse, attente
+        lifts_d = [struct.unpack(">5h", bytes(p[o["firstParam"]:o["firstParam"] + 10]))
+                   for o in obj if o["type"] == sp.OT_DOOM_LIFT]
         # sols : pb, course (> 0 monte, < 0 descend), canal, vitesse, face donneuse, degats
         sols_o = [struct.unpack(">6h", bytes(p[o["firstParam"]:o["firstParam"] + 12]))
                   for o in obj if o["type"] == sp.OT_DOOM_FLOOR]
         raises = [r for r in sols_o if r[1] > 0]
-        pbs = [d[0] for d in doors] + [l_[1][0] for l_ in lifts] + [r[0] for r in sols_o]
+        pbs = ([d[0] for d in doors] + [l_[1][0] for l_ in lifts] + [l_[0] for l_ in lifts_d]
+               + [r[0] for r in sols_o])
         put("un push block par porte / ascenseur / sol", sorted(pbs) == list(range(len(PB))),
-            f"{len(doors)} portes, {len(lifts)} ascenseurs, {len(raises)} sols qui montent, "
+            f"{len(doors)} portes, {len(lifts) + len(lifts_d)} ascenseurs, {len(raises)} sols qui montent, "
             f"{len(sols_o) - len(raises)} sols qui descendent, {len(PB)} push blocks")
         # Une porte Doom a un appui, un tag, ou les deux ; un canal si et seulement si un tag
         # (E1M2 secteur 97 : manuelle ET interrupteur, le canal perdu -- vu sur console 09-18).
@@ -657,6 +661,7 @@ def main(argv=None):
         put("floorSector : -1 porte, feuille ascenseur / sol qui monte",
             all(PB[d[0]]["floorSector"] == -1 for d in doors)
             and all(PB[l_[1][0]]["floorSector"] >= 0 for l_ in lifts)
+            and all(PB[l_[0]]["floorSector"] >= 0 for l_ in lifts_d)
             and all(PB[r[0]]["floorSector"] >= 0 for r in sols_o))
         # BLOCKSSIGHT (doom3d.post_flags) : les portails d'un sol FERME au chargement (sol = plafond,
         # le tag 666 d'E1M8) ne laissent passer ni le rendu ni la vue ; DOOM_GAME.C les rouvre en
@@ -774,8 +779,15 @@ def main(argv=None):
                 (len(sec) > 0) == (nsl > 0) and all(0 <= w < len(W) and (W[w]["flags"] & 0x20) for w in sec),
                 f"{len(sec)} murs pour {nsl} ligne(s) de porte ML_SECRET : {sec}")
             put("course ascenseur == regle Doom (plus bas sol voisin)",
-                sorted((l_[1][1], l_[1][2]) for l_ in lifts) == want_l,
-                f"{sorted((l_[1][1], l_[1][2]) for l_ in lifts)} vs {want_l}")
+                sorted((l_[1][1], l_[1][2]) for l_ in lifts) == want_l if lifts else
+                sorted(l_[1] for l_ in lifts_d) == sorted(lo - hi for lo, hi in want_l),
+                f"{sorted((l_[1][1], l_[1][2]) for l_ in lifts) or sorted(l_[1] for l_ in lifts_d)}"
+                f" vs {want_l}")
+            if lifts_d:
+                put("ascenseurs Doom : canal = tag, vitesse PLATSPEED*4 / *8, attente PLATWAIT",
+                    all(c_ > 0 and v_ in (sp.LIFT_SPEED, sp.LIFT_SPEED_BLAZE) and a_ == sp.LIFT_WAIT
+                        for (_pb, _co, c_, v_, a_) in lifts_d),
+                    f"{len(lifts_d)} ascenseurs, canaux {sorted(l_[2] for l_ in lifts_d)}")
             if spx.floors or len(sols_o) != len(raises):
                 have_f = sorted(r[1] for r in sols_o if r[1] < 0)
                 put("course des sols qui descendent == regle Doom (36 : plus haut sol voisin + 8 ; "
@@ -895,6 +907,8 @@ def main(argv=None):
     for o in obj:
         if o["type"] == sp.OT_SECTORSWITCH:
             emis[_sh(o, 2)[1]] += 1
+        elif o["type"] == sp.OT_DOOM_WLINE:
+            emis[_sh(o, 6)[4]] += 1
         elif o["type"] in sp.OT_SWITCH_TYPES:
             emis[_sh(o, 5)[1]] += 1
     ecoute = defaultdict(int)
@@ -905,6 +919,8 @@ def main(argv=None):
                 ecoute[d_[1]] += 1
         elif o["type"] == 49:
             ecoute[_sh(o, 4)[3]] += 1
+        elif o["type"] == sp.OT_DOOM_LIFT:
+            ecoute[_sh(o, 5)[2]] += 1
         elif o["type"] == sp.OT_DOOM_FLOOR:
             ecoute[_sh(o, 6)[2]] += 1
         elif o["type"] in (sp.OT_DOOM_EXIT, sp.OT_DOOM_SECRETEXIT):
@@ -916,6 +932,17 @@ def main(argv=None):
         not sourds and not muets,
         f"{len(emis)} canaux emis, {len(ecoute)} ecoutes" + (f", boss {sorted(boss)}" if boss else "")
         + (f", sans recepteur {sourds}" if sourds else "") + (f", sans emetteur {muets}" if muets else ""))
+    if M is not None:
+        wl = [_sh(o, 6) for o in obj if o["type"] == sp.OT_DOOM_WLINE]
+        spw = sp.specials_of(M).wswitch
+        Vm, Lm = M["vertices"], M["linedefs"]
+        want_w = sorted(Vm[Lm[w_["line"]].v1] + Vm[Lm[w_["line"]].v2]
+                        + (w_["channel"], sp.WLINE_ONCE if w_["special"] in sp.W_ONCE else 0)
+                        for w_ in spw)
+        put("lignes W : une par linedef W, ses bouts, canal, W1 / WR (P_CrossSpecialLine)",
+            sorted(wl) == want_w,
+            f"{len(wl)} lignes, {sum(1 for w_ in wl if w_[5])} W1" if sorted(wl) == want_w
+            else f"{len(wl)} objets vs {len(want_w)} lignes")
     dmg = [struct.unpack(">2h", bytes(p[o["firstParam"]:o["firstParam"] + 4]))
            for o in obj if o["type"] == 179]
     if dmg:

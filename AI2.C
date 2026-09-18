@@ -532,7 +532,7 @@ void switch_func(Object *_this,int msg,int param1,int param2)
      case SIGNAL_PRESS:
 	if (this->state==AI_SWITCH_OFF)
 	   {MthXyz *pos=(MthXyz *)param1;
-	    if (approxDist(pos->x-this->orficePos.x,
+	    if (CFG_SWITCH_AIM && approxDist(pos->x-this->orficePos.x,
 			   pos->y-this->orficePos.y,
 			   pos->z-this->orficePos.z)>F(40))
 	       break;

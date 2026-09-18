@@ -22,8 +22,8 @@ Ce que le moteur lit (relu à la ligne) :
                  (AI2.C:665-676) -> 2 shorts, UNE feuille = UN objet au plus ;
   - interrupteur : `sectorNm, channel, ox, oy, oz` (AI2.C:582-596) ; la tuile OFF de la séquence
                  `level_sequenceMap[type]` doit exister UNE fois dans les murs de `sectorNm` (:606-632) ;
-                 le press réussit à < 40 u de l'orifice, mesuré sur le POINT D'IMPACT du rayon
-                 (SRUINS.C:843-853 passe `&collidePos`) -> orifice à hauteur d'oeil, pas au centre du mur.
+                 PowerSlave n'accepte le press qu'à < 40 u de l'orifice ; Doom le prend sur tout le
+                 mur (`CFG_SWITCH_AIM` 0, SPRITE.H), l'orifice n'y place plus que le son.
 
 Les objets Doom non-moteur (176-183, 204-226) sont lus par `game_placeObject` (SPEC_RUNTIME §2, §6).
 Ne modifie ni assemble.py ni le moteur : tout est importable par make_e1m1.py.
@@ -95,6 +95,31 @@ SWITCH_PRESS_DIST = 40        # AI2.C:535-538
 # 3 blazeRaise, 4 blazeOpen (x4). Les portes qui FERMENT (3, 16, 42, 50, 75, 76, 107, 110, 113, 116)
 # partent ouvertes dans le WAD : pas converties (ignorees, comptees).
 OT_DOOM_DOOR = 183
+# ASCENSEURS (EV_DoPlat downWaitUpStay / blazeDWUS, T_PlatRaise) : 5 params = pb, course (< 0),
+# canal, vitesse en 1/8 u par tic (PLATSPEED*4 = 32, blaze *8 = 64), attente en bas en tics
+# (PLATWAIT*TICRATE = 105). Un signal ne le part que s'il est au repos (EV_DoPlat saute un secteur
+# qui a deja un specialdata). DOOM_GAME.C. L'ascenseur du moteur (OT_NORMALELEVATOR) repartait a
+# CHAQUE signal, meme pendant son attente en bas -- il n'est plus emis que pour --lift-contact.
+OT_DOOM_LIFT = 184
+LIFT_SPEED, LIFT_SPEED_BLAZE, LIFT_WAIT = 32, 64, 105
+LIFT_BLAZE = {120, 121, 122, 123}
+# LIGNES W (P_CrossSpecialLine) : 6 params = x1, z1, x2, z2 (le linedef, coordonnees Doom = x, z
+# du moteur), canal, drapeaux (WLINE_ONCE). DOOM_GAME.C teste a chaque tic que le CENTRE du
+# joueur la franchit. Le declencheur du moteur (OT_SECTORSWITCH) partait en ENTRANT dans une
+# FEUILLE, des deux cotes de la ligne -- MESURE 2026-09-18, E1M2 : l'ascenseur 180 (tag 10) etait
+# appele avant qu'on l'atteigne et renvoye en haut, vide, quand on en descendait.
+OT_DOOM_WLINE = 185
+WLINE_ONCE = 1
+# W1 = les cas de P_CrossSpecialLine avant « RETRIGGERS » (p_spec.c, Mimas/core) : `line->special
+# = 0` apres le premier passage. Les autres (72-98, 105-107, 120, 126, 128, 129) repartent.
+W_ONCE = {2, 3, 4, 5, 6, 8, 10, 12, 13, 16, 17, 19, 22, 25, 30, 35, 36, 37, 38, 39, 40, 44, 52,
+          53, 54, 56, 57, 58, 59, 100, 104, 108, 109, 110, 119, 121, 124, 125, 130, 141}
+# DONUT (EV_DoDonut, p_spec.c ; 9 = S1) : pour chaque secteur s1 du tag, s2 = l'autre secteur de
+# la 1re ligne de s1, s3 = le secteur ARRIERE de la 1re ligne de s2 qui n'est pas s1 ; s2 (l'anneau)
+# monte au sol de s3 en prenant son flat et en perdant ses degats, s1 (le trou) descend au sol de
+# s3, tous deux a FLOORSPEED/2 (4 en 1/8 u). E1M2 : l'interrupteur de la tronconneuse, ligne 604.
+DONUT = {9}
+DONUT_SPEED = 4
 PORTE_NORMALE, PORTE_OUVERTE, PORTE_BLAZERAISE, PORTE_BLAZEOPEN = 1, 2, 3, 4
 CLE_BLEUE, CLE_JAUNE, CLE_ROUGE = 1, 2, 3        # bit carte = cle - 1, bit crane = cle + 2 (it_*)
 # portes manuelles : le secteur de la porte est celui du sidedef GAUCHE (p_doors.c EV_VerticalDoor :
@@ -124,7 +149,7 @@ FLOOR_W = {36: "floor_turbo", 98: "floor_turbo", 38: "floor_lowest", 82: "floor_
            37: "floor_lowest", 84: "floor_lowest", 83: "floor_highest"}
 FLOOR_S = {70: "floor_turbo", 71: "floor_turbo", 23: "floor_lowest", 60: "floor_lowest",
            45: "floor_highest", 102: "floor_highest"}
-FLOOR_SPEED = {"floor_turbo": 32, "floor_lowest": 8, "floor_highest": 8}
+FLOOR_SPEED = {"floor_turbo": 32, "floor_lowest": 8, "floor_highest": 8, "floor_donut": DONUT_SPEED}
 # A_BossDeath (p_enemy.c) : la mort du dernier boss d'une carte agit sur un tag SANS ligne.
 # carte -> [(tag, genre)] ; l'objet ecoute le canal = tag, DOOM_GAME.C (doom_bossDeath) le signale.
 # E2M8 / E3M8 finissent la carte (pas de tag) ; MAP07 667 (raiseToTexture) n'y est pas.
@@ -179,7 +204,7 @@ TELEPORT = {39: TELE_ONCE, 97: 0}
 OT_SPECIAL_TYPES = frozenset((OT_NORMALDOOR, OT_NORMALELEVATOR, OT_STUCKDOWNELEVATOR, OT_SECTORSWITCH,
                               OT_DOOM_EXIT, OT_DOOM_SECRETEXIT, OT_DOOM_LIGHT, OT_DOOM_DAMAGE,
                               OT_DOOM_SECRETWALL, OT_DOOM_TELEPORT, OT_DOOM_FLOOR,
-                              OT_DOOM_DOOR)) | frozenset(OT_SWITCH_TYPES)
+                              OT_DOOM_DOOR, OT_DOOM_LIFT, OT_DOOM_WLINE)) | frozenset(OT_SWITCH_TYPES)
 
 Specials = namedtuple("Specials", "doors lifts floors raises teleports wswitch sswitch exits damage ignored")
 
@@ -293,6 +318,41 @@ def stair_steps(M, tag, pas, occupes):
     return out
 
 
+def donut_sectors(M, tag):
+    """EV_DoDonut rejoue -> [(s1, s2, s3)] pour les secteurs du tag, par numero croissant.
+
+    s1->lines[0] et s2->lines[] sont dans l'ordre des linedefs (P_GroupLines) ; getNextSector rend
+    None sur une ligne a une face (Doom s'arrete). LINE_BACKSECTOR est le secteur du sidedef
+    GAUCHE de la ligne, meme quand c'est s2 lui-meme (vanilla le prend tel quel). Une ligne sans
+    face arriere depasserait la memoire dans Doom (DonutOverrun) : non rejoue, le secteur saute."""
+    L, SD = M["linedefs"], M["sidedefs"]
+    lignes = defaultdict(list)
+    for li, ld in enumerate(L):
+        for sd in (ld.right, ld.left):
+            if 0 <= sd < len(SD):
+                sct = SD[sd].sector
+                if not lignes[sct] or lignes[sct][-1] != li:
+                    lignes[sct].append(li)
+    out = []
+    for s1 in sorted(i for i, s in enumerate(M["sectors"]) if s.tag == tag):
+        if not lignes[s1]:
+            continue
+        ld = L[lignes[s1][0]]
+        if not (ld.flags & ML_TWOSIDED) or not (0 <= ld.left < len(SD)):
+            break                                 # getNextSector == NULL : Doom s'arrete
+        a, b = SD[ld.right].sector, SD[ld.left].sector
+        s2 = b if a == s1 else a
+        for li in lignes[s2]:
+            l2 = L[li]
+            s3 = SD[l2.left].sector if 0 <= l2.left < len(SD) else None
+            if s3 == s1:
+                continue
+            if s3 is not None:
+                out.append((s1, s2, s3))
+            break
+    return out
+
+
 def specials_of(M):
     """Inventaire des spéciaux d'une carte (namedtuple Specials, listes de dicts).
 
@@ -324,12 +384,12 @@ def specials_of(M):
     door_by_sector = {}
     seen_mobile = set()
 
-    def add_mobile(lst, tag, kind):
+    def add_mobile(lst, tag, kind, **extra):
         for si in by_tag.get(tag, ()):
             if si in seen_mobile:
                 continue
             seen_mobile.add(si)
-            lst.append(dict(sector=si, tag=tag, kind=kind))
+            lst.append(dict(sector=si, tag=tag, kind=kind, **extra))
 
     def door_of(si):
         d = door_by_sector.get(si)
@@ -375,7 +435,8 @@ def specials_of(M):
                 door_tag(si, ld.tag, genre, li)
             (wsw if sp in DOOR_TAGGED_W else ssw).append(dict(line=li, channel=ld.tag, special=sp))
         elif sp in LIFT_W or sp in LIFT_S:
-            add_mobile(lifts, ld.tag, "lift")
+            add_mobile(lifts, ld.tag, "lift",
+                       speed=LIFT_SPEED_BLAZE if sp in LIFT_BLAZE else LIFT_SPEED)
             (wsw if sp in LIFT_W else ssw).append(dict(line=li, channel=ld.tag, special=sp))
         elif sp in FLOOR_W or sp in FLOOR_S:
             add_mobile(floors, ld.tag, FLOOR_W.get(sp) or FLOOR_S[sp])
@@ -400,6 +461,18 @@ def specials_of(M):
                 raises.append(dict(sector=si, tag=ld.tag, kind="raise_stair", special=sp,
                                    line=li, speed=vit, flat=False, damage=None, dest=dest))
             (wsw if trig == "W" else ssw).append(dict(line=li, channel=ld.tag, special=sp))
+        elif sp in DONUT:
+            SS = M["sectors"]
+            for s1, s2, s3 in donut_sectors(M, ld.tag):
+                if s1 in seen_mobile or s2 in seen_mobile:
+                    ignored["donut sur un secteur deja mobile (%d / %d)" % (s1, s2)] += 1
+                    continue
+                seen_mobile |= {s1, s2}
+                floors.append(dict(sector=s1, tag=ld.tag, kind="floor_donut", dest=SS[s3].floorh))
+                raises.append(dict(sector=s2, tag=ld.tag, kind="raise_donut", special=sp, line=li,
+                                   speed=DONUT_SPEED, flat=True, donor=s3, damage=0,
+                                   dest=SS[s3].floorh))
+            ssw.append(dict(line=li, channel=ld.tag, special=sp))
         elif sp in TELEPORT:
             teleports.append(dict(line=li, tag=ld.tag, special=sp, flags=TELEPORT[sp]))
         else:
@@ -414,14 +487,18 @@ def specials_of(M):
     for d in doors:
         d["lower"], d["upper"] = mobile_bounds(M, d["sector"], "door")
     for l_ in lifts + floors:
-        l_["lower"], l_["upper"] = mobile_bounds(M, l_["sector"], l_["kind"])
+        if "dest" in l_:                      # le trou du donut : au sol de s3
+            l_["lower"] = min(l_["dest"], sects[l_["sector"]].floorh)
+            l_["upper"] = sects[l_["sector"]].floorh
+        else:
+            l_["lower"], l_["upper"] = mobile_bounds(M, l_["sector"], l_["kind"])
     # Un sol qui monte jusqu'a son PLAFOND fermerait son secteur : le quad de chaque mur serait
     # plat, donc rejete (Emitter.add_wall) -- il s'arrete a la fente, comme une porte fermee.
     # Un sol deja a destination (E1M5 et E1M7 : 91 sur un sol colle au plafond voisin, Doom ne le
     # bouge pas non plus) n'a pas d'objet, et ses declencheurs non plus.
     immobiles = set()
     for r in raises:
-        if "dest" in r:                       # marche d'escalier : sa destination vient de la chaine
+        if "dest" in r:                       # marche d'escalier, anneau du donut : destination donnee
             lo, hi = sects[r["sector"]].floorh, r["dest"]
         else:
             lo, hi = mobile_bounds(M, r["sector"], r["kind"])
@@ -543,11 +620,13 @@ def teleport_targets(M, conv, tp):
     return feuilles, None
 
 
-def floor_donor_face(M, geom, line, sector):
+def floor_donor_face(M, geom, line, sector, front=None):
     """Une face de SOL du secteur avant de `line` dans la geometrie emise (G) : le flat qu'un sol
-    « AndChange » prend au depart (`sec->floorpic = front->floorpic`). -1 si ce secteur EST le sol
-    qui monte (rien a changer), -2 si aucune face n'a ete trouvee."""
-    front = M["sidedefs"][M["linedefs"][line].right].sector
+    « AndChange » prend au depart (`sec->floorpic = front->floorpic`) ; `front` impose le secteur
+    donneur (s3 du donut). -1 si ce secteur EST le sol qui monte (rien a changer), -2 si aucune face
+    n'a ete trouvee."""
+    if front is None:
+        front = M["sidedefs"][M["linedefs"][line].right].sector
     if front == sector:
         return -1
     W, S = geom["walls"], geom["sectors"]
@@ -570,7 +649,7 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
     `secret_walls` : murs DOORWALL des lignes ML_SECRET (`mobile.secret_walls` de doom3d) -> un
                     OT_DOOM_SECRETWALL (1 short) chacun (p_switch.c : un monstre ne presse pas ML_SECRET).
     `geom`      : la geometrie emise (doom3d) -- faces des flats que prennent les sols « AndChange ».
-    Ordre d'émission : portes, ascenseurs, sols, sols qui montent, teleporteurs, sector-switches,
+    Ordre d'émission : portes, ascenseurs, sols, sols qui montent, teleporteurs, lignes W,
     interrupteurs, sorties, dégâts, murs secrets."""
     objects, params = [], bytearray()
     notes = defaultdict(int)
@@ -596,15 +675,19 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
         depart = max(M["sectors"][d["sector"]].ceilh, d["lower"] + DOOR_SLIT)
         emit(OT_DOOM_DOOR, pb, d["channel"], d["upper"] - depart, d["manual"], d["key"],
              d["tagged"], sector_doom=d["sector"], kind="door")
-    # ascenseurs : pb, lower, upper, channel
+    # ascenseurs : OT_DOOM_LIFT pb, course, canal, vitesse, attente (--lift-contact : l'ascenseur
+    # du moteur, pb, lower, upper, canal -1)
     for l_ in specials.lifts:
         pb = pb_index.get(l_["sector"])
         if pb is None:
             notes["ascenseur sans push block"] += 1
             continue
-        ch = CHANNEL_NONE if lift_contact else l_["tag"]
-        emit(OT_NORMALELEVATOR, pb, l_["lower"], l_["upper"], ch,
-             sector_doom=l_["sector"], kind="lift")
+        if lift_contact:
+            emit(OT_NORMALELEVATOR, pb, l_["lower"], l_["upper"], CHANNEL_NONE,
+                 sector_doom=l_["sector"], kind="lift")
+        else:
+            emit(OT_DOOM_LIFT, pb, l_["lower"] - l_["upper"], l_["tag"], l_["speed"], LIFT_WAIT,
+                 sector_doom=l_["sector"], kind="lift")
     # sols qui descendent : OT_DOOM_FLOOR de course NEGATIVE (emis a l'etat du WAD, en haut ; l'objet
     # descend de la course quand son canal sonne) -- vitesse et sons de Doom (T_MoveFloor)
     for f in specials.floors:
@@ -625,7 +708,7 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
             continue
         donor = -1
         if r["flat"]:
-            donor = floor_donor_face(M, geom, r["line"], r["sector"]) if geom else -2
+            donor = floor_donor_face(M, geom, r["line"], r["sector"], r.get("donor")) if geom else -2
             if donor == -2:
                 notes["sol qui monte : flat du secteur avant introuvable (garde le sien)"] += 1
                 donor = -1
@@ -652,21 +735,16 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
             emit(OT_DOOM_TELEPORT, s, dest["sector"], dest["x"], dest["z"], dest["angle"],
                  dest["fog"][0], dest["fog"][1], tp["flags"], line=tp["line"], kind="teleport",
                  dest_doom=dest["doom_sector"])
-    # déclencheurs W : une feuille = un OT_SECTORSWITCH (level_sector[s].object, unique par feuille)
+    # declencheurs W : un OT_DOOM_WLINE par ligne, ses deux bouts (le franchissement, pas la feuille)
     lift_tags = {l_["tag"] for l_ in specials.lifts}
+    V, L = M["vertices"], M["linedefs"]
     for w in specials.wswitch:
         if lift_contact and w["channel"] in lift_tags and w["special"] in LIFT_W:
             continue
-        for leaf in leaves_on_line(conv, w["line"]):
-            s = conv.remap[leaf]
-            if s in taken and taken[s] != w["channel"]:
-                notes["feuille avec deux déclencheurs (canal %d perdu%s)" % (
-                    w["channel"], ", teleporteur prioritaire" if isinstance(taken[s], tuple) else "")] += 1
-                continue
-            if s in taken:
-                continue
-            taken[s] = w["channel"]
-            emit(OT_SECTORSWITCH, s, w["channel"], line=w["line"], kind="wswitch")
+        ld = L[w["line"]]
+        (x1, z1), (x2, z2) = V[ld.v1], V[ld.v2]
+        emit(OT_DOOM_WLINE, x1, z1, x2, z2, w["channel"],
+             WLINE_ONCE if w["special"] in W_ONCE else 0, line=w["line"], kind="wswitch")
     # interrupteurs S : sectorNm, channel, ox, oy, oz
     for sw in (switches or []):
         emit(sw["type"], sw["leaf_sector"], sw["channel"], *sw["orifice"],
@@ -705,6 +783,10 @@ def expected_param_bytes(objects):
             n += 3
         elif t in (OT_NORMALELEVATOR, OT_STUCKDOWNELEVATOR):
             n += 4
+        elif t == OT_DOOM_LIFT:
+            n += 5
+        elif t == OT_DOOM_WLINE:
+            n += 6
         elif t == OT_SECTORSWITCH:
             n += 2
         elif t in OT_SWITCH_TYPES:

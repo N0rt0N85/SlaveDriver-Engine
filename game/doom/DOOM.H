@@ -133,6 +133,7 @@ extern unsigned char doomSectorDamage[MAXNMSECTORS];   /* OT_DOOM_DAMAGE: hp per
 void        doom_weaponMpRegister(void);        /* GCC14: MPLAYER.H, per-player state of DOOM_WEAPON.C */
 void        doom_hudMpRegister(void);           /* GCC14: ... of DOOM_HUD.C */
 void        doom_sectorDamageTic(void);        /* 35 Hz from doom_playerTic: leveltime++, nukage */
+void        doom_wlineTic(void);               /* 35 Hz from doom_playerTic: walk-over lines crossed (OT_DOOM_WLINE) */
 extern int  doomLevelTime;                     /* THE 35 Hz level clock (Doom leveltime)         */
 extern const char *doomLevelNames[DOOM_NMLEVELS];      /* "+E1M1.LEV", ... (8.3, root)           */
 int         doom_wallIsSecret(int w);          /* OT_DOOM_SECRETWALL: 1 = monsters do not press it */

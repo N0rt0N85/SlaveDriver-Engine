@@ -28,11 +28,16 @@
                        tic), donor face (-1 = keep the flat), damage afterwards (hp per 32 tics,
                        -1 = unchanged)
      OT_DOOM_DOOR      push block, channel (-1 = no tag), open height, press kind, key, tag kind
+     OT_DOOM_LIFT      push block, throw (< 0), channel, speed (1/8 u per tic), wait (tics)
+     OT_DOOM_WLINE     x1, z1, x2, z2 (the linedef), channel, flags (DOOM_WLINE_ONCE)
    and OT_DOOM_DAMAGE's hp carries DOOM_DAMAGE_EXIT for special 11 (E1M8's last room). */
 #define OT_DOOM_TELEPORT 181
 #define OT_DOOM_FLOOR    182
 #define OT_DOOM_DOOR     183
+#define OT_DOOM_LIFT     184
+#define OT_DOOM_WLINE    185
 #define DOOM_TELE_ONCE   1
+#define DOOM_WLINE_ONCE  1
 #define DOOM_DAMAGE_EXIT 0x100
 
 typedef struct
@@ -64,6 +69,24 @@ typedef struct
  unsigned char manual,key,tagged,kind;  /* DOOM_DOOR_* of a press / of the tag, the one running */
 } DoomDoorObject;
 
+typedef struct
+{short type,class;                      /* PushBlockObject prefix, as DoomFloorObject          */
+ struct __object *next,*prev;
+ messHandler func;
+ short pbNum,state;
+ int counter,waitCounter;
+ Fixed32 offset;
+ short throw,channel,speed,wait;
+} DoomLiftObject;
+
+typedef struct __doomWLine
+{short type,class;
+ struct __object *next,*prev;
+ messHandler func;
+ struct __doomWLine *wnext;             /* the level's walk-over lines (doomWLines)            */
+ short x1,z1,x2,z2,channel,flags;
+} DoomWLineObject;
+
 /* compile-time guards (C89): the DoomActor must fit the Object pool slot, and the generated
    tables must have the layout the contract fixes (section 4) */
 typedef char doomActorFitsObject_[(sizeof(DoomActor)<sizeof(Object))?1:-1];
@@ -71,6 +94,8 @@ typedef char doomExitFitsObject_[(sizeof(DoomExitObject)<=sizeof(Object))?1:-1];
 typedef char doomTeleportFitsObject_[(sizeof(DoomTeleportObject)<=sizeof(Object))?1:-1];
 typedef char doomFloorFitsObject_[(sizeof(DoomFloorObject)<=sizeof(Object))?1:-1];
 typedef char doomDoorFitsObject_[(sizeof(DoomDoorObject)<=sizeof(Object))?1:-1];
+typedef char doomLiftFitsObject_[(sizeof(DoomLiftObject)<=sizeof(Object))?1:-1];
+typedef char doomWLineFitsObject_[(sizeof(DoomWLineObject)<=sizeof(Object))?1:-1];
 typedef char doomStateIs8_[(sizeof(DoomState)==8)?1:-1];
 typedef char doomMobjInfoIs44_[(sizeof(DoomMobjInfo)==44)?1:-1];
 
@@ -262,6 +287,131 @@ static void doomFloor_func(Object *_this,int message,int param1,int param2)
     }
 }
 
+/* --- lifts (EV_DoPlat downWaitUpStay / blazeDWUS, T_PlatRaise; p_plats.c) --------------------- */
+
+enum {DOOM_LIFT_IDLE,DOOM_LIFT_DOWN,DOOM_LIFT_WAIT,DOOM_LIFT_UP};
+
+/* The lift doom2ps emits at the top, as the WAD draws it.  SIGNAL_SWITCH(channel) starts it only
+   when it is idle -- EV_DoPlat skips a sector that has specialdata -- then down at `speed`/8 u
+   per tic (PLATSPEED*4, blaze *8), `wait` tics at the bottom (PLATWAIT, 3 s), back up, and it is
+   idle again.  The engine elevator it replaces (elevator_func, AI.C:4598) went at 5 u per frame,
+   waited 150 frames, and left again at ONCE on any signal while it waited: stepping off it at
+   the bottom sent it up empty (E1M2's lift 180, tag 10, console 2026-09-18).  It does not
+   reverse on a thing under it going up: the engine carries the sprites with it. */
+static void doomLift_func(Object *_this,int message,int param1,int param2)
+{DoomLiftObject *this=(DoomLiftObject *)_this;
+ Fixed32 step;
+ (void)param2;
+ switch (message)
+    {case SIGNAL_SWITCH:
+	if (this->state!=DOOM_LIFT_IDLE || param1!=this->channel)
+	   break;
+	this->state=DOOM_LIFT_DOWN;
+	doomPbSound(_this,sfx_pstart);
+	delay_moveObject((Object *)this,objectRunList);
+	break;
+     case SIGNAL_MOVE:
+	step=((Fixed32)this->speed)<<13;
+	switch (this->state)
+	   {case DOOM_LIFT_DOWN:
+	       pushBlockAdjustSound((PushBlockObject *)this);
+	       pbObject_move((PushBlockObject *)this,-step);
+	       if (this->offset<=F(this->throw))
+		  {pbObject_moveTo((PushBlockObject *)this,this->throw);
+		   this->state=DOOM_LIFT_WAIT;
+		   this->waitCounter=this->wait;
+		   stopAllSound((int)this);
+		   doomPbSound(_this,sfx_pstop);
+		  }
+	       break;
+	    case DOOM_LIFT_WAIT:
+	       if (--this->waitCounter<=0)
+		  {this->state=DOOM_LIFT_UP;
+		   doomPbSound(_this,sfx_pstart);
+		  }
+	       break;
+	    case DOOM_LIFT_UP:
+	       pushBlockAdjustSound((PushBlockObject *)this);
+	       pbObject_move((PushBlockObject *)this,step);
+	       if (this->offset>=0)
+		  {pbObject_moveTo((PushBlockObject *)this,0);
+		   this->state=DOOM_LIFT_IDLE;
+		   stopAllSound((int)this);
+		   doomPbSound(_this,sfx_pstop);
+		   delay_moveObject((Object *)this,objectIdleList);
+		   /* the switches of this channel come back up, as the doors do it (a repeatable
+		      one can be pressed again) */
+		   signalAllObjects(SIGNAL_SWITCHRESET,this->channel,0);
+		  }
+	       break;
+	   }
+	doom_pbBlockBits(this->pbNum);
+	break;
+    }
+}
+
+/* --- walk-over lines (P_CrossSpecialLine, p_spec.c) ------------------------------------------- */
+
+/* A W line fires when a player's centre crosses it, from either side, as P_TryMove calls
+   P_CrossSpecialLine: SIGNAL_SWITCH(channel), once (W1: `line->special = 0`) or at every
+   crossing (WR -- the receivers ignore it while they are on their way).  The engine's trigger,
+   OT_SECTORSWITCH, fires on ENTERING A LEAF: the whole leaf on either side of the line, and
+   again from a leaf the player stands in when its channel is reset -- E1M2's lift was called
+   before the player reached it, and sent back up empty as the player stepped off.  Monsters do not cross them
+   (Doom lets them on 4, 10 and 88). */
+static DoomWLineObject *doomWLines;          /* this level's, in placing order */
+static Fixed32 doomWPrevX[MPMAX],doomWPrevZ[MPMAX];
+static char doomWPrevOk[MPMAX];              /* 0: no previous position (level start, death) */
+
+static void doomWLine_func(Object *_this,int message,int param1,int param2)
+{(void)_this;(void)message;(void)param1;(void)param2;   /* idle: doom_wlineTic tests it */
+}
+
+/* segment (px,pz)-(cx,cz) against the line, in 1/16 u: the centre changes side
+   (P_PointOnLineSide) where the line is, within a player radius past its ends (the thing's box
+   touches it, PIT_CheckLine) */
+static int doomWLineCrossed(DoomWLineObject *w,int px,int pz,int cx,int cz)
+{long long ex=w->x2-w->x1,ez=w->z2-w->z1,ax=w->x1*16,az=w->z1*16;
+ long long sp=ex*(pz-az)-ez*(px-ax),sc=ex*(cz-az)-ez*(cx-ax);
+ long long l2=ex*ex+ez*ez,t,r2;
+ if ((sp>0)==(sc>0) || l2==0)
+    return 0;
+ /* where along it, in u: projection of the centre x |AB|, against a radius x |AB| past an end */
+ t=ex*((cx>>4)-w->x1)+ez*((cz>>4)-w->z1);
+ r2=(long long)GP_PLAYER_RADIUS*GP_PLAYER_RADIUS*l2;
+ if (t<0)
+    return t*t<=r2;
+ if (t>l2)
+    return (t-l2)*(t-l2)<=r2;
+ return 1;
+}
+
+/* doom_playerTic, per player (mpCur): the move since this player's last tic */
+void doom_wlineTic(void)
+{DoomWLineObject *w;
+ int k=mpCur,px,pz,cx,cz;
+ if (currentState.health<=0)
+    {doomWPrevOk[k]=0;
+     return;
+    }
+ cx=camera->pos.x>>12;
+ cz=camera->pos.z>>12;
+ px=doomWPrevX[k]>>12;
+ pz=doomWPrevZ[k]>>12;
+ /* a teleport, a respawn: a jump, not a walk (P_TeleportMove crosses nothing) */
+ if (doomWPrevOk[k] && abs(cx-px)+abs(cz-pz)<64*16)
+    for (w=doomWLines;w;w=w->wnext)
+       if (w->channel!=-1 && doomWLineCrossed(w,px,pz,cx,cz))
+	  {int channel=w->channel;
+	   if (w->flags & DOOM_WLINE_ONCE)
+	      w->channel=-1;
+	   signalAllObjects(SIGNAL_SWITCH,channel,0);
+	  }
+ doomWPrevX[k]=camera->pos.x;
+ doomWPrevZ[k]=camera->pos.z;
+ doomWPrevOk[k]=1;
+}
+
 /* --- doors (p_doors.c) ------------------------------------------------------------------------ */
 
 /* vldoor_e kinds, as doom2ps doom_specials writes them (PORTE_*) */
@@ -446,6 +596,7 @@ void doom_init(void)
  assert(doomOtToMt[OT_DOOM_EXIT]==-1 && doomOtToMt[OT_DOOM_DAMAGE]==-1);
  assert(doomOtToMt[OT_DOOM_SECRETWALL]==-1);
  assert(doomOtToMt[OT_DOOM_TELEPORT]==-1 && doomOtToMt[OT_DOOM_FLOOR]==-1);
+ assert(doomOtToMt[OT_DOOM_LIFT]==-1 && doomOtToMt[OT_DOOM_WLINE]==-1);
  assert(doomMobjInfo[MT_TROOPSHOT].speed==10);
  /* the pad as Mimas lays it out (dg_saturn.cxx pad_map: A fire, B use, C run held, L/R strafe)
     so the two are played with the same hands.  controllerConfig maps an action slot to a button
@@ -476,6 +627,9 @@ static void doomLevelStart(void)
  doomLevelTime=0;
  doomNmSecretWalls=0;
  doomExiting=0;
+ doomWLines=NULL;
+ for (s=0;s<MPMAX;s++)
+    doomWPrevOk[s]=0;
 }
 
 /* OBJECT.C:212 (CFG_PLACE): called for every level object; returns 1 once its params have been
@@ -628,6 +782,42 @@ int game_placeObject(int ot)
 	    {pbObject_moveTo((PushBlockObject *)o,-o->throw);
 	     updatePushBlockPositions();
 	    }
+	 return 1;
+	}
+     case OT_DOOM_LIFT:
+	{DoomLiftObject *o=(DoomLiftObject *)getFreeObject(doomLift_func,ot,CLASS_PUSHBLOCK);
+	 int pb=suckShort();
+	 assert(o);                              /* as every push block constructor (AI.C:4388) */
+	 moveObject((Object *)o,objectIdleList);
+	 registerPBObject(pb,(Object *)o);
+	 o->pbNum=(short)pb;
+	 o->state=DOOM_LIFT_IDLE;
+	 o->counter=0;
+	 o->waitCounter=0;
+	 o->offset=0;
+	 o->throw=suckShort();
+	 o->channel=suckShort();
+	 o->speed=suckShort();
+	 o->wait=suckShort();
+	 assert(o->throw<0 && o->speed>0 && o->wait>0 && o->channel!=-1);
+	 return 1;
+	}
+     case OT_DOOM_WLINE:
+	{DoomWLineObject *o=(DoomWLineObject *)getFreeObject(doomWLine_func,ot,CLASS_SECTOR);
+	 DoomWLineObject **tail;
+	 assert(o);
+	 moveObject((Object *)o,objectIdleList);
+	 o->x1=suckShort();
+	 o->z1=suckShort();
+	 o->x2=suckShort();
+	 o->z2=suckShort();
+	 o->channel=suckShort();
+	 o->flags=suckShort();
+	 assert(o->channel!=-1);
+	 o->wnext=NULL;
+	 for (tail=&doomWLines;*tail;tail=&(*tail)->wnext)
+	    ;
+	 *tail=o;                                /* placing order: Doom fires them in line order */
 	 return 1;
 	}
      case OT_DOLL1 ... OT_DOLL23:

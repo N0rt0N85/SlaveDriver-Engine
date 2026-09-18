@@ -1482,8 +1482,8 @@ class DoomConverter:
                 on_key = (p_on,) + key[1:] + marque
                 t_off = em.tile(off_key)
                 t_on = em.tile(on_key)
-                # orifice : milieu du mur, a hauteur d'oeil (le press mesure < 40 u depuis le
-                # POINT D'IMPACT du rayon, SRUINS.C:843-853 ; l'oeil est a sol + 41)
+                # orifice : milieu du mur, a hauteur d'oeil -- la source du son ; le press vaut
+                # sur tout le mur (CFG_SWITCH_AIM 0, SPRITE.H), pas a < 40 u de ce point
                 P, Q = h["P"], h["Q"]
                 oy = h["bot"] + sp.PLAYER_EYE
                 oy = max(h["bot"], min(h["top"], oy))

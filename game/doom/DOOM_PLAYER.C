@@ -459,6 +459,7 @@ void doom_playerTic(void)
 {doom_sectorDamageTic();                       /* doomLevelTime++, OT_DOOM_DAMAGE */
  if (!camera)
     return;
+ doom_wlineTic();                              /* P_CrossSpecialLine: the move since the last tic */
  doomPlayer.fire=!(doomPlayer.input & IMASK(ACTION_FIRE)) ||
     (doomPlayer.pushed & IMASK(ACTION_FIRE));
  doomPlayer.pushed=0;
