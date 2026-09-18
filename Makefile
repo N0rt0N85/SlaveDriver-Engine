@@ -188,7 +188,7 @@ LIBS     := -Wl,-b,coff-sh $(LIBDIR)/SEGA_SAT.A -Wl,-b,elf32-sh
 COMMON4      := LEVEL MEGAINIT SCL_FUNC SCL_VBLV V_BLANK
 INIT_C       := DMA FILE INITMAIN LOCAL MOV PICSET PRINT SOUND SPR UTIL $(COMMON4)
 MAIN_C       := AI AI2 AICOMMON ART BIGMAP BUP DMA FILE HITSCAN INTRO LOCAL MAP MENU OBJECT PIC \
-                PICSET PLAX PRINT PROFILE ROUTE SEQUENCE SOUND SPR SPRITE SRUINS UTIL WEAPON $(COMMON4) WALLS MPLAYER $(PLAYER_C)
+                PICSET PLAX PRINT PROFILE ROUTE SEQUENCE SOUND SPR SPRITE SRUINS UTIL WEAPON $(COMMON4) WALLS MPLAYER                 CRASH $(PLAYER_C)
 KEYGEN_C     := DMA FILE KEYGEN LOCAL MOV PICSET PRINT SOUND SPR UTIL LEVEL SCL_FUNC SCL_VBLV V_BLANK
 MAIN_C       += $(GAME_C)              # game/doom/*.C when GAME = doom (empty otherwise)
 vpath %.C game/doom
@@ -200,11 +200,12 @@ MEMCPY_OBJ   := $(OBJDIR)/MEMCPY.o
 LINK_OBJ     := $(OBJDIR)/link_gnu.o
 WALLASM_OBJ  := $(OBJDIR)/wallasm_gnu.o
 UBC_OBJ      := $(OBJDIR)/ubc_gnu.o   # UBC trap entry; V_BLANK.C is in all three programs
+CRASH_OBJ    := $(OBJDIR)/crash_gnu.o # CRASH.C's vector entries (freeze report), MAIN only
 SNSTUBS_OBJ  := $(OBJDIR)/sn_stubs.o
 SYSCALLS_OBJ := $(OBJDIR)/syscalls.o   # GCC14: _sbrk trap so newlib can never allocate over the game's mem_malloc(1) area (starts at `end`)
 
 INIT_OBJS    := $(CRT0_OBJ) $(addprefix $(OBJDIR)/,$(addsuffix .o,$(INIT_C)))   $(MEMCPY_OBJ) $(LINK_OBJ) $(SNSTUBS_OBJ) $(SYSCALLS_OBJ) $(UBC_OBJ)
-MAIN_OBJS    := $(CRT0_OBJ) $(addprefix $(OBJDIR)/,$(addsuffix .o,$(MAIN_C)))   $(MEMCPY_OBJ) $(WALLASM_OBJ) $(LINK_OBJ) $(SNSTUBS_OBJ) $(SYSCALLS_OBJ) $(UBC_OBJ)
+MAIN_OBJS    := $(CRT0_OBJ) $(addprefix $(OBJDIR)/,$(addsuffix .o,$(MAIN_C)))   $(MEMCPY_OBJ) $(WALLASM_OBJ) $(LINK_OBJ) $(SNSTUBS_OBJ) $(SYSCALLS_OBJ) $(UBC_OBJ) $(CRASH_OBJ)
 KEYGEN_OBJS  := $(CRT0_OBJ) $(addprefix $(OBJDIR)/,$(addsuffix .o,$(KEYGEN_C))) $(MEMCPY_OBJ) $(LINK_OBJ) $(SNSTUBS_OBJ) $(SYSCALLS_OBJ) $(UBC_OBJ)
 
 ALL_OBJS     := $(sort $(INIT_OBJS) $(MAIN_OBJS) $(KEYGEN_OBJS))
@@ -277,6 +278,8 @@ $(LINK_OBJ): link_gnu.s | $(OBJDIR)
 $(WALLASM_OBJ): wallasm_gnu.s | $(OBJDIR)
 	$(AS) $(ASFLAGS) -c $< -o $@
 $(UBC_OBJ): ubc_gnu.S | $(OBJDIR)
+	$(AS) $(ASFLAGS) -c $< -o $@
+$(CRASH_OBJ): crash_gnu.S | $(OBJDIR)
 	$(AS) $(ASFLAGS) -c $< -o $@
 $(MEMCPY_OBJ): MEMCPY.S | $(OBJDIR)
 	$(AS) $(ASFLAGS) -c $< -o $@

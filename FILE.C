@@ -350,11 +350,17 @@ void fs_closeProgress(void)
 
 void executeLink(void *data,int size);
 
+/* GCC14: called before another program replaces this one, so a service that pointed a vector
+   into it takes it back (CRASH.C).  FILE.C is in every program: a pointer, not a call. */
+void (*linkHook)(void);
+
 void link(char *filename)
 {char *data;
  void (*code)(void *data,int size);
  int fd;
  int size;
+ if (linkHook)
+    linkHook();
  mem_init();
  fd=fs_open(filename);
  size=fs_getFileSize(fd);

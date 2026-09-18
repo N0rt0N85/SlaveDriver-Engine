@@ -184,6 +184,7 @@ void assertFail(char *file, int line)
  char *text[NMPARTS]={NULL,NULL,"Write","This","Down"};
 
  text[1]=file;
+ crashArmed=0;          /* GCC14: this screen is the report: the freeze watch (CRASH.C) stands down */
  displayEnable(1);
  /** BEGIN ***************************************************************/
 

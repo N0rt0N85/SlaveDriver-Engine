@@ -27,6 +27,11 @@ void initInput(void);
 
 extern volatile Uint32 vtimer, htimer;
 
+/* GCC14: the freeze report (CRASH.C): armed by the game loop, fields since its last beat, and
+   the VBlank-OUT hook that counts them */
+extern volatile int crashArmed,crashFields;
+extern void (*vblankOutHook)(void);
+
 #ifndef NDEBUG
 extern int errorQ[];
 extern int prQ[];

@@ -9,6 +9,7 @@ void pushProfile(char *id);
 void dumpProfileData(void);
 void drawProfileData(int x,int y);
 extern int profileShow;
+char *profilePath(char *buf,int size);  /* GCC14: "root>Walls>...", for CRASH.C */
 
 #else
 
@@ -17,6 +18,7 @@ extern int profileShow;
 #define pushProfile(x)
 #define dumpProfileData()
 #define drawProfileData(x,y)
+#define profilePath(buf,size) ((buf)[0]=0,(buf))
 
 #endif
 

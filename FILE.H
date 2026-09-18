@@ -21,5 +21,6 @@ int getCurrentFAD(void);
 int getCurrentStatus(void);
 
 void link(char *filename);
+extern void (*linkHook)(void);   /* GCC14: runs first in link() */
 
 #endif

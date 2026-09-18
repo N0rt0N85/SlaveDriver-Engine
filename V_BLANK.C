@@ -180,6 +180,12 @@ void bootProbePaint(void)
 }
 #endif
 
+/* GCC14: the freeze report (CRASH.C, MAIN only).  The game loop arms it and beats once per
+   image; the fields since the last beat are counted by the hook, here.  Defined in this file
+   because every program runs it: UTIL.C assertFail disarms it in all three. */
+volatile int crashArmed,crashFields;
+void (*vblankOutHook)(void);
+
 void UsrVblankEnd(void)
 {SCL_VblankEnd();
  vtimer++;
@@ -187,6 +193,8 @@ void UsrVblankEnd(void)
 #ifdef BOOTPROBE
  bootProbePaint();
 #endif
+ if (vblankOutHook)
+    vblankOutHook();
 }
 
 

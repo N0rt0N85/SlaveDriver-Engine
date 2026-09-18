@@ -62,6 +62,7 @@
 #include "bigmap.h"
 #include "mplayer.h"
 #include "profile.h"
+#include "crash.h"
 #include "gamestat.h"
 #include "intro.h"
 #include "mov.h"
@@ -2392,9 +2393,11 @@ int runLevel(char *filename,int levelNm)
  setFog(fogDist);   /* fills the table; fogDist survives from one level to the next */
  setPlaxFade(skyFadeFor(fogDist));  /* initPlax restored the original palette on load */
  mpLevelBuild();                    /* players 2..: player 1 is fully set up by now */
+ crashInstall();                    /* the vectors again: a level load may have re-registered */
 
  while(1)
     {htimer=0;
+     crashBeat();                   /* freeze report: armed while the loop turns (CRASH.H) */
      mpPollStart();                 /* START on pad 2: one more player (or back to one) */
      {/* GCC14: hold L+R+X together -- or X+Y+Z, for pads whose triggers report only
 	 analog values -- to flip runtime mipmapping (mipEnable, WALLS.C) */
@@ -2776,6 +2779,7 @@ int runLevel(char *filename,int levelNm)
 	{EZ_closeCommand();
 	 SPR_WaitDrawEnd();
 	 SCL_DisplayFrame();
+	 crashDisarm();
 	 return hitTeleport?hitTeleport:3;
 	}
      /* used to be here */
@@ -2852,6 +2856,7 @@ int runLevel(char *filename,int levelNm)
 
      if (playerIsDead && colorOffset[0]==-255)
 	{wallsPipeDiscard();
+	 crashDisarm();
 	 return 1;
 	}
 
@@ -2861,6 +2866,7 @@ int runLevel(char *filename,int levelNm)
 	    slave is traversing will be worthless */
 	 wallsPipeDiscard();
 	 enablePlax(0);
+	 crashDisarm();              /* a question waits for the player: the next beat re-arms */
 	 if (runTravelQuestion(getText(LB_LEVELNAMES,hitCamel-100)))
 	    return hitCamel;
 	 stunCounter=10;
@@ -2872,6 +2878,7 @@ int runLevel(char *filename,int levelNm)
 	{/* the menu can move the camera */
 	 wallsPipeDiscard();
 	 enablePlax(0);
+	 crashDisarm();              /* the menu waits for the player: the next beat re-arms */
 	 runInventory(currentState.inventory,keyMask,&mapOn,
 		      delayed_fade,delayed_fadeButton,delayed_fadeSel);
 	 delayed_fade=0;
@@ -2880,6 +2887,7 @@ int runLevel(char *filename,int levelNm)
 
      if (quitRequest)
 	{wallsPipeDiscard();
+	 crashDisarm();
 	 return 2;
 	}
 #ifdef PSYQ
@@ -2942,6 +2950,7 @@ void main(void)
  displayEnable(0);
  setVDP2();
  SetVblank();
+ crashInstall();        /* GCC14: freeze and crash report (CRASH.C), after the VBlank handlers */
 
  mem_init();
  dPrint("loading initial...");

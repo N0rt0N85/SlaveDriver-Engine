@@ -2551,6 +2551,11 @@ void setFog(int dist)
 }
 
 volatile int slaveJob;         /* 0 = draw, 1 = traverse */
+/* GCC14: where the slave is, for the freeze report (CRASH.C): 1 waiting for the signal,
+   0x10|job the job read, 0x10000|i drawing update-list entry i, 0x20000|k traversing split view
+   k.  Written through the cache-through alias, so the master reads it live. */
+volatile int slaveStep;
+#define SLAVESTEP (*(volatile int *)((int)&slaveStep|0x20000000))
 static MthMatrix pipeMatrix;   /* copie stable : viewTransform sera depile entre-temps */
 static int pipeInFlight;
 static int pipeDone;
@@ -2566,7 +2571,8 @@ void slaveDraw(void)
  *CACHECNTRL=0x01;
  nmSlavePolys=0;
  for (i=slaveDrawStart;i>=0;i--)
-    {drawSector(updateList[i]-sectorDraw,slaveView,1);
+    {SLAVESTEP=0x10000|i;
+     drawSector(updateList[i]-sectorDraw,slaveView,1);
      /* mark end of sector */
      slaveResult[nmSlavePolys].tile=-1;
      slaveResult[nmSlavePolys].gtable.entry[0]=updateList[i]-sectorDraw;
@@ -2691,6 +2697,7 @@ void wallRenderSlaveMain(void)
  *TIER=0x01;
  while (1)
     {/* wait for sync signal */
+     SLAVESTEP=1;
      while (!(*FTCSR & 0x80)) ;
      /* sync */
      *FTCSR=0x0;
@@ -2699,6 +2706,7 @@ void wallRenderSlaveMain(void)
      *CACHECNTRL=0x10;
      *CACHECNTRL=0x01;
      job=slaveJob;
+     SLAVESTEP=0x10|job;
      if (job==1)
 	wallsTraverse(&pipeMatrix,1);
      else
@@ -2711,7 +2719,8 @@ void wallRenderSlaveMain(void)
 	 int k,n=travQueued;
 	 trDC=splitDC;
 	 for (k=1;k<=n;k++)
-	    {tr=travSet+k;
+	    {SLAVESTEP=0x20000|k;
+	     tr=travSet+k;
 	     wallsTraverse(&travSet[k].view,2);
 	     TRAVDONE=k;
 	    }

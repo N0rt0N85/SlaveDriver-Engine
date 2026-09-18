@@ -206,6 +206,26 @@ void drawProfileData(int x,int y)
  drawTree(nodes,0,x,y);
 }
 
+/* GCC14: the path of the node being timed, root first -- read by the freeze report (CRASH.C)
+   after the loop stopped, to say where in the frame it stopped. */
+char *profilePath(char *buf,int size)
+{ProfileNode *n,*chain[16];
+ int k=0,len=0,l;
+ buf[0]=0;
+ for (n=currentNode;n && k<16;n=n->parent)
+    chain[k++]=n;
+ while (k--)
+    {l=strlen(chain[k]->id);
+     if (len+l+2>=size)
+	break;
+     if (len)
+	buf[len++]='>';
+     strcpy(buf+len,chain[k]->id);
+     len+=l;
+    }
+ return buf;
+}
+
 void dumpProfileData(void)
 {unsigned int sum;
  debugPrint("\n\n");
