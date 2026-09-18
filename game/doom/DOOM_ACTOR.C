@@ -179,6 +179,19 @@ void doom_setState(DoomActor *this,int state)
  doomIdleIfTerminal(this);
 }
 
+/* GCC14: at rest, is it by a door?  Asked once where it stopped, not every tic: the answer only
+   depends on where it stands, and the doors' sectors are marked once, at the level start */
+static int doomRestNearDoor(DoomActor *this)
+{if (!(this->mflags & DF_DOORASKED))
+    {this->mflags|=DF_DOORASKED;
+     if (doom_nearDoor(this->sprite))
+	this->mflags|=DF_NEARDOOR;
+     else
+	this->mflags&=~DF_NEARDOOR;
+    }
+ return this->mflags & DF_NEARDOOR;
+}
+
 /* --- the handler ---------------------------------------------------------------------------- */
 
 void game_actor_func(Object *_this,int message,int param1,int param2)
@@ -197,7 +210,7 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
 				    collideSprite for nothing, every tic, for each of them -- the
 				    movers find them, a pickup tests its own reach (doom_item_func) */
 	else if (this->sprite->floorSector!=-1 && !this->sprite->vel.x && !this->sprite->vel.y &&
-		 !this->sprite->vel.z && !doom_nearDoor(this->sprite))
+		 !this->sprite->vel.z && !doomRestNearDoor(this))
 	   {if (!this->target)
 	       this->collide=0;
 	   }                     /* at rest on its floor, asleep or not: the same collision again
@@ -207,7 +220,11 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
 				    Awake, it keeps its last step's answer for doomBlocked.  By a
 				    door it keeps colliding: the ceiling coming down meets it */
 	else
-	   {this->collide=moveSprite(this->sprite);
+	   {Fixed32 x=this->sprite->pos.x,z=this->sprite->pos.z;
+	    int s=this->sprite->s;
+	    this->collide=moveSprite(this->sprite);
+	    if (this->sprite->pos.x!=x || this->sprite->pos.z!=z || this->sprite->s!=s)
+	       this->mflags&=~DF_DOORASKED;   /* it moved: ask again where it stops */
 	    if (this->mflags & DF_STEP)
 	       {this->sprite->vel.x=0;  /* the step is taken: still until the next A_Chase */
 		this->sprite->vel.z=0;

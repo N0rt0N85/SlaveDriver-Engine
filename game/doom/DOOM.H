@@ -42,6 +42,8 @@
 #define DF_IDLE         0x100           /* already handed to objectIdleList (doom_setState)     */
 #define DF_SOLID        0x200           /* MF_SOLID: stops missiles (PIT_CheckThing); A_Fall clears it */
 #define DF_STEP         0x400           /* A_Chase's step: the velocity of the next tic only        */
+#define DF_DOORASKED    0x800           /* doom_nearDoor asked where it stands (DOOM_ACTOR.C)       */
+#define DF_NEARDOOR     0x1000          /* ... and its answer: at rest by a door, it collides       */
 #define DI_NODIR        8               /* movedir: no direction (p_enemy.c dirtype_t)            */
 
 /* --- weapons (doomdef.h weapontype_t; index into doomWeaponInfo[]) -------------------------- */
