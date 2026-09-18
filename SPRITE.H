@@ -191,7 +191,8 @@ extern int doomViewBob;                              /* DOOM_PLAYER.C: P_CalcHei
 #define CFG_PROF_END()         popProfile()
 /* the collision's three sub-nodes (SPRITE.C bumpSectorBoundries, bumpWalls, collideSprite)
    leave the Doom tree: 6 of its 24 lines, given to MOTION's parts, and a push per sector
-   penetrated */
+   penetrated.  So do the traversal's two (WALLS.C wallsTraverse): the slave traverses the
+   views, and pipe:-1 says when the master had to traverse view 0 */
 #define CFG_PROF_SUB(id)
 #define CFG_PROF_SUB_END()
 extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, the slave's share   */

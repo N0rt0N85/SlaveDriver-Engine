@@ -81,9 +81,6 @@ void setPlaxFade(int f)
     }
 }
 
-int getPlaxFade(void)
-{return plaxFade;}
-
 void retryPlaxPal(void)
 {setPlaxFade(plaxFade);
  /* SCL_SetColRam(0,256*7,256,plaxPal); */

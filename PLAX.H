@@ -4,4 +4,3 @@ void enablePlax(int setting);
 void retryPlaxPal(void);
 void plaxOff(void);
 void setPlaxFade(int f);  /* 0..16 scale applied to the sky palette; 16 = original */
-int getPlaxFade(void);

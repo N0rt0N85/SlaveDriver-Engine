@@ -27,11 +27,8 @@ extern int lodEnable,lodFused,lodCells,lodFlat;
 /* GCC14: far LOD (WALLS.C wallIsFar): a wall wholly beyond lodFar units folds into one quad painted
    in its first tile's first texel, a mesh wall welds its strips of one tile.  0 = off. */
 extern int lodFar;
-extern int nmMeshPolys;   /* cells from the mesh path: floors, ceilings, curved walls */
-extern int lodWeldWhy[2]; /* welds refused: [0] off the strip, [1] vertex off the edge */
 
-int vdp1NmClipped;  /* cells brought into the VDP1's range in the frame (V window, U slide) */
-/* GCC14: PROBE (STATUSTEXT) -- the VDP1's walk over the frame's cells, WALLASM.H
+/* GCC14: PROBE (WALKPROBE) -- the VDP1's walk over the frame's cells, WALLASM.H
    vdp1WalkProbe: all cells / the cells over VDP1BIGWALK / the same walk with the walls drawn
    from patterns turned a quarter, in units of 64 pixels */
 int vdp1Walk,vdp1Big,vdp1BigWalk,vdp1RotWalk;
@@ -57,7 +54,6 @@ void wallsSplitReset(void);
 void wallsSplitAlloc(void);
 void wallsQueueView(int k,MthMatrix *view,Sprite *c);
 void wallsQueueJoin(void);
-extern int travSpin;          /* spins at its join: 0 = the slave was done in time */
 void drawWallsFinish(void);
 void wallRenderSlaveMain(void);
 void startSlave(void *slaveMain);

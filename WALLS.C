@@ -1135,15 +1135,6 @@ static int wallCrossesNear(MthXyz *coords)
 int lodEnable=1;         /* 0 = no fusion, 1 = fusion, 2 = fusion painted blue */
 int lodFused,lodCells,lodFlat; /* fused walls, cells saved, cells flattened */
 static int slave_lodFused,slave_lodCells,slave_lodFlat;
-/* Why a mesh weld was refused: [0] the next black face was not in the strip (fan joint or new
-   row); [1] the strip existed but a skipped vertex missed the replacing edge.  [0] calls for a
-   wider adjacency, [1] for a tolerance. */
-int lodWeldWhy[2];
-static int slave_lodWeldWhy[2];
-/* Cells from the MESH path (drawWall / slave_drawWall): non-parallelogram walls, which includes
-   every Doom floor and ceiling.  Says whether welding mesh faces is worth building. */
-int nmMeshPolys;
-static int slave_nmMeshPolys;
 extern unsigned char fogTable[256];
 
 /* GCC14: flat cells -- what fusion cannot take.  A wall fading into the fog is black far and lit
@@ -1200,11 +1191,11 @@ static int nearSegment(XyInt *a,XyInt *b,int px,int py)
 
 /* Extends a strip of black faces from f -- or, tile >= 0, of faces of that tile (far LOD) --, fills
    q[] with the welded quad and gq with its corners' gouraud, returns the strip's last index -- f
-   itself if nothing welds.  why[] counts the black welds refused. */
+   itself if nothing welds. */
 #define WELDS(n) (tile<0? faceIsBlack(n,V): level_face[n].tile==tile)
 #define LODVXYG(Q,L,V,I) {(Q).x=(V)[I].x; (Q).y=(V)[I].y; (L)=(V)[I].light;}
 static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,struct gourTable *gq,
-			 int *why,int tile)
+			 int tile)
 {int g,dir,j;
  unsigned short *a,*c;
  if (f>=wall->lastFace)
@@ -1216,10 +1207,7 @@ static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,struct g
      else if (a[0]==c[1] && a[3]==c[2])
 	dir=2;                     /* ... the other way */
      else
-	{dir=0;
-	 if (tile<0 && faceIsBlack(f+1,V))
-	    why[0]++;   /* next face was black, but not in the strip */
-	}
+	dir=0;
      g=f;
      while (dir && g<wall->lastFace)
 	{a=level_face[g].v; c=level_face[g+1].v;
@@ -1241,7 +1229,7 @@ static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,struct g
      for (j=f;j<g;j++)   /* the skipped vertices are the shared edges */
 	if (!nearSegment(q+0,q+3,V[level_face[j].v[3]].x,V[level_face[j].v[3]].y) ||
 	    !nearSegment(q+1,q+2,V[level_face[j].v[2]].x,V[level_face[j].v[2]].y))
-	   {dir=0; if (tile<0) why[1]++; break;}
+	   {dir=0; break;}
     }
  else
     if (dir==2)
@@ -1252,7 +1240,7 @@ static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,struct g
 	for (j=f;j<g;j++)
 	   if (!nearSegment(q+0,q+1,V[level_face[j].v[0]].x,V[level_face[j].v[0]].y) ||
 	       !nearSegment(q+3,q+2,V[level_face[j].v[3]].x,V[level_face[j].v[3]].y))
-	      {dir=0; if (tile<0) why[1]++; break;}
+	      {dir=0; break;}
        }
  if (!dir)
     {LODVXYG(q[0],gq->entry[0],V,level_face[f].v[0]);
@@ -1650,11 +1638,10 @@ void drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRecord *s
 	continue;
 
      assert(getPicClass(level_face[f].tile)==TILE16BPP);
-     nmMeshPolys++;
      if ((black=CELLISBLACK(gtable)) || far)
 	{XyInt q[4];
 	 struct gourTable gq;
-	 int g=weldFaceStrip(wall,f,vCalc,q,&gq,lodWeldWhy,black? -1: level_face[f].tile);
+	 int g=weldFaceStrip(wall,f,vCalc,q,&gq,black? -1: level_face[f].tile);
 	 if (clip_visible(q,s) && vdp1Range(q))
 	    {VDP1WALK(q);
 	     if (black)
@@ -1666,7 +1653,6 @@ void drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRecord *s
 	     lodFlat++;
 	    }
 	 lodCells+=g-f;
-	 nmMeshPolys+=g-f;
 	 f=g;
 	 continue;
 	}
@@ -2067,11 +2053,10 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRec
      if (clip || !clip_visible(probeVDP1(poly),s))
 	continue;
 
-     slave_nmMeshPolys++;
      if ((black=CELLISBLACK(gtable)) || far)
 	{XyInt q[4];
 	 struct gourTable gq;
-	 int g=weldFaceStrip(wall,f,slave_vCalc,q,&gq,slave_lodWeldWhy,black? -1: level_face[f].tile);
+	 int g=weldFaceStrip(wall,f,slave_vCalc,q,&gq,black? -1: level_face[f].tile);
 	 if (clip_visible(q,s))
 	    {if (black)
 		{cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOL_MESH;
@@ -2087,7 +2072,6 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRec
 	     slave_lodFlat++;
 	    }
 	 slave_lodCells+=g-f;
-	 slave_nmMeshPolys+=g-f;
 	 f=g;
 	 continue;
 	}
@@ -2139,7 +2123,6 @@ static int splitSets;                    /* views 1..splitSets have a set */
 static int travQueued;                   /* views 1..travQueued queued this image */
 static volatile int travDone;            /* the last one the slave finished (cache-through) */
 static int travKicked;                   /* the queue went to the slave with view 0's draw */
-int travSpin;                            /* spins at the queue's join, last image (overlay q:) */
 #define TRAVDONE (*(volatile int *)((int)&travDone|0x20000000))
 
 /* the viewer and window of a set, from the renderer's current ones */
@@ -3041,7 +3024,7 @@ void wallsTraverse(MthMatrix *view,int onSlave)
  SectorDrawRecord *sdr;
 
  /* the light positions are made by drawWalls, on the master (see TravSet) */
- if (!onSlave) pushProfile("Find Visible");
+ if (!onSlave) CFG_PROF_SUB("Find Visible");
 
  for (i=0;i<level_nmSectors;i++)
     sectorDraw[i].flags=0;
@@ -3057,7 +3040,7 @@ void wallsTraverse(MthMatrix *view,int onSlave)
  sectorDraw[viewSector].distance=0;
  updateListSize=1;
  updateList[0]=sectorDraw+viewSector;
- if (!onSlave) pushProfile("Find Doorways");
+ if (!onSlave) CFG_PROF_SUB("Find Doorways");
  findDoorways(viewSector,view);
  do
     {done=1;
@@ -3071,7 +3054,7 @@ void wallsTraverse(MthMatrix *view,int onSlave)
 	}
     }
  while (!done);
- if (!onSlave) popProfile();
+ if (!onSlave) CFG_PROF_SUB_END();
 
 #if 0
  for (i=0;i<updateListSize;i++)
@@ -3199,7 +3182,7 @@ void wallsTraverse(MthMatrix *view,int onSlave)
 
  if (onSlave!=2)                /* 2: split screen, during the logic -- see TravSet */
     CFG_SPRITE_LEAVES();
- if (!onSlave) popProfile();
+ if (!onSlave) CFG_PROF_SUB_END();
 }
 
 
@@ -3256,12 +3239,10 @@ void wallsPipeDiscard(void)
 /* Waits for the views queued behind view 0 (split screen).  Call before anything moves the
    geometry (Post), and before the level goes. */
 void wallsQueueJoin(void)
-{int i=0;
- if (!travQueued || !travKicked)
+{if (!travQueued || !travKicked)
     return;
  while (TRAVDONE<travQueued)
-    i++;
- travSpin=i;
+    ;
  travKicked=0;
  *CACHECNTRL=0x10;              /* the slave wrote the sets through normal addresses */
  *CACHECNTRL=0x01;
@@ -3335,19 +3316,18 @@ void drawWalls(int k,MthMatrix *view)
  slave_plaxBBxmax=-160;
  slave_plaxBBymax=-120;
 
- lodFused=0; lodCells=0; lodFlat=0; nmMeshPolys=0;
- lodWeldWhy[0]=0; lodWeldWhy[1]=0;
- slave_lodFused=0; slave_lodCells=0; slave_lodFlat=0; slave_nmMeshPolys=0;
- slave_lodWeldWhy[0]=0; slave_lodWeldWhy[1]=0;
+ lodFused=0; lodCells=0; lodFlat=0;
+ slave_lodFused=0; slave_lodCells=0; slave_lodFlat=0;
 
  slaveView=view;
  nmPolys=0;
- vdp1NmClipped=0;
+#ifdef WALKPROBE
  if (k==0)
     {/* one count per image, every view: the last one is what the VDP1 is drawing now */
      vdp1PrevWalk=vdp1Walk; vdp1PrevMaxX=vdp1MaxX; vdp1PrevMaxY=vdp1MaxY;
      vdp1Walk=0; vdp1Big=0; vdp1BigWalk=0; vdp1MaxX=0; vdp1MaxY=0; vdp1RotWalk=0;
     }
+#endif
  autoTarget=NULL;
  bestAutoAimRating=INT_MAX;
 
@@ -3430,9 +3410,6 @@ void drawWallsFinish(void)
  lodFused+=slave_lodFused;
  lodCells+=slave_lodCells;
  lodFlat+=slave_lodFlat;
- nmMeshPolys+=slave_nmMeshPolys;
- lodWeldWhy[0]+=slave_lodWeldWhy[0];
- lodWeldWhy[1]+=slave_lodWeldWhy[1];
  /* merge slave and master plax bbs */
  if (slave_plaxBBxmin<plaxBBxmin)
     plaxBBxmin=slave_plaxBBxmin;

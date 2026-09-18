@@ -36,7 +36,7 @@
 extern Sprite *camera;
 extern Orient playerAngle;
 extern volatile int slaveJob,slaveStep;
-extern int vdp1PrevWalk,vdp1PrevMaxX,vdp1PrevMaxY;  /* WALLS.H, STATUSTEXT builds */
+extern int vdp1PrevWalk,vdp1PrevMaxX,vdp1PrevMaxY;  /* WALLS.H, WALKPROBE builds */
 
 #define CRASHHANGFIELDS 240     /* 4 s: the slowest image the loop draws is 8 fields */
 
@@ -219,7 +219,9 @@ void crashScreen(void)
 	       (short)crashCmd[8],(short)crashCmd[9]);
      crashLine("C %d %d  D %d %d",(short)crashCmd[10],(short)crashCmd[11],
 	       (short)crashCmd[12],(short)crashCmd[13]);
+#ifdef WALKPROBE
      crashLine("WALK %dK  MAX X %d Y %d",vdp1PrevWalk>>4,vdp1PrevMaxX,vdp1PrevMaxY);
+#endif
      crashY+=3;
      crashLine("BUILD %s %s",__DATE__,__TIME__);
      crashLine("A B C START TOGETHER RESETS");

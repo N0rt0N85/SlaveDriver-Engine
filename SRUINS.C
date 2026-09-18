@@ -1952,6 +1952,10 @@ static void mpPlaceNear(Sprite *s,int k)
  for (j=0;j<mpPlayers;j++)
     if (mpBody[j] && mpInLevel[j])
        mpBody[j]->flags=saved[j];
+ /* GCC14: those moves went through collideSprite, which opens its profile node where it is
+    called -- here, between two images, at the root of the tree, where it would stay at 0.0.
+    The tree times images: it starts over */
+ initProfiler();
 }
 
 /* The per-player part of the level start, the same calls in the same order as for player 1. */
@@ -2649,12 +2653,12 @@ int runLevel(char *filename,int levelNm)
 
 	 if (mpView==0)
 	    {wallsQueueJoin();          /* the slave reads the walls Post is about to move */
-	     CFG_PROF("Post"); for (;mmcSave>CFG_TIC_UNIT-1;mmcSave-=CFG_TIC_UNIT)
+	     for (;mmcSave>CFG_TIC_UNIT-1;mmcSave-=CFG_TIC_UNIT)
 		{advanceWallAnimations();
 		 stepWater();
 		}
 	     updatePushBlockPositions();
-	     processDelayedMoves(); CFG_PROF_END();
+	     processDelayedMoves();
 	    }
 
 	 if (mapOn && mpPlayers==1)
@@ -2688,7 +2692,7 @@ int runLevel(char *filename,int levelNm)
 
 
 #ifdef STATUSTEXT
-     /* LEGEND  fps : frames per second, instant then smoothed
+     /* LEGEND  fps : frames per second
 		 lod : fused walls / cells the fusion avoided / cells emitted
 		       FLAT.  The first two are no longer in polys; the third still
 		       is -- it keeps its VDP1 command and loses only its texture.
@@ -2696,26 +2700,23 @@ int runLevel(char *filename,int levelNm)
 		       YELLOW under L+R+B's LOD PAINTED).
 	 The fps line used nine of the ~40 readable columns, and -50 to -30
 	 are taken (time, mem, then the profile tree): the LOD fits here. */
-     CFG_PROF("Overlay"); drawStringf(-158,-60,1,"fps:%d %d lod:%d/%d/%d",
-				      60/framesElapsed,60/(smoothVTime+1),
-				      lodFused,lodCells,lodFlat);
+     CFG_PROF("Overlay"); drawStringf(-158,-60,1,"fps:%d lod:%d/%d/%d",
+				      60/framesElapsed,lodFused,lodCells,lodFlat);
 
      CFG_STATUS_SECTOR();
 
      if (mpPlayers>1)
 	{/* LEGEND  B : the split-screen cell budget -- the 1448-command list less what this
 		     image spent outside the cells (things, guns, HUD, this overlay)
-		 q : spins waiting for the slave's traversal of views 1.. (0 = done in time;
-		     absent views are traversed by the master: Find Visible in the tree)
 		 f : each view's fog distance, 512..4096 (4096 = no fog)
 		 c : each view's cells in the last image / its share of B.  A view drawn
 		     without fog and under its share gives the rest to the others.
 		 Only the views in play are listed. */
-	 static const char *fmtF[MPMAX+1]={"","","B:%d q:%d f:%d %d","B:%d q:%d f:%d %d %d",
-					   "B:%d q:%d f:%d %d %d %d"};
+	 static const char *fmtF[MPMAX+1]={"","","B:%d f:%d %d","B:%d f:%d %d %d",
+					   "B:%d f:%d %d %d %d"};
 	 static const char *fmtC[MPMAX+1]={"","","c:%d/%d %d/%d","c:%d/%d %d/%d %d/%d",
 					   "c:%d/%d %d/%d %d/%d %d/%d"};
-	 drawStringf(-158,-110,1,fmtF[mpPlayers],mpBudget,travSpin,mpFog[0],mpFog[1],mpFog[2],mpFog[3]);
+	 drawStringf(-158,-110,1,fmtF[mpPlayers],mpBudget,mpFog[0],mpFog[1],mpFog[2],mpFog[3]);
 	 if (mpRegisterLost)       /* a player's global had no copy: players would share it */
 	    drawStringf(60,-100,1,"MPLOST:%d",mpRegisterLost);
 	 drawStringf(-158,-100,1,fmtC[mpPlayers],mpCells[0],mpShare[0],
@@ -2733,29 +2734,22 @@ int runLevel(char *filename,int levelNm)
 	}
 #endif
 
-     /* LEGEND  polys : cells emitted (walls+floors+ceilings, sprites excluded)
-		 vcl   : cells brought back into the VDP1 range (WALLASM.H vdp1Range)
+     /* LEGEND  polys : cells emitted (walls+floors+ceilings, sprites excluded), total /
+			 slave's share.  The second divides SLAVECMDS of the tree to give
+			 the cost of one record.  (lod is on the fps line, -60)
 		 pipe  : spins at the join of the traversal started in the tail
 			 of the previous frame.  0 = it fit entirely in the tail;
-			 -1 = nothing was in flight (earthquake, or WALLPIPE at 0). */
-     /* LEGEND  polys : cells emitted, total / slave's share.  The second divides
-		 SLAVECMDS of the tree to give the cost of one record.
-		 (lod is on the fps line, -60) */
-     /* msh : share of cells from the MESH path -- floors, ceilings, curved walls,
-	anything that is not a parallelogram.  The rest is wall grid. */
-     drawStringf(-158,-70,1,"polys:%d/%d msh:%d vcl:%d pipe:%d",nmPolys+nmSlavePolys,
-		 nmSlavePolys,nmMeshPolys,vdp1NmClipped,pipeSpin);
+			 -1 = nothing was in flight, the master traversed (earthquake,
+			 or WALLPIPE at 0). */
+     drawStringf(-158,-70,1,"polys:%d/%d pipe:%d",nmPolys+nmSlavePolys,nmSlavePolys,pipeSpin);
 
-     /* LEGEND  wl : mesh welds REFUSED -- the next black face was not in the
-		     strip / it was, but a skipped vertex fell off the edge.  Says
-		     which of the two doors to open for the cells still flat. */
-     drawStringf(-158,-50,1,"time:%d %d:%d wl:%d/%d",
-		 (lastCalc+lastLastCalc)>>1,lastDraw,
-		 lastCalc+lastDraw,lodWeldWhy[0],lodWeldWhy[1]);
+     drawStringf(-158,-50,1,"time:%d %d:%d",(lastCalc+lastLastCalc)>>1,lastDraw,
+		 lastCalc+lastDraw);
 
      drawStringf(-158,-40,1,"mem:%dk+%dk=%dk",mem_coreleft(0)>>10,
 		 mem_coreleft(1)>>10,(mem_coreleft(0)+mem_coreleft(1))>>10);
 
+#ifdef WALKPROBE
      /* LEGEND  walk : what the VDP1 steps through for the cells, in thousands of pixels:
 			 lines x width of every cell, the pixels outside the window
 			 included -- the clipping drops the write, not the step.  A cell
@@ -2765,17 +2759,16 @@ int runLevel(char *filename,int levelNm)
 		 rot  : walk if the walls were drawn from patterns turned a quarter --
 			vertical lines -- the rest as drawn (WALLASM.H vdp1WalkProbe)
 	 Solo only: split screen has its c: line on this row.  The ASSERT build has extra: at
-	 its left end, so the line moves right there.  walk:off: a disc built without the probe
-	 (make NOWALK=1), to time SLAVECMDS without it. */
+	 its left end, so the line moves right there.  Only on a disc built with the probe
+	 (make WALK=1). */
      if (mpPlayers==1)
-#ifdef NOWALKPROBE
-	drawString(-158,-100,1,(unsigned char *)"walk:off");
-#elif defined(NDEBUG)
+#ifdef NDEBUG
 	drawStringf(-158,-100,1,"walk:%dk big:%d/%dk rot:%dk",vdp1Walk>>4,vdp1Big,
 		    vdp1BigWalk>>4,vdp1RotWalk>>4);
 #else
 	drawStringf(-60,-100,1,"walk:%dk big:%d/%dk rot:%dk",vdp1Walk>>4,vdp1Big,
 		    vdp1BigWalk>>4,vdp1RotWalk>>4);
+#endif
 #endif
 
      if (profileShow)
@@ -2797,10 +2790,6 @@ int runLevel(char *filename,int levelNm)
 		       PIC_LOD_PX a wall never takes a slot this image uses, and one the
 		       image on screen uses gets its texels once the VDP1 is done with
 		       it (Tile Flush in the tree): sw no longer means a wrong texture.
-		  tex: the size on screen, in pixels (smaller side of the box), a
-		       wall cell needs to bring its tile into a slot this image --
-		       PIC_LOD_PX, or the size of the last tile that fits when more
-		       compete (PIC.H)
 		  flat: cells painted flat in their tile's first texel: too small /
 		       every slot taken by this image
 		  B:   the cell budget, the VDP1 list less what the image spends
@@ -2808,13 +2797,10 @@ int runLevel(char *filename,int levelNm)
 		       the fog comes in (SOLO_FOG = budget, mpBalance).
 		  Solo only: split screen has its B: line there. */
       /* fog : distance in units at which a fully lit sector reaches black.  4096 is
-	 the original setting, beyond any line of sight -- L+R+Z cycles it.
-	 sky : 0-16 scale applied to the sky palette, READ in PLAX.C -- 16 = intact. */
-      drawStringf(-158,-90,1,"tile:%d sw:%d fog:%d sky:%d",used[0],nmSwaps[0],
-		  fogDist,getPlaxFade());
+	 the original setting, beyond any line of sight -- L+R+Z cycles it. */
+      drawStringf(-158,-90,1,"tile:%d sw:%d fog:%d",used[0],nmSwaps[0],fogDist);
       if (mpPlayers==1)
-	 drawStringf(-158,-110,1,"tex:%dpx flat:%d/%d B:%d",picLodNow,picLastSmall,picLastFull,
-		     mpBudget);
+	 drawStringf(-158,-110,1,"flat:%d/%d B:%d",picLastSmall,picLastFull,mpBudget);
 #endif
 #ifndef NDEBUG
 #ifdef STATUSTEXT

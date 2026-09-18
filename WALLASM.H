@@ -35,7 +35,7 @@ static __inline__ XyInt *probeVDP1(XyInt *poly)
  return poly;
 }
 
-/* GCC14: PROBE (STATUSTEXT) -- what the VDP1 steps through for a cell, changes nothing.  A
+/* GCC14: PROBE (WALKPROBE) -- what the VDP1 steps through for a cell, changes nothing.  A
    distorted sprite, like a polygon, is drawn as lines from edge A-D to edge B-C: as many lines
    as the longer of those two edges has pixels, each as long as the quad is wide there,
    anti-aliased (|dx|+|dy| pixels).  The clipping drops the WRITE of a pixel outside the window,
@@ -49,9 +49,9 @@ static __inline__ XyInt *probeVDP1(XyInt *poly)
                   lines from edge A-B to edge D-C, vertical on a wall (a wall = its V edges
                   A-D and B-C vertical on screen), everything else counted as drawn
    Units of 64 pixels.  The window is the view's, not the sector box of RECTCLIP: a line only
-   that box would pre-clip still counts.  NOWALKPROBE (make NOWALK=1) leaves the probe out: it
-   runs inside every cell's command, and SLAVECMDS is then timed without it. */
-#if defined(STATUSTEXT) && !defined(NOWALKPROBE)
+   that box would pre-clip still counts.  Not on the test disc: it runs inside every cell's
+   command, and SLAVECMDS and Master Draw would be timed with it. */
+#ifdef WALKPROBE
 #define VDP1BIGWALK 16384
 static __inline__ int vdp1Abs(int a)
 {return a<0? -a: a;
@@ -225,9 +225,6 @@ static __inline__ void EZ_distSprVClip(short charNm,short colour,XyInt *poly,
      cellOut(charNm,colour,0,VCLIPONE,poly,g);
      return;
     }
- /* Replaces the old cx/cy maxima: counting the cells brought into range says the same (do we
-    leave the range, how often) for one increment on the RARE path. */
- vdp1NmClipped++;
  if (!over)
     {if (!vdp1Range(poly))
 	return;
