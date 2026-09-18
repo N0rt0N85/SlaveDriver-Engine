@@ -33,6 +33,7 @@ static int nmChars;
 static int commandAreaSize,gourauAreaSize;
 static int cmdBufferUsed,totCommand;
 static int gourBufferUsed,totGourau;
+static int gourTaken;      /* GCC14: tables blocks built elsewhere took from the top (EZ_gourTop) */
 static struct gourTable gourBuffer[GOURBUFFERSIZE];
 static struct cmdTable cmdBuffer[CMDBUFFERSIZE];
 #endif
@@ -132,6 +133,7 @@ void EZ_openCommand(void)
  cgouraud=gourStart[bank];
  totCommand=0;
  totGourau=0;
+ gourTaken=0;
 #if BUFFERWRITES
  cmdBufferUsed=0;
  gourBufferUsed=0;
@@ -149,8 +151,10 @@ static void flushCmdBuffer(void)
 }
 
 static void flushGourBuffer(void)
-{if (gourBufferUsed+totGourau>gourauAreaSize)
-    gourBufferUsed=gourauAreaSize-totGourau;
+{if (gourBufferUsed+totGourau>gourauAreaSize-gourTaken)
+    gourBufferUsed=gourauAreaSize-gourTaken-totGourau;
+ if (gourBufferUsed<0)
+    gourBufferUsed=0;
  dmaMemCpy(gourBuffer,cgouraud+VRAM_ADDR,gourBufferUsed<<3);
  cgouraud+=gourBufferUsed<<3;
  totGourau+=gourBufferUsed;
@@ -418,6 +422,72 @@ void EZ_line(short drawMode,short color,XyInt *xy,
 
 int EZ_charNoToVram(int charNm)
 {return chars[charNm].addr;
+}
+
+/* GCC14: blocks of commands built elsewhere -- the slave's cells (WALLS.C drawSlaveWalls).
+   Their gouraud tables take the top of the bank's area, down from what the image's earlier
+   blocks took: EZ_gourTop() is the grshAddr one past the next block's first table, whose k-th
+   table is EZ_gourTop()-1-k.  EZ_appendGourTop puts n of them there, g[0] being the lowest; the
+   list's own tables keep the bottom, and their room shrinks by what the blocks took. */
+int EZ_gourTop(void)
+{return (((int)gourStart[bank])>>3)+gourauAreaSize-gourTaken;
+}
+
+void EZ_appendGourTop(struct gourTable *g,int n)
+{int top=EZ_gourTop(),room;
+#if BUFFERWRITES
+ if (gourBufferUsed>0)
+    flushGourBuffer();
+ room=gourauAreaSize-gourTaken-totGourau;
+#else
+ room=gourauAreaSize-gourTaken-((cgouraud-gourStart[bank])>>3);
+#endif
+ if (n>room)            /* past the area: the lowest go, as flushGourBuffer drops the last */
+    {g+=n-room;
+     n=room;
+    }
+ if (n<=0)
+    return;
+ dmaMemCpy(g,(BYTE *)VRAM_ADDR+((top-n)<<3),n<<3);
+ gourTaken+=n;
+}
+
+/* the block itself goes in where the next command would, by DMA: what is buffered first, and
+   the list's end cuts it as it cuts the rest (flushCmdBuffer).  Returns the number of its first
+   command. */
+int EZ_appendCmds(struct cmdTable *cmds,int n)
+{int first;
+#if BUFFERWRITES
+ if (cmdBufferUsed>0)
+    flushCmdBuffer();
+ if (n>commandAreaSize-totCommand)
+    n=commandAreaSize-totCommand;
+ totCommand+=n>0? n: 0;
+#endif
+ first=((unsigned int)ccommand)>>5;
+ if (n>0)
+    {dmaMemCpy(cmds,ccommand+VRAM_ADDR,n<<5);
+     ccommand+=n<<5;
+    }
+ return first;
+}
+
+/* the pattern of such a command: tile charNm, rows [t0,t1) of it in 1/1024 -- the fields
+   EZ_specialDistSpr2V fills, or EZ_specialDistSpr2 for the whole of it (t0 0, t1 1024) */
+void EZ_setCharWindow(struct cmdTable *cmd,short charNm,int t0,int t1)
+{if (t0>0 || t1<1024)
+    {int h=chars[charNm].xysize&0xff,v0,vh;
+     v0=(t0*h)>>10;
+     vh=((t1*h)>>10)-v0;
+     if (vh<1) vh=1;
+     if (v0+vh>h) vh=h-v0;
+     cmd->charAddr=chars[charNm].addr+v0*((chars[charNm].xysize>>8)*2);
+     cmd->charSize=(chars[charNm].xysize&0x3f00)|(vh&0xff);
+    }
+ else
+    {cmd->charAddr=chars[charNm].addr;
+     cmd->charSize=chars[charNm].xysize;
+    }
 }
 
 void EZ_closeCommand(void)

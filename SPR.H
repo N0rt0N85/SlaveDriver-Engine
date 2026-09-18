@@ -134,5 +134,10 @@ void EZ_specialDistSpr2(short charNm,XyInt *xy,struct gourTable *gTable);
 void EZ_specialDistSpr2V(short charNm,int t0,int t1,XyInt *xy,
 			 struct gourTable *gTable);
 void EZ_linkCommand(int cmd,int mode,int to);
+/* GCC14: blocks of commands built elsewhere (SPR.C): the slave's cells, WALLS.C */
+int EZ_gourTop(void);
+void EZ_appendGourTop(struct gourTable *g,int n);
+int EZ_appendCmds(struct cmdTable *cmds,int n);
+void EZ_setCharWindow(struct cmdTable *cmd,short charNm,int t0,int t1);
 
 void EZ_clearScreen(void);

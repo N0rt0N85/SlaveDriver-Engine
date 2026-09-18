@@ -23,6 +23,7 @@
 #include "wallasm.h"
 #include "gamestat.h"
 #include "v_blank.h"
+#include "dma.h"
 
 #define WATER 1
 #define WAVYWATER 0
@@ -1758,30 +1759,124 @@ struct doorwayCache
 } doorwayCache[MAXNMWALLS];
 
 
-/* if tile==-1 then gtable.entry[0]==sector that was just drawn */
-struct slaveDrawResult
-{XyInt poly[4];
- struct gourTable gtable;
- short tile,pad;
-};
-static struct slaveDrawResult *slaveResult=
-   (struct slaveDrawResult *)doorwayCache;
-int nmSlavePolys;
+/* --- GCC14: the slave writes its cells as VDP1 commands ---------------------------------------
+   It used to write a record per cell (outline, gouraud, tile), and the master turned each into a
+   command after the wait: 46 us a record on console, 10-26 ms an image (Slave Cmds).  The slave
+   now writes the commands themselves, in slaveCmd[]: the outline fitted to the VDP1's range and
+   its V window (vdp1Fit), and each gouraud table at the address where it will stay -- the top
+   of the bank's gouraud area, below what the image's earlier blocks took (EZ_gourTop).
+   What only the master may do is left in the commands for it (drawSlaveWalls):
+   - the tile, the tile cache having one writer.  A textured cell carries its pic in `color`, its
+     size on screen in `dummy`, its V window in charAddr/charSize (1/1024); mapWallPic turns them
+     into the slot's address, or the cell into a flat polygon, as for the master's own cells;
+   - the sprites of each slave sector, which the master draws meanwhile: a JUMP_CALL on the
+     sector's last command -- each sector opens on its clip (RECTCLIP), so it has one;
+   - water (PowerSlave): a skipped command, which the master turns into a call of the surface.
+   Then the block goes into the list by DMA.  Its array doubles as the traversal's scratch
+   (doorwayCache), free while the slave draws. */
+#define MAXSLAVESECTORS 64      /* the servo gives the slave 51 sectors at most */
+#define MAXSLAVEWATER 32
+static struct cmdTable *slaveCmd=(struct cmdTable *)doorwayCache;
+/* its gouraud tables, from the end: table k at MAXNMSLAVEPOLYS-1-k, grshAddr slaveGourTop-1-k */
+static struct gourTable *slaveGour=
+   (struct gourTable *)(((char *)doorwayCache)+MAXNMSLAVEPOLYS*sizeof(struct cmdTable));
+#define SLAVECMD  ((struct cmdTable *)(((int)slaveCmd)|0x20000000))
+#define SLAVEGOUR ((struct gourTable *)(((int)slaveGour)|0x20000000))
+int nmSlavePolys;               /* commands in slaveCmd */
+static int nmSlaveGour,nmSlaveSectors,nmSlaveWater;
+static int slaveGourTop;        /* EZ_gourTop(), set by drawWalls before the kick */
+static short slaveSectorEnd[MAXSLAVESECTORS];   /* each slave sector's last command */
+static short slaveWaterCmd[MAXSLAVEWATER],slaveWaterWall[MAXSLAVEWATER],
+	     slaveWaterSector[MAXSLAVEWATER];   /* its skipped command, wall, slave sector */
 
 /*struct vCalc slave_vCalc[MAXVPERWALL]; */
-static struct vCalc *slave_vCalc=(struct vCalc *)(((char *)doorwayCache)+MAXNMSLAVEPOLYS*sizeof(struct slaveDrawResult));
+static struct vCalc *slave_vCalc=(struct vCalc *)(((char *)doorwayCache)+
+				 MAXNMSLAVEPOLYS*(sizeof(struct cmdTable)+sizeof(struct gourTable)));
+typedef char slaveBlockFits[MAXNMSLAVEPOLYS*(sizeof(struct cmdTable)+sizeof(struct gourTable))+
+			    MAXVPERWALL*sizeof(struct vCalc)<=sizeof(doorwayCache)? 1: -1];
+
+/* the next command of the slave's block, `q` its outline, `g` its gouraud table.  Past the
+   block's end it goes nowhere: the walls already check their room (MAXNMSLAVEPOLYS - 50) */
+static struct cmdTable *slaveCmdNext(short control,short drawMode,short colour,XyInt *q,
+				     struct gourTable *g)
+{static struct cmdTable spill;
+ struct cmdTable *c;
+ int i;
+ if (nmSlavePolys>=MAXNMSLAVEPOLYS)
+    return &spill;
+ c=SLAVECMD+nmSlavePolys++;
+ c->control=control;
+ c->link=0;
+ c->drawMode=drawMode;
+ c->color=colour;
+ c->charAddr=0;
+ c->charSize=0;
+ if (q)
+    {short *from=(short *)q,*to=(short *)&c->ax;
+     for (i=8;i;i--)
+	*(to++)=*(from++);
+    }
+ if (g)
+    {SLAVEGOUR[MAXNMSLAVEPOLYS-1-nmSlaveGour]=*g;
+     c->grshAddr=slaveGourTop-1-nmSlaveGour++;
+    }
+ else
+    c->grshAddr=0;
+ c->dummy=0;
+ return c;
+}
+
+/* a flat quad -- a fused wall, a run of black cells, the far LOD -- once in the VDP1's range */
+static void slaveCmdFlat(XyInt *q,short colour,struct gourTable *g)
+{if (vdp1Range(q))
+    slaveCmdNext(ZOOM_NOPOINT|DIR_NOREV|FUNC_POLYGON,
+		 UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|(g? DRAW_GOURAU: 0),colour,q,g);
+}
+
+/* a textured cell: wallCell and EZ_distSprVClip, all but the tile, which the master maps.  Its
+   size is taken before the range cuts the outline, as wallCell does. */
+static void slaveCmdCell(int pic,XyInt *poly,struct gourTable *g)
+{int i,x0,x1,y0,y1,t0,t1;
+ struct cmdTable *c;
+ x0=x1=poly[0].x;
+ y0=y1=poly[0].y;
+ for (i=1;i<4;i++)
+    {if (poly[i].x<x0) x0=poly[i].x;
+     if (poly[i].x>x1) x1=poly[i].x;
+     if (poly[i].y<y0) y0=poly[i].y;
+     if (poly[i].y>y1) y1=poly[i].y;
+    }
+ x1-=x0;
+ y1-=y0;
+ if (!vdp1Fit(poly,&t0,&t1))
+    return;
+ c=slaveCmdNext(ZOOM_NOPOINT|DIR_NOREV|FUNC_DISTORSP,
+		UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|DRAW_GOURAU,pic,poly,g);
+ c->charAddr=t0;
+ c->charSize=t1;
+ c->dummy=x1<y1? x1: y1;
+}
+
+/* a skipped command: the master may hang a call on it (sprites, water) */
+static void slaveCmdSkip(void)
+{slaveCmdNext(SKIP_NEXT,0,0,NULL,NULL);
+}
 
 void slave_drawWater(sWallType *theWall)
-{slaveResult[nmSlavePolys].tile=-2;
- slaveResult[nmSlavePolys].gtable.entry[0]=theWall-level_wall;
- nmSlavePolys++;
+{if (nmSlaveWater<MAXSLAVEWATER && nmSlavePolys<MAXNMSLAVEPOLYS)
+    {slaveWaterCmd[nmSlaveWater]=nmSlavePolys;
+     slaveWaterWall[nmSlaveWater]=theWall-level_wall;
+     slaveWaterSector[nmSlaveWater]=nmSlaveSectors;
+     nmSlaveWater++;
+     slaveCmdSkip();
+    }
 }
 
 void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 			SectorDrawRecord *s)
 {MthXyz vWidth,vHeight;
  XyInt poly[4];
- int w,h,v,clip;
+ int w,h,clip;
  int runStart;   /* start of the current run of black cells, -1 = none */
  int light;
  int tex,row1,row2;
@@ -1789,8 +1884,6 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
  int height=theWall->tileHeight;
  struct gourTable gtable;
  char *ppattern;
- struct slaveDrawResult *cacheThruResult=
-    (struct slaveDrawResult *)(((int)slaveResult)+0x20000000);
 #if MIPMAP
  int tileBias;
 #endif
@@ -1832,13 +1925,8 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 
  if (wallIsBlack(theWall,coords,snmWallLights,sWavyIndex))
     {XyInt q[4];
-     int j;
      if (fuseWallPoly(coords,s,q))
-	{cacheThruResult[nmSlavePolys].tile=-5;
-	 cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOL_FUSE;
-	 for (j=0;j<4;j++)
-	    cacheThruResult[nmSlavePolys].poly[j]=q[j];
-	 nmSlavePolys++;
+	{slaveCmdFlat(q,LODCOL_FUSE,NULL);
 	 slave_lodFused++;
 	 slave_lodCells+=theWall->tileHeight*theWall->tileLength-1;
 	}
@@ -1846,13 +1934,10 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
     }
  if (wallIsFar(coords,snmWallLights,sWavyIndex))
     {XyInt q[4];
-     int j;
+     struct gourTable g;
      if (fuseWallPoly(coords,s,q))
-	{cacheThruResult[nmSlavePolys].tile=LODFARTILE(level_texture[theWall->textures+1]);
-	 farCorners(theWall,coords,&cacheThruResult[nmSlavePolys].gtable);
-	 for (j=0;j<4;j++)
-	    cacheThruResult[nmSlavePolys].poly[j]=q[j];
-	 nmSlavePolys++;
+	{farCorners(theWall,coords,&g);
+	 slaveCmdFlat(q,LODCOL_FAR(level_texture[theWall->textures+1]),&g);
 	 slave_lodFused++;
 	 slave_lodCells+=theWall->tileHeight*theWall->tileLength-1;
 	}
@@ -1892,11 +1977,7 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 	    {XyInt q[4];
 	     LODRUNQUAD(slave_vCalc);
 	     if (clip_visible(q,s))
-		{cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOL_RECT;
-		 cacheThruResult[nmSlavePolys].tile=-5;
-		 for (v=0;v<4;v++)
-		    cacheThruResult[nmSlavePolys].poly[v]=q[v];
-		 nmSlavePolys++;
+		{slaveCmdFlat(q,LODCOL_RECT,NULL);
 		 slave_lodFlat++;
 		}
 	     slave_lodCells+=w-runStart-1;
@@ -1965,12 +2046,7 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 			gtable.entry[(int)*ppattern]=pts[dh+1][dw].light;
 			poly[(int)*ppattern].x=pts[dh+1][dw].x;
 			poly[(int)*ppattern].y=pts[dh+1][dw].y;
-			cacheThruResult[nmSlavePolys].gtable=gtable;
-			for (v=0;v<4;v++)
-			   cacheThruResult[nmSlavePolys].poly[v]=poly[v];
-			cacheThruResult[nmSlavePolys].tile=level_texture[t+1];
-			nmSlavePolys++;
-			assert(nmSlavePolys<MAXNMSLAVEPOLYS);
+			slaveCmdCell(level_texture[t+1],poly,&gtable);
 		       }
 		 continue;
 		}
@@ -2006,16 +2082,11 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 	     continue;
 	    }
 
-	 cacheThruResult[nmSlavePolys].gtable=gtable;
-	 for (v=0;v<4;v++)
-	    cacheThruResult[nmSlavePolys].poly[v]=poly[v];
-	 cacheThruResult[nmSlavePolys].tile=level_texture[tex]
+	 slaveCmdCell(level_texture[tex]
 #if MIPMAP
-	    +tileBias
+		      +tileBias
 #endif
-	    ;
-	 nmSlavePolys++;
-	 assert(nmSlavePolys<MAXNMSLAVEPOLYS);
+		      ,poly,&gtable);
 	 tex++;
 	}
      row1+=width+1;
@@ -2027,8 +2098,6 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRec
 {int f,i,v,clip,far,black;
  XyInt poly[4];
  struct gourTable gtable;
- struct slaveDrawResult *cacheThruResult=
-    (struct slaveDrawResult *)(((int)slaveResult)+0x20000000);
 
  if (wall->lastFace-wall->firstFace+1+nmSlavePolys+50>MAXNMSLAVEPOLYS)
     return;
@@ -2060,28 +2129,16 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRec
 	 int g=weldFaceStrip(wall,f,slave_vCalc,q,&gq,black? -1: level_face[f].tile);
 	 if (clip_visible(q,s))
 	    {if (black)
-		{cacheThruResult[nmSlavePolys].gtable.entry[0]=LODCOL_MESH;
-		 cacheThruResult[nmSlavePolys].tile=-5;
-		}
+		slaveCmdFlat(q,LODCOL_MESH,NULL);
 	     else
-		{cacheThruResult[nmSlavePolys].gtable=gq;
-		 cacheThruResult[nmSlavePolys].tile=LODFARTILE(level_face[f].tile);
-		}
-	     for (i=0;i<4;i++)
-		cacheThruResult[nmSlavePolys].poly[i]=q[i];
-	     nmSlavePolys++;
+		slaveCmdFlat(q,LODCOL_FAR(level_face[f].tile),&gq);
 	     slave_lodFlat++;
 	    }
 	 slave_lodCells+=g-f;
 	 f=g;
 	 continue;
 	}
-     cacheThruResult[nmSlavePolys].gtable=gtable;
-     for (i=0;i<4;i++)
-	cacheThruResult[nmSlavePolys].poly[i]=poly[i];
-     cacheThruResult[nmSlavePolys].tile=level_face[f].tile;
-     nmSlavePolys++;
-     assert(nmSlavePolys<MAXNMSLAVEPOLYS);
+     slaveCmdCell(level_face[f].tile,poly,&gtable);
     }
 }
 
@@ -2117,8 +2174,8 @@ typedef struct
 static TravSet travSet[MPMAX]={{sectorDraw0,updateList0}};
 static TravSet *tr=travSet;              /* the set a traversal fills */
 static struct doorwayCache *trDC=doorwayCache;  /* its scratch.  The static array doubles as
-					   the slave's draw results (slaveResult): a traversal run
-					   while those wait for drawSlaveWalls uses splitDC. */
+					   the slave's commands (slaveCmd): a traversal run while
+					   those wait for drawSlaveWalls uses splitDC. */
 static struct doorwayCache *splitDC;
 static int splitSets;                    /* views 1..splitSets have a set */
 static int travQueued;                   /* views 1..travQueued queued this image */
@@ -2657,140 +2714,107 @@ void wallsTraverse(MthMatrix *view,int onSlave);
 
 MthMatrix *slaveView;
 void slaveDraw(void)
-{int i;
+{int i,first;
  /* flush cache */
  *CACHECNTRL=0x10;
  *CACHECNTRL=0x01;
  nmSlavePolys=0;
+ nmSlaveGour=0;
+ nmSlaveSectors=0;
+ nmSlaveWater=0;
  for (i=slaveDrawStart;i>=0;i--)
     {SLAVESTEP=0x10000|i;
+     first=nmSlavePolys;
+#if RECTCLIP
+     {XyInt q[4];                /* the sector's clip box, EZ_userClip's A and C */
+      q[0].x=updateList[i]->xmin+viewCx; q[0].y=updateList[i]->ymin+viewCy;
+      q[1].x=q[1].y=q[3].x=q[3].y=0;
+      q[2].x=updateList[i]->xmax+viewCx; q[2].y=updateList[i]->ymax+viewCy;
+      slaveCmdNext(FUNC_UCLIP,0,0,q,NULL);
+     }
+#endif
      drawSector(updateList[i]-sectorDraw,slaveView,1);
-     /* mark end of sector */
-     slaveResult[nmSlavePolys].tile=-1;
-     slaveResult[nmSlavePolys].gtable.entry[0]=updateList[i]-sectorDraw;
-     nmSlavePolys++;
+     /* the sector's last command carries the call of its sprites: one of its own, not a water
+	command, which carries the call of its surface */
+     if (nmSlavePolys==first ||
+	 (nmSlaveWater && slaveWaterCmd[nmSlaveWater-1]==nmSlavePolys-1))
+	slaveCmdSkip();
+     if (nmSlaveSectors<MAXSLAVESECTORS)
+	slaveSectorEnd[nmSlaveSectors++]=nmSlavePolys-1;
     }
 }
 
-void EZ_specialDistSpr(struct slaveDrawResult *sdr,int charNm);
+/* water (PowerSlave): each surface, drawn by the master as a subroutine after the block, is
+   called from the skipped command the slave left in its place; a skipped jump steps over them.
+   The block's DMA has to be over before its commands are patched in VRAM. */
+static void slaveWaterSurfaces(int first)
+{int j,jump,start,n=EZ_getNextCmdNm()-first;
+ struct cmdTable skip;
+ memset(&skip,0,sizeof(skip));
+ skip.control=SKIP_NEXT;
+ jump=EZ_getNextCmdNm();
+ EZ_cmd(&skip);
+ while (dmaActive());
+ for (j=0;j<nmSlaveWater && slaveWaterCmd[j]<n;j++)
+    {start=EZ_getNextCmdNm();
+     drawWaterSurface(level_wall+slaveWaterWall[j],slaveView,
+		      updateList[slaveDrawStart-slaveWaterSector[j]]);
+     if (EZ_getNextCmdNm()==start)
+	continue;
+     EZ_linkCommand(EZ_getNextCmdNm()-1,JUMP_RETURN,0);
+     EZ_linkCommand(first+slaveWaterCmd[j],SKIP_CALL,start);
+    }
+ while (dmaActive());
+ EZ_linkCommand(jump,SKIP_ASSIGN,EZ_getNextCmdNm());
+}
+
+/* GCC14: the slave's block into the list -- its gouraud tables to the top of the area, the
+   tiles mapped, the sprites of its sectors called, then the commands by DMA */
 void drawSlaveWalls(void)
-{int i;
- int s;
- XyInt parms[2];
+{int i,j,s,first;
+ struct cmdTable *c;
  /* flush cache */
  *CACHECNTRL=0x10;
  *CACHECNTRL=0x01;
- s=slaveDrawStart;
- assert(nmSlavePolys<MAXNMSLAVEPOLYS);
+ assert(nmSlavePolys<=MAXNMSLAVEPOLYS);
  assert(nmSlavePolys>=0);
  if (nmSlavePolys==0)
     return;
-#if RECTCLIP
- parms[0].x=updateList[s]->xmin+viewCx;parms[0].y=updateList[s]->ymin+viewCy;
- parms[1].x=updateList[s]->xmax+viewCx;parms[1].y=updateList[s]->ymax+viewCy;
- EZ_userClip(parms);
-#endif
-
- for (i=0;i<nmSlavePolys;i++)
-    {if (slaveResult[i].tile<=LODFARTILE(0))
-	{/* far LOD: a folded wall, or a welded strip of faces, painted flat under its gouraud */
-	 if (vdp1Range(slaveResult[i].poly))
-	    {VDP1WALK(slaveResult[i].poly);
-	     EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|DRAW_GOURAU,
-			LODCOL_FAR(LODFARTILE(slaveResult[i].tile)),slaveResult[i].poly,
-			&slaveResult[i].gtable);
+ EZ_appendGourTop(slaveGour+MAXNMSLAVEPOLYS-nmSlaveGour,nmSlaveGour);
+ for (i=0,c=slaveCmd;i<nmSlavePolys;i++,c++)
+    {if ((c->control&(CTRL_SKIP|CTRL_FUNC))==FUNC_DISTORSP)
+	{int pic=c->color,ch;
+	 assert(getPicClass(pic)==TILE16BPP);
+	 ch=mapWallPic(pic,c->dummy);
+	 if (ch<0)
+	    {/* refused by the cache: flat in its tile's first texel, as wallCell paints it */
+	     c->control=ZOOM_NOPOINT|DIR_NOREV|FUNC_POLYGON;
+	     c->drawMode=UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|DRAW_GOURAU;
+	     c->color=picFirstColour(pic);
+	     c->charAddr=0;
+	     c->charSize=0;
 	    }
-	 continue;
+	 else
+	    {EZ_setCharWindow(c,ch,c->charAddr,c->charSize);
+	     c->color=0;
+	    }
+	 c->dummy=0;
 	}
-     if (slaveResult[i].tile<0)
-	{switch (slaveResult[i].tile)
-	    {
-	     case -5:
-		{/* wall fused by the LOD: one quad, its colour carried in the gouraud
-		    table for lack of another free field in the record */
-		 if (!vdp1Range(slaveResult[i].poly))
-		    continue;
-		 VDP1WALK(slaveResult[i].poly);
-		 EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,
-			    slaveResult[i].gtable.entry[0],slaveResult[i].poly,NULL);
-		 continue;
-		}
-#if 0
-	     case -4:
-		EZ_polygon(DRAW_GOURAU|DRAW_MESH|ECD_DISABLE|SPD_DISABLE,
-			   WATERCOLOR,slaveResult[i].poly,
-			   &slaveResult[i].gtable);
-		continue;
-#endif
-#if 0
-	     case -3:
-		{/* its a plax wall */
-		 sWallType *w;
-		 MthXyz wallV;
-		 int j;
-		 MthXyz tformed[4];
-		 w=level_wall+slaveResult[i].gtable.entry[0];
-		 for (j=0;j<4;j++)
-		    {getVertex(w->v[j],&wallV);
-		     MTH_CoordTrans(slaveView,&wallV,tformed+j);
-		    }
-		 drawPlax(w,tformed);
-		 continue;
-		}
-#endif
-	     case -2:
-		{/* its a water surface */
-		 sWallType *w;
-		 /* MthXyz wallV;
-		    int j;
-		    MthXyz tformed[4];*/
-		 w=level_wall+slaveResult[i].gtable.entry[0];
-		 /* for (j=0;j<4;j++)
-		    {getVertex(w->v[j],&wallV);
-		    MTH_CoordTrans(slaveView,&wallV,tformed+j);
-		    }
-		    drawWater(w,tformed); */
-		 drawWaterSurface(w,slaveView,updateList[s]);
-		 continue;
-		}
-	     case -1:
-		{/* its an end of sector marker */
-		 slaveDrawStart--;
-		 /* drawSprites(&(viewPos),slaveView,
-		    slaveResult[i].gtable.entry[0]); */
-		 if (updateList[s]->spriteCommandStart)
-		    EZ_linkCommand(EZ_getNextCmdNm()-1,JUMP_CALL,
-				   updateList[s]->spriteCommandStart);
-
-		 assert(updateList[s]-sectorDraw==
-			slaveResult[i].gtable.entry[0]);
-		 s--;
-#if RECTCLIP
-		 if (s>=0)
-		    {parms[0].x=updateList[s]->xmin+viewCx;
-		     parms[0].y=updateList[s]->ymin+viewCy;
-		     parms[1].x=updateList[s]->xmax+viewCx;
-		     parms[1].y=updateList[s]->ymax+viewCy;
-		     EZ_userClip(parms);
-		    }
-#endif
-		 continue;
-		}
-	       }
-	 assert(0);
-	}
-     assert(getPicClass(slaveResult[i].tile)==TILE16BPP);
-     wallCell(slaveResult[i].tile,	/* GCC14: was EZ_specialDistSpr */
-	      slaveResult[i].poly,&slaveResult[i].gtable);
-
-#if 0
-     EZ_distSpr(DIR_NOREV,
-		UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|DRAW_GOURAU,
-		0,mapPic(slaveResult[i].tile),
-		slaveResult[i].poly,&slaveResult[i].gtable);
+#ifdef WALKPROBE
+     if (!(c->control&CTRL_SKIP) && (c->control&CTRL_FUNC)!=FUNC_UCLIP)
+	VDP1WALK((XyInt *)&c->ax);
 #endif
     }
- assert(s==-1);
+ /* the sprites of each slave sector, drawn by the master meanwhile, after its walls */
+ for (j=0,s=slaveDrawStart;j<nmSlaveSectors;j++,s--)
+    if (updateList[s]->spriteCommandStart)
+       {c=slaveCmd+slaveSectorEnd[j];
+	c->control|=JUMP_CALL;
+	c->link=updateList[s]->spriteCommandStart<<2;
+       }
+ first=EZ_appendCmds(slaveCmd,nmSlavePolys);
+ if (nmSlaveWater)
+    slaveWaterSurfaces(first);
 }
 
 void wallRenderSlaveMain(void)
@@ -3300,6 +3324,9 @@ void drawWalls(int k,MthMatrix *view)
  XyInt parms[2];
  int lastWallCmd;
  checkStack();
+ /* the last view's slave block may still be on its way to VRAM: its buffer is the traversal's
+    scratch and the slave's next block (drawSlaveWalls) */
+ while (dmaActive());
  /* split screen: view k>0 was traversed by the slave during view 0 -- drawn from the matrix
     and the viewer it was traversed with.  Otherwise the master traverses it here. */
  queued=(k>0 && k<=travQueued);
@@ -3365,6 +3392,7 @@ void drawWalls(int k,MthMatrix *view)
  if (slaveSize>updateListSize-1)
     slaveSize=updateListSize-1;
  slaveDrawStart=slaveSize;
+ slaveGourTop=EZ_gourTop();
  /* start slave: its share, then -- view 0 in split screen -- the views queued */
  slaveJob=(k==0 && travQueued)? 2: 0;
  if (slaveJob==2)

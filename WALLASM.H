@@ -199,13 +199,15 @@ static __inline__ void cellOut(short charNm,short colour,int t0,int t1,XyInt *po
     EZ_specialDistSpr2(charNm,poly,g);
 }
 
-static __inline__ void EZ_distSprVClip(short charNm,short colour,XyInt *poly,
-				       struct gourTable *g)
+/* GCC14: a wall cell fitted to the VDP1's range, for the master's cells (EZ_distSprVClip) and the
+   slave's (WALLS.C slaveCmdCell) alike.  Returns 0 when nothing of it can be drawn; else poly is
+   in range and [*t0p,*t1p) is the V window of its pattern, in 1/1024 (0, VCLIPONE: all of it).
+   `over` looks at |y| only: only V can be windowed (known limits above), and a wall's V edges
+   are vertical, so its x never enters the window.  `wide` (an |x| past the range) goes to
+   vdp1Range, after the window if there is one.  One copy for both: not inlined. */
+static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
 {int i,a,over=0,wide=0,t0,t1;
  XyInt src[4];
- /* `over` looks at |y| only: only V can be windowed (known limits above), and a wall's V edges
-    are vertical, so its x never enters the window.  `wide` (an |x| past the range) goes to
-    vdp1Range, after the window if there is one. */
  for (i=0;i<4;i++)
     {
 #if VDP1PROBE
@@ -220,54 +222,19 @@ static __inline__ void EZ_distSprVClip(short charNm,short colour,XyInt *poly,
      a=poly[i].x; if (a<0) a=-a;
      if (a>VDP1LIM) wide=1;
     }
+ *t0p=0;
+ *t1p=VCLIPONE;
  if (!(over|wide))
-    {VDP1WALK(poly);
-     cellOut(charNm,colour,0,VCLIPONE,poly,g);
-     return;
-    }
+    return 1;
  if (!over)
-    {if (!vdp1Range(poly))
-	return;
-     VDP1WALK(poly);
-     cellOut(charNm,colour,0,VCLIPONE,poly,g);
-     return;
-    }
-#if VDP1DIAG
- /* DIAGNOSTIC DISC -- fixes nothing, SHOWS.  A cell with a vertex outside the VDP1 range
-    is painted flat, clamped to the range, instead of textured:
-       RED     X overflow only
-       BLUE    Y overflow only
-       MAGENTA both
-    Axis, place and extent at a glance -- what no counter gives. */
- {int j,cx=0,cy=0;
-  for (j=0;j<4;j++)
-     {int a;
-      a=poly[j].x; if (a<0) a=-a; if (a>VDP1LIM) cx=1;
-      a=poly[j].y; if (a<0) a=-a; if (a>VDP1LIM) cy=1;
-      if (poly[j].x> VDP1LIM) poly[j].x= VDP1LIM;
-      if (poly[j].x<-VDP1LIM) poly[j].x=-VDP1LIM;
-      if (poly[j].y> VDP1LIM) poly[j].y= VDP1LIM;
-      if (poly[j].y<-VDP1LIM) poly[j].y=-VDP1LIM;
-     }
-  EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,
-	     (cx&&cy)? RGB(31,0,31): (cx? RGB(31,0,0): RGB(0,0,31)),
-	     poly,NULL);
-  return;
- }
-#endif
+    return vdp1Range(poly);
  t0=0; t1=VCLIPONE;
  for (i=0;i<2;i++)
     {int ya=poly[i].y,yb=poly[3-i].y,d=yb-ya,lo,hi,sp,sm;
      if (d==0)
 	{if (ya>VDP1LIM || ya<-VDP1LIM)
-	    {/* edge wholly out of range at constant height: nothing to window in V, it is
-		an overflow along U -- slid there */
-	     if (!vdp1Range(poly))
-		return;
-	     VDP1WALK(poly);
-	     cellOut(charNm,colour,0,VCLIPONE,poly,g);
-	     return;
-	    }
+	    return vdp1Range(poly);     /* edge wholly out of range at constant height: nothing
+					   to window in V, it is an overflow along U -- slid there */
 	 continue;
 	}
      sp=(( VDP1LIM-ya)<<10)/d;
@@ -280,7 +247,7 @@ static __inline__ void EZ_distSprVClip(short charNm,short colour,XyInt *poly,
  if (t0<0) t0=0;
  if (t1>VCLIPONE) t1=VCLIPONE;
  if (t1-t0<=0)
-    return;   /* nothing representable: the cell is over 3 screen heights away, off view */
+    return 0;   /* nothing representable: the cell is over 3 screen heights away, off view */
  for (i=0;i<4;i++)
     src[i]=poly[i];
  for (i=0;i<2;i++)
@@ -291,6 +258,40 @@ static __inline__ void EZ_distSprVClip(short charNm,short colour,XyInt *poly,
      poly[j].y=src[i].y+(((src[j].y-src[i].y)*t1)>>10);
     }
  if (wide && !vdp1Range(poly))
+    return 0;
+ *t0p=t0;
+ *t1p=t1;
+ return 1;
+}
+
+static __inline__ void EZ_distSprVClip(short charNm,short colour,XyInt *poly,
+				       struct gourTable *g)
+{int t0,t1;
+#if VDP1DIAG
+ /* DIAGNOSTIC DISC -- fixes nothing, SHOWS.  A cell with a vertex outside the VDP1's vertical
+    range is painted flat, clamped to the range, instead of textured:
+       BLUE    Y overflow only
+       MAGENTA both
+    Axis, place and extent at a glance -- what no counter gives. */
+ {int j,cx=0,cy=0;
+  for (j=0;j<4;j++)
+     if (poly[j].y>VDP1LIM || poly[j].y<-VDP1LIM)
+	cy=1;
+  if (cy)
+     {for (j=0;j<4;j++)
+	 {int a;
+	  a=poly[j].x; if (a<0) a=-a; if (a>VDP1LIM) cx=1;
+	  if (poly[j].x> VDP1LIM) poly[j].x= VDP1LIM;
+	  if (poly[j].x<-VDP1LIM) poly[j].x=-VDP1LIM;
+	  if (poly[j].y> VDP1LIM) poly[j].y= VDP1LIM;
+	  if (poly[j].y<-VDP1LIM) poly[j].y=-VDP1LIM;
+	 }
+      EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,cx? RGB(31,0,31): RGB(0,0,31),poly,NULL);
+      return;
+     }
+ }
+#endif
+ if (!vdp1Fit(poly,&t0,&t1))
     return;
  VDP1WALK(poly);
  cellOut(charNm,colour,t0,t1,poly,g);
