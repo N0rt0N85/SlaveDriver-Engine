@@ -913,7 +913,7 @@ void movePlayer(int inputEnd,int nmFrames)
 	    }
 	}
      else
-	{if (camera->flags & SPRITEFLAG_UNDERWATER)
+	{if (CFG_WATER && (camera->flags & SPRITEFLAG_UNDERWATER))
 	    {if (currentState.gameFlags & GAMEFLAG_DOLLPOWERMODE)
 		dollPowerControlInput(input,changeInput);
 	     else
@@ -963,7 +963,7 @@ void movePlayer(int inputEnd,int nmFrames)
 		input&=~PER_DGT_U;
 		camera->vel.y+=(int)(0.45*65536);
 	       }
-	    if (currentState.gameFlags & GAMEFLAG_DOLLPOWERMODE)
+	    if (CFG_DOLLPOWER && (currentState.gameFlags & GAMEFLAG_DOLLPOWERMODE))
 	       dollPowerControlInput(input,changeInput);
 	    else
 	       CFG_CONTROL(input,changeInput,pushed);
@@ -1975,8 +1975,8 @@ int runLevel(char *filename,int levelNm)
  delay(1);
 
  /* air meter stuff */
- airBase=addPic(TILE16BPP,meter_bubble+8,NULL,0);
- addPic(TILE16BPP,meter_back+8,NULL,0);
+ CFG_AIR_PICS(airBase=addPic(TILE16BPP,meter_bubble+8,NULL,0));
+ CFG_AIR_PICS(addPic(TILE16BPP,meter_back+8,NULL,0));
 
 
  SCL_SetColOffset(SCL_OFFSET_A,SCL_SP0|SCL_NBG0|SCL_RBG0,-255,-255,-255);
@@ -1984,7 +1984,7 @@ int runLevel(char *filename,int levelNm)
  EZ_setErase(240,0x0000);
 
  debugPrint("Loaded dynamic\n");
- initRoutePlotter();
+ CFG_ROUTE_INIT();
  initWallRenderer();
  initMap();
  markAnimTiles();
@@ -2440,7 +2440,7 @@ int runLevel(char *filename,int levelNm)
 	}
 
      enablePlax(1);
-     if (hitCamel)
+     if (CFG_CAMEL && hitCamel)
 	{/* la question de voyage rend la main ailleurs, ou plus tard : ce que l'esclave est
 	    en train de traverser ne vaudra plus rien */
 	 wallsPipeDiscard();
@@ -2657,7 +2657,7 @@ void main(void)
 	    currentState.currentLevel=hitCamel-100;
 	    mem_init();
 	    bup_saveGame();
-	    level=runMap(currentState.currentLevel);
+	    level=CFG_RUN_MAP(currentState.currentLevel);
 	    break;
 	 case 200 ... 399: /* teleporter */
 	    mem_init();

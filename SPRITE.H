@@ -142,6 +142,10 @@ char *doom_levelName(int lNm);                       /* DOOM_GAME.C, doomLevelNa
 #define CFG_TIC_UNIT         12                      /* SRUINS.C:2142, 2196                     */
 #define CFG_TIC_CAP          48                      /* SRUINS.C:2139-2140                      */
 #define CFG_PLACE(t)         game_placeObject(t)     /* OBJECT.C:212: 1 = consumed by game/doom */
+/* OBJECT.C:213: game_placeObject places every Doom object, so the engine's switch is dead code for
+   Doom -- `if (0)` lets the compiler drop it, and the PowerSlave constructors it alone reaches
+   leave the link (the Doom build links with --gc-sections, Makefile) */
+#define CFG_ENGINE_PLACE     if (0)
 #define CFG_PLAYER_TIC()     doom_playerTic()        /* SRUINS.C:2143, before runObjects()      */
 #define CFG_DOOR_FIT         GP_PLAYER_FIT_HEIGHT    /* AI.C:4304 SHORTOPENING threshold (56)   */
 #define CFG_SPRITE_NEARCLIP  F(10)                   /* WALLS.C:2701                            */
@@ -192,6 +196,7 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_TIC_UNIT         2
 #define CFG_TIC_CAP          8
 #define CFG_PLACE(t)         0
+#define CFG_ENGINE_PLACE
 #define CFG_PLAYER_TIC()
 #define CFG_DOOR_FIT         80
 #define CFG_SPRITE_NEARCLIP  F(32)
@@ -256,6 +261,16 @@ extern int mapOn;                                    /* SRUINS.C:85             
 #define CFG_DRAW_MESSAGE()     doom_drawMessage()                /* SRUINS.C:2211 (after drawMessage) */
 #define CFG_DRAW_STATBAR(f)    doom_drawStatBar()                /* SRUINS.C:2212                 */
 #define CFG_DRAW_AIRMETER(f)                                     /* SRUINS.C:2214: no air meter   */
+#define CFG_AIR_PICS(x)                                          /* SRUINS.C:1978-1979: nor its two pics -- meter_bubble/back, 16 KB, leave the link */
+/* PowerSlave paths a Doom level never takes, compiled out so their code leaves the link: water
+   (doom2ps sets no SECFLAG_WATER), the doll power (a PowerSlave save in the same backup file could
+   switch it on under Doom), the route plotter only PowerSlave's monsters read, the camel's map
+   screen and travel question (hitCamel is only set by camel_func). */
+#define CFG_WATER              0                                 /* SRUINS.C:916                  */
+#define CFG_DOLLPOWER          0                                 /* SRUINS.C:966                  */
+#define CFG_ROUTE_INIT()       ((void)0)                         /* SRUINS.C:1987                 */
+#define CFG_CAMEL              0                                 /* SRUINS.C:2439                 */
+#define CFG_RUN_MAP(l)         (l)                               /* SRUINS.C:2656                 */
 #else
 #define CFG_NMFONTS            3
 #define CFG_FONTLIST_DEF       static unsigned char *fontList[]={brianFont,brianFont,bigFont,NULL};
@@ -274,6 +289,12 @@ extern int mapOn;                                    /* SRUINS.C:85             
 #define CFG_DRAW_MESSAGE()
 #define CFG_DRAW_STATBAR(f)    drawStatBar(f)
 #define CFG_DRAW_AIRMETER(f)   drawAirMeter(f)
+#define CFG_AIR_PICS(x)        x
+#define CFG_WATER              1
+#define CFG_DOLLPOWER          1
+#define CFG_ROUTE_INIT()       initRoutePlotter()
+#define CFG_CAMEL              1
+#define CFG_RUN_MAP(l)         runMap(l)
 #endif
 
 /* VDP1 VRAM slots per pic class, in PIC.H order (TILE16BPP walls, TILE8BPP sprites, TILEVDP,

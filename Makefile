@@ -101,6 +101,19 @@ ifeq ($(shell $(PYTHON) tools/gameparams.py --get GAME $(PARAMS)),doom)
   CDDIR    := cd_doom
   DOOMWAD  ?= ../Mimas/cd/data/DOOM1.WAD
   WAD2HUD  := $(wildcard tools/doom2ps/wad2hud.py)
+  # MAIN keeps only what Doom reaches from _start: PowerSlave's object constructors (compiled out
+  # by CFG_ENGINE_PLACE, OBJECT.C:213), the monster AI only they call, the HUD art and air meter
+  # the CFG_* hooks replaced... leave the link, and every byte they free goes to the tile pool
+  # (make_e1m1.resident_pool reads build/doom/MAIN.map).  One section per function and datum,
+  # --gc-sections on MAIN.elf only.  The SBL archive is linked as COFF: ld never sweeps it, but it
+  # does not follow its relocations either -- a symbol only an SBL member uses would go and the
+  # member's reference resolve to nothing, silently (measured: memcmp/strncmp/strncpy for the CD
+  # file system, the rotation scroll's SclDisplayX/Y...).  tools/sbl_refs.py gives those symbols
+  # to ld as roots (--roots), then checks the linked ELF (--check).  PowerSlave and Duke link
+  # exactly as before.
+  GAME_CFLAGS  := -ffunction-sections -fdata-sections
+  MAIN_LDFLAGS  = -Wl,--gc-sections $$($(PYTHON) tools/sbl_refs.py --roots $(NM) $(LIBDIR)/SEGA_SAT.A $(filter %.o,$^))
+  MAIN_GCCHECK := 1
 endif
 
 # ---------------------------------------------------------------------------------------------
@@ -122,7 +135,8 @@ endif
 # ---------------------------------------------------------------------------------------------
 INCLUDES := -Isdk/sbl6/include -Ishim -I. -I$(BUILD) $(GAME_INC)
 CFLAGS   := -x c -m2 -O2 -std=gnu89 -fgnu89-inline -fcommon -fno-builtin -Wall -g $(DEFINES) $(INCLUDES) -MMD -MP \
-            -fno-delete-null-pointer-checks -fno-toplevel-reorder -fno-strict-aliasing -fwrapv -fno-aggressive-loop-optimizations
+            -fno-delete-null-pointer-checks -fno-toplevel-reorder -fno-strict-aliasing -fwrapv -fno-aggressive-loop-optimizations \
+            $(GAME_CFLAGS)
 ASFLAGS  := -m2 -g $(DEFINES) $(INCLUDES)
 # Link: no crt0/crti from the toolchain (crt0.s is ours), our layout, map file, newlib syscall
 # stubs.  -specs=nosys.specs appends `--start-group -lgcc -lc -lnosys --end-group` after our
@@ -277,7 +291,9 @@ $(BUILD)/INIT.elf:   $(INIT_OBJS)   saturn.ld
 $(BUILD)/MAIN.elf:   $(MAIN_OBJS)   saturn.ld
 $(BUILD)/KEYGEN.elf: $(KEYGEN_OBJS) saturn.ld
 $(ELFS):
-	$(LD) $(LDFLAGS) -Wl,-Map,$(@:.elf=.map) $(filter %.o,$^) $(LIBS) -o $@
+	$(LD) $(LDFLAGS) $(if $(filter MAIN.elf,$(notdir $@)),$(MAIN_LDFLAGS)) -Wl,-Map,$(@:.elf=.map) $(filter %.o,$^) $(LIBS) -o $@
+	@if [ -n "$(MAIN_GCCHECK)" ] && [ "$(notdir $@)" = "MAIN.elf" ]; then \
+	  $(PYTHON) tools/sbl_refs.py --check $(NM) $(LIBDIR)/SEGA_SAT.A $(@:.elf=.map) $@ || { rm -f $@; exit 1; }; fi
 	@# GCC14: regression check for the COFF section-relative relocation bug (see LIBS above):
 	@# INT_SetScuFunc must read its trampoline table exactly at int.o's .data.
 	@t=$$($(OBJDUMP) -d $@ | awk '/<_INT_SetScuFunc>:/,/rts/' | grep -o '! 60[0-9a-f]*' | sed -n 2p | cut -c3-); \
