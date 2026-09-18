@@ -165,7 +165,11 @@ void doom_playerFrame(unsigned short input,unsigned short pushed)
  doomPlayer.lastFloor=camera->floorSector;
  doomPlayer.lastVelY=camera->vel.y;
  camera->friction=F(1);
- camera->gravity=DOOM_GRAVITY_FR;
+ /* En traversee, la camera flotte : sans plancher sous elle, la gravite la ferait tomber hors
+    du monde sans retour possible. */
+ camera->gravity=noClipCheat?0:DOOM_GRAVITY_FR;
+ if (noClipCheat)
+    camera->vel.y=0;
  camera->vel.x=MTH_Mul(doomPlayer.momx,DOOM_VEL_SCALE);
  camera->vel.z=MTH_Mul(doomPlayer.momz,DOOM_VEL_SCALE);
 }
@@ -344,6 +348,53 @@ void doom_useRefused(void)
     doom_playerSound(sfx_noway);
 }
 
+/* --- bascules de test (rien de tout cela n'est dans Doom) -------------------------------------
+   Meme idiome que les accords du moteur (SRUINS.C, boucle principale) : tenir la combinaison, une
+   bascule par appui, et une variante a trois boutons de face pour les pads dont les gachettes ne
+   rendent que de l'analogique.  Toutes les lettres avec L+R sont deja prises par le moteur --
+   X mipmapping, B LOD, Z brume, Y profil, et leurs variantes X+Y+Z, A+B+Z, A+C+Z, A+B+C -- donc
+   ces trois-ci passent par la croix :
+      L+R+HAUT    (ou A+B+X)   toutes les armes implementees, munitions au maximum
+      L+R+BAS     (ou A+C+X)   invulnerabilite
+      L+R+GAUCHE  (ou B+C+X)   traversee des murs
+   Tenir L et R ensemble annule leurs deux poussees laterales ; la croix fait avancer ou tourner
+   le temps de l'appui, sans consequence.  Les bits du pad sont ACTIFS BAS -- 0 = enfoncee. */
+#define DOOM_CHEAT_WEAPONS ((1<<wp_fist)|(1<<wp_pistol)|(1<<wp_shotgun)|\
+			    (1<<wp_chaingun)|(1<<wp_missile)|(1<<wp_plasma))
+static char doomCheatGod;
+
+/* Vrai une seule fois par appui de `chord` ou de `alt` ; `held` retient l'accord jusqu'au relache. */
+static int doomChord(unsigned short input,unsigned short chord,unsigned short alt,char *held)
+{if (((~input)&chord)==chord || ((~input)&alt)==alt)
+    {if (*held)
+	return 0;
+     *held=1;
+     return 1;
+    }
+ *held=0;
+ return 0;
+}
+
+static void doomCheatTic(void)
+{static char weaponsHeld,godHeld,clipHeld;
+ unsigned short input=doomPlayer.input;
+ int i;
+ if (doomChord(input,PER_DGT_TL|PER_DGT_TR|PER_DGT_U,PER_DGT_A|PER_DGT_B|PER_DGT_X,&weaponsHeld))
+    {doomPlayer.weaponOwned=DOOM_CHEAT_WEAPONS;
+     for (i=0;i<DOOM_NUMAMMO;i++)
+	doomPlayer.ammo[i]=doomPlayer.maxAmmo[i];
+     doom_setMessage("VERY HAPPY AMMO ADDED");
+    }
+ if (doomChord(input,PER_DGT_TL|PER_DGT_TR|PER_DGT_D,PER_DGT_A|PER_DGT_C|PER_DGT_X,&godHeld))
+    {doomCheatGod=!doomCheatGod;
+     doom_setMessage(doomCheatGod?"DEGREELESSNESS MODE ON":"DEGREELESSNESS MODE OFF");
+    }
+ if (doomChord(input,PER_DGT_TL|PER_DGT_TR|PER_DGT_L,PER_DGT_B|PER_DGT_C|PER_DGT_X,&clipHeld))
+    {noClipCheat=!noClipCheat;
+     doom_setMessage(noClipCheat?"NO CLIPPING MODE ON":"NO CLIPPING MODE OFF");
+    }
+}
+
 /* P_PlayerThink for one 35 Hz tic (CFG_PLAYER_TIC, before runObjects()): level clock + nukage,
    death, movement, sector damage, fire button, psprites, counters, flash. */
 void doom_playerTic(void)
@@ -353,6 +404,7 @@ void doom_playerTic(void)
  doomPlayer.fire=!(doomPlayer.input & IMASK(ACTION_FIRE)) ||
     (doomPlayer.pushed & IMASK(ACTION_FIRE));
  doomPlayer.pushed=0;
+ doomCheatTic();
  doom_muzzleTic();                             /* avant les psprites : l'eclair vit deux tics */
  if (currentState.health<=0)
     {doomDeathTic();
@@ -378,6 +430,8 @@ void doom_playerTic(void)
 void doom_playerDamage(int damage,Object *source)
 {int saved;
  if (damage<=0 || currentState.health<=0)
+    return;
+ if (doomCheatGod)
     return;
  if (doomPlayer.armorType)
     {saved=(doomPlayer.armorType==1)?damage/3:damage/2;

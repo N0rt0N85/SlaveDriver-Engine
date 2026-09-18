@@ -79,6 +79,7 @@ void movePushBlock(int block,int dx,int dy,int dz);
 
 /* functions to support ai routines */
 void moveCamera(void);
+extern char noClipCheat;                        /* la camera traverse les murs (cheat de test) */
 
 /* in order of priority */
 #define COLLIDE_SPRITE (0x8<<16)
