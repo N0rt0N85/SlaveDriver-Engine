@@ -261,6 +261,12 @@ Sprite *doom_playerLineAttack(int yaw,int pitch,Fixed32 range,int damage,int mel
 	 doom_damage(spr,(Object *)player,(Object *)player,damage);
 	 return spr;
 	}
+     if (mpIsPlayer(spr) && o && doom_targetAlive(o))
+	{/* GCC14: friendly fire, as Doom's co-op: a player is MF_SHOOTABLE and bleeds */
+	 doom_spawnBlood(&hit,hitSec,damage);
+	 doom_damage(spr,(Object *)player,(Object *)player,damage);
+	 return spr;
+	}
      doom_spawnPuff(&hit,hitSec,melee);
      return NULL;
     }
