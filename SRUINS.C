@@ -2731,7 +2731,7 @@ int runLevel(char *filename,int levelNm)
 			 (a line wholly past one edge is skipped).  WALLASM.H vdp1WalkProbe.
 		 big  : those cells / their part of walk.  Things are not counted.
 		 rot  : walk if the walls were drawn from patterns turned a quarter --
-			vertical lines -- the rest as drawn (WALLASM.H vdp1RotProbe)
+			vertical lines -- the rest as drawn (WALLASM.H vdp1WalkProbe)
 	 Solo only: split screen has its c: line on this row.  The ASSERT build has extra: at
 	 its left end, so the line moves right there. */
      if (mpPlayers==1)

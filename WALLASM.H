@@ -44,7 +44,7 @@ static __inline__ XyInt *probeVDP1(XyInt *poly)
      vdp1Walk     every cell: lines x the wider of A-B and D-C
      vdp1Big      the cells whose count passes VDP1BIGWALK, a quarter of the 3D window ...
      vdp1BigWalk  ... re-counted on 16 of their lines with the pre-clip applied
-     vdp1MaxX/Y   the largest |x| and |y| sent, beyond 1023 out of the VDP1's range
+     vdp1MaxX/Y   the largest |x| and |y| sent (vdp1Range holds them to VDP1LIM)
      vdp1RotWalk  the same walk if every wall were drawn from a pattern turned a quarter:
                   lines from edge A-B to edge D-C, vertical on a wall (a wall = its V edges
                   A-D and B-C vertical on screen), everything else counted as drawn
@@ -56,55 +56,26 @@ static __inline__ int vdp1Abs(int a)
 {return a<0? -a: a;
 }
 
-static __inline__ int vdp1RotProbe(XyInt *q)
-{int ab,dc,ad,bc,lines,len,walk,j;
- ab=vdp1Abs(q[1].x-q[0].x); j=vdp1Abs(q[1].y-q[0].y); if (j>ab) ab=j;
- dc=vdp1Abs(q[2].x-q[3].x); j=vdp1Abs(q[2].y-q[3].y); if (j>dc) dc=j;
- ad=vdp1Abs(q[3].x-q[0].x)+vdp1Abs(q[3].y-q[0].y);
- bc=vdp1Abs(q[2].x-q[1].x)+vdp1Abs(q[2].y-q[1].y);
- lines=(ab>dc? ab: dc)+1;
- len=(ad>bc? ad: bc)+1;
- if (lines>8192) lines=8192;
- if (len>16384) len=16384;
- walk=lines*len;
- if (walk>VDP1BIGWALK)
-    {int in=0;
-     for (j=1;j<32;j+=2)
-	{int px=q[0].x+(((q[1].x-q[0].x)*j)>>5),py=q[0].y+(((q[1].y-q[0].y)*j)>>5);
-	 int rx=q[3].x+(((q[2].x-q[3].x)*j)>>5),ry=q[3].y+(((q[2].y-q[3].y)*j)>>5);
-	 if ((px<viewXmin && rx<viewXmin) || (px>viewXmax && rx>viewXmax) ||
-	     (py<viewYmin && ry<viewYmin) || (py>viewYmax && ry>viewYmax))
-	    continue;                   /* pre-clipped */
-	 in+=vdp1Abs(rx-px)+vdp1Abs(ry-py)+1;
-	}
-     if (in>16*16384) in=16*16384;
-     walk=(in>>4)*lines;
-    }
- return walk;
-}
-
-static __inline__ void vdp1WalkProbe(XyInt *q)
-{int ad,bc,ab,dc,lines,len,walk,j;
- for (j=0;j<4;j++)
-    {int a=vdp1Abs(q[j].x);
-     if (a>vdp1MaxX) vdp1MaxX=a;
-     a=vdp1Abs(q[j].y);
-     if (a>vdp1MaxY) vdp1MaxY=a;
-    }
- ad=vdp1Abs(q[3].x-q[0].x); j=vdp1Abs(q[3].y-q[0].y); if (j>ad) ad=j;
- bc=vdp1Abs(q[2].x-q[1].x); j=vdp1Abs(q[2].y-q[1].y); if (j>bc) bc=j;
- ab=vdp1Abs(q[1].x-q[0].x)+vdp1Abs(q[1].y-q[0].y);
- dc=vdp1Abs(q[2].x-q[3].x)+vdp1Abs(q[2].y-q[3].y);
- lines=(ad>bc? ad: bc)+1;
- len=(ab>dc? ab: dc)+1;
+/* the walk of the lines drawn from edge p0-p1 to edge q0-q1, p0-q0 the first line: as many lines
+   as the longer edge has pixels, each |dx|+|dy| long; *big set when it passes VDP1BIGWALK and is
+   re-counted on 16 of its lines with the pre-clip applied */
+static int vdp1WalkEdges(XyInt *p0,XyInt *p1,XyInt *q0,XyInt *q1,int *big)
+{int e,f,j,lines,len,walk;
+ e=vdp1Abs(p1->x-p0->x); j=vdp1Abs(p1->y-p0->y); if (j>e) e=j;
+ f=vdp1Abs(q1->x-q0->x); j=vdp1Abs(q1->y-q0->y); if (j>f) f=j;
+ lines=(e>f? e: f)+1;
+ e=vdp1Abs(q0->x-p0->x)+vdp1Abs(q0->y-p0->y);
+ f=vdp1Abs(q1->x-p1->x)+vdp1Abs(q1->y-p1->y);
+ len=(e>f? e: f)+1;
  if (lines>8192) lines=8192;          /* keeps lines x len under 2^27 */
  if (len>16384) len=16384;
  walk=lines*len;
- if (walk>VDP1BIGWALK)
+ *big=walk>VDP1BIGWALK;
+ if (*big)
     {int in=0;
      for (j=1;j<32;j+=2)
-	{int px=q[0].x+(((q[3].x-q[0].x)*j)>>5),py=q[0].y+(((q[3].y-q[0].y)*j)>>5);
-	 int qx=q[1].x+(((q[2].x-q[1].x)*j)>>5),qy=q[1].y+(((q[2].y-q[1].y)*j)>>5);
+	{int px=p0->x+(((p1->x-p0->x)*j)>>5),py=p0->y+(((p1->y-p0->y)*j)>>5);
+	 int qx=q0->x+(((q1->x-q0->x)*j)>>5),qy=q0->y+(((q1->y-q0->y)*j)>>5);
 	 if ((px<viewXmin && qx<viewXmin) || (px>viewXmax && qx>viewXmax) ||
 	     (py<viewYmin && qy<viewYmin) || (py>viewYmax && qy>viewYmax))
 	    continue;                   /* pre-clipped */
@@ -112,12 +83,26 @@ static __inline__ void vdp1WalkProbe(XyInt *q)
 	}
      if (in>16*16384) in=16*16384;
      walk=(in>>4)*lines;
-     vdp1Big++;
+    }
+ return walk;
+}
+
+static void vdp1WalkProbe(XyInt *q)
+{int j,big,walk;
+ for (j=0;j<4;j++)
+    {int a=vdp1Abs(q[j].x);
+     if (a>vdp1MaxX) vdp1MaxX=a;
+     a=vdp1Abs(q[j].y);
+     if (a>vdp1MaxY) vdp1MaxY=a;
+    }
+ walk=vdp1WalkEdges(q,q+3,q+1,q+2,&big);        /* as drawn: from A-D to B-C */
+ if (big)
+    {vdp1Big++;
      vdp1BigWalk+=walk>>6;
     }
  vdp1Walk+=walk>>6;
  if (q[0].x==q[3].x && q[1].x==q[2].x)
-    walk=vdp1RotProbe(q);
+    walk=vdp1WalkEdges(q,q+1,q+3,q+2,&big);     /* a wall, turned: from A-B to D-C */
  vdp1RotWalk+=walk>>6;
 }
 #define VDP1WALK(q) vdp1WalkProbe(q)
@@ -145,7 +130,7 @@ static __inline__ void vdp1WalkProbe(XyInt *q)
    one side) is clamped where it lies, off screen.  Returns 0 when the quad cannot show: all four
    corners past one side of the range, or at or past one edge of the view (at most the view's
    last row or column, which the neighbouring cell draws too). */
-static __inline__ void vdp1Slide(XyInt *p,const XyInt *q)
+static void __attribute__((noinline)) vdp1Slide(XyInt *p,const XyInt *q)
 {int k,pc,qc,lim,t;
  for (k=0;k<2;k++)
     {pc=k? p->y: p->x;
@@ -168,7 +153,7 @@ static __inline__ void vdp1Slide(XyInt *p,const XyInt *q)
     }
 }
 
-static __inline__ int vdp1Range(XyInt *q)
+static int vdp1Range(XyInt *q)
 {int i,xp=0,xm=0,yp=0,ym=0;
  for (i=0;i<4;i++)
     {xp+=q[i].x>VDP1LIM; xm+=q[i].x<-VDP1LIM;
