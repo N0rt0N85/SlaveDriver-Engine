@@ -921,5 +921,10 @@ short doom_playerBodySeq(Sprite *body,Sprite *viewer,int health)
  seq=doom_seq(st->sprite,frame,view);
  if (seq<0 || seq>=level_nmSequences)
     return -1;
+ /* a level converted without the living marine (doom2ps before PLAYER_BODY_STATES) has the
+    family for its corpse only: the frames before it are EMPTY sequences, and an empty one
+    draws the next populated frame -- the corpse walking about.  Not drawn instead. */
+ if (level_sequence[seq+1]==level_sequence[seq])
+    return -1;
  return (short)seq;
 }

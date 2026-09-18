@@ -60,7 +60,12 @@ ROT_FLAG = 0x8000                 # convention HB d'AI.C:2478 / AICOMMON.H:5
 ANIM_RANGE = range(172, 204)      # markAnimTiles PIC.C:129-161 : doit rester < 0
 MAXNMPICS = 800                   # PIC.C:32
 SEQ_BLOCK_MAX = 1024 * 1024       # SEQUENCE.C:30
-MT_PLAYER = 0                     # jamais dessine (vue subjective) : PLAY ne garde que ses cadavres
+MT_PLAYER = 0                     # vue subjective : son propre corps n'est jamais dessine...
+# ... mais en co-op local les AUTRES joueurs le sont (DOOM_PLAYER.C doom_playerBodySeq) : debout, les
+# 4 frames de course, le corps a terre. Rien d'autre (tir, douleur, agonie : le moteur ne les montre
+# pas). Coute les tuiles de PLAYA-D (20 lumps a rotations) ; PLAYN est sans rotation.
+PLAYER_BODY_STATES = ("S_PLAY", "S_PLAY_RUN1", "S_PLAY_RUN2", "S_PLAY_RUN3", "S_PLAY_RUN4",
+                      "S_PLAY_DIE7")
 
 SpriteSet = namedtuple("SpriteSet", "tiles frames chunks sequence sequenceMap families budget warnings")
 FrameRec = dict
@@ -116,16 +121,20 @@ def rotations(wad, family):
     return out, has_rot
 
 
+def player_body_states(ids):
+    """indices des PLAYER_BODY_STATES"""
+    by_name = {st["name"]: i for i, st in enumerate(ids["states"])}
+    return [by_name[n] for n in PLAYER_BODY_STATES]
+
+
 def families_for(ids, mobj_types, wad):
-    """sprite -> {spritenum, maxframe, rotations, reachable_frames, mts} pour les MT donnes (MT_PLAYER
-    exclu : il n'a pas de vue a la 3e personne, ses cadavres MISC62/68/69 restent)."""
+    """sprite -> {spritenum, maxframe, rotations, reachable_frames, mts} pour les MT donnes. MT_PLAYER :
+    seulement PLAYER_BODY_STATES, dans tout niveau (le co-op se lance partout)."""
     states = ids["states"]
     names = ids["sprite_names"]
     fam = {}
-    for mt in sorted(set(mobj_types)):
-        if mt == MT_PLAYER:
-            continue
-        for s in wad2snd.reachable_states(ids, mt):
+    for mt in sorted(set(mobj_types) | {MT_PLAYER}):
+        for s in player_body_states(ids) if mt == MT_PLAYER else wad2snd.reachable_states(ids, mt):
             st = states[s]
             spr = names[st["sprite"]]
             d = fam.setdefault(spr, dict(spritenum=st["sprite"], maxframe=0, reachable_frames=set(),
@@ -212,10 +221,8 @@ def check_reachable(ss, ids, mobj_types, close_spawns=True, tile_base=0):
     states = ids["states"]
     problems = []
     tested = 0
-    for mt in sorted(mts):
-        if mt == MT_PLAYER:
-            continue
-        for s in wad2snd.reachable_states(ids, mt):
+    for mt in sorted(mts | {MT_PLAYER}):
+        for s in player_body_states(ids) if mt == MT_PLAYER else wad2snd.reachable_states(ids, mt):
             st = states[s]
             for v in range(8):
                 tested += 1
