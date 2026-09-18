@@ -18,6 +18,8 @@ WaveFace *level_waveFace;
 unsigned char (*level_cutPlane)[][MAXCUTSECTORS];
 sOrderPair *level_orderPair;
 int level_nmOrderPairs;
+unsigned char *level_reject;
+int level_nmRejectClasses;
 
 int level_nmSectors;
 int level_nmWalls;
@@ -80,10 +82,20 @@ int loadLevel(int fd,int tileBase)
  if (used<total)
     {fs_read(fd,(char *)&level_nmOrderPairs,4);
      used+=4;
-     assert(level_nmOrderPairs>0);
-     assert(used+(int)(level_nmOrderPairs*sizeof(sOrderPair))==total);
-     LOADPART(level_orderPair,sOrderPair,level_nmOrderPairs);
+     assert(level_nmOrderPairs>=0);
+     if (level_nmOrderPairs)
+	{LOADPART(level_orderPair,sOrderPair,level_nmOrderPairs);}
     }
+ /* GCC14: the reject table (SLEVEL.H), optional too, after the pairs */
+ level_nmRejectClasses=0;
+ level_reject=NULL;
+ if (used<total)
+    {fs_read(fd,(char *)&level_nmRejectClasses,4);
+     used+=4;
+     assert(level_nmRejectClasses>0);
+     LOADPART(level_reject,unsigned char,((level_nmRejectClasses*(level_nmRejectClasses+1)>>1)+7)>>3);
+    }
+ assert(used==total);
 
  for (i=1;i<head->nmTextureIndexes;i+=2)
     level_texture[i]+=tileBase;

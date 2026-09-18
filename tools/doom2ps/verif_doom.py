@@ -1043,6 +1043,43 @@ def main(argv=None):
         f"plafond {plafond} ({100.0 * plafond / max(1, possibles):.1f} %), "
         f"{paires} paires valides dont la boucle laisse tomber {paires - atteint}")
 
+    # 21. TABLE DE REJET (HITSCAN.C canSee, SLEVEL.H) : rejouee contre le REJECT du WAD, paire de
+    #     secteurs Doom par paire. Une paire que la table rejette et pas Doom rendrait un monstre
+    #     AVEUGLE la ou Doom le fait voir : ECHEC. Une paire que Doom rejette et pas la table n'est
+    #     qu'un trace de plus (le ET des penombres fondues ou des deux sens, doom3d.classes_de_rejet) :
+    #     comptee.
+    Rj = L["reject"]
+    try:
+        dsec = json.load(open(a.geom, encoding="utf-8"))["doom_sector"]
+    except Exception as e:
+        dsec = None
+        put("table de rejet", True, f"non teste ({e})")
+    if dsec is not None and Rj is None:
+        put("table de rejet : absente, tous les secteurs en classe 0",
+            all(s["rejectClass"] == 0 for s in S))
+    elif dsec is not None:
+        n, tb = Rj["classes"], Rj["table"]
+        Wd = wadmod_of(a)
+        nd = len(Wd.map_lumps(a.map)["SECTORS"]) // 26
+        lump = bytes(Wd.map_lumps(a.map).get("REJECT") or b"")
+        lump += bytes(max(0, (nd * nd + 7) // 8 - len(lump)))
+        cls = {}
+        melange = [d for si, d in enumerate(dsec) if cls.setdefault(d, S[si]["rejectClass"]) != S[si]["rejectClass"]]
+        inventees = perdues = gardees = 0
+        for da, ca in cls.items():
+            for db, cb in cls.items():
+                u, v = min(ca, cb), max(ca, cb)
+                p, q = u * n - u * (u - 1) // 2 + v - u, da * nd + db
+                t, d = (tb[p >> 3] >> (p & 7)) & 1, (lump[q >> 3] >> (q & 7)) & 1
+                inventees += t and not d
+                perdues += d and not t
+                gardees += t and d
+        put("table de rejet : aucune paire que Doom ne rejette pas, une classe par secteur Doom",
+            not inventees and not melange,
+            f"{len(cls)} secteurs Doom -> {n} classes, {len(tb)} o ; {gardees} paires rejetees, "
+            f"{perdues} rendues au trace (penombres, un seul sens), {inventees} inventees"
+            + (f", secteurs Doom a plusieurs classes {melange[:4]}" if melange else ""))
+
     print(f"\n  {len(OK)} OK, {len(FAIL)} echec(s)" + (f" : {FAIL}" if FAIL else ""))
     return 1 if FAIL else 0
 

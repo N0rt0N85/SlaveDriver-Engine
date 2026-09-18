@@ -260,7 +260,9 @@ def assemble_doom(G, T, sprites, sounds, objects, params, sky, palette, switches
         # (doom3d.plans_de_coupe). Liste vide quand aucune fusion n'a eu lieu.
         cutPlane=[list(r) for r in (G.get("cutPlane") or [])],
         # Paires d'ordre : bloc optionnel apres le cutPlane (tools/ordre.py).
-        orderPairs=[tuple(p) for p in (G.get("orderPairs") or [])])
+        orderPairs=[tuple(p) for p in (G.get("orderPairs") or [])],
+        # Table de rejet : bloc optionnel apres les paires (doom3d.classes_de_rejet).
+        reject=G.get("reject"))
     snd = dict(map=list(sounds["map"]),
                sounds=[dict(rate=s["rate"], bps=s["bps"], loopStart=s["loopStart"], pcm=s["pcm"])
                        for s in sounds["sounds"]])
@@ -347,8 +349,8 @@ def budget_tuiles(G, W, ids, sinfo, sky, palette, remap, objects, params, sounds
 
 
 # Le programme dont la fin (_end) borne la HWRAM libre : celui du disque de TEST (NDEBUG=1
-# STATUSTEXT=1), le plus gros des disques qu'on grave -- le disque propre et celui sans sonde
-# `walk` (NOWALK=1) sont plus petits et gardent plus de marge. Le build ASSERT (build/doom, sans
+# STATUSTEXT=1) -- le disque propre est plus petit et garde plus de marge ; celui de la sonde
+# `walk` (WALK=1), ~1 Ko plus gros, en garde un peu moins. Le build ASSERT (build/doom, sans
 # NDEBUG=1) est ~12 Ko plus gros : il ne sert qu'a deboguer, et sur les niveaux les plus serres il
 # n'a plus les 24 Ko de la sauvegarde. Le map doit etre celui du code courant : reconstruire le
 # disque de test avant de convertir.

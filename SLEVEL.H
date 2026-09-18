@@ -14,6 +14,13 @@ struct
  unsigned char pad;
 } sOrderPair;
 
+/* GCC14: the reject table -- which sectors can never see which: Doom's REJECT, which P_CheckSight
+   reads before it traces a line.  Sectors with the same row share a class (sSectorType
+   rejectClass).  The table is symmetric -- the converter keeps a pair only when both ways
+   reject it -- so it holds the triangle a <= b of the n classes: bit a*n-a*(a-1)/2+b-a, low bit
+   first, set = a and b never see each other.  OPTIONAL, after the ordering pairs, which are then
+   there even when there are none: int n, then (n*(n+1)/2+7)/8 bytes.  Retail levels have none. */
+
 struct sLevelHeader
 {int nmSectors;
  int nmWalls;
@@ -198,7 +205,7 @@ typedef struct
  short light; /*lighting level (-16 to 16)*/
  short flags;
  char cutIndex,cutChannel;
- short pad;
+ short rejectClass;     /* GCC14: its row and column in the reject table (LEVEL.C); was pad, 0 in retail */
 } sSectorType;
 
 #define TILEFLAG_VDP2     0x01

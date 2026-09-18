@@ -1396,7 +1396,7 @@ class Builder:
             object=0, center=[acc[0] // n, acc[1] // n, acc[2] // n],
             floorLevel=(lvl // nl) if nl else 0,
             firstWall=first, lastWall=last, light=SECTOR_LIGHT, flags=0,
-            cutIndex=0, cutChannel=0, pad=0))
+            cutIndex=0, cutChannel=0, rejectClass=0))
         if nl == 0:
             self.stats["secteurs_sans_sol"] += 1
 

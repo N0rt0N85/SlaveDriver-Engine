@@ -34,7 +34,7 @@ _S = {k: struct.Struct(f) for k, f in dict(
 # field order of each record = order of the struct in SLEVEL.H (and of lev.py's unpack)
 ROW = dict(
     sector=lambda s: (s['object'], *s['center'], s['floorLevel'], s['firstWall'], s['lastWall'], s['light'],
-                      s['flags'], s['cutIndex'], s['cutChannel'], s['pad']),
+                      s['flags'], s['cutIndex'], s['cutChannel'], s['rejectClass']),
     wall=lambda w: (*w['normal'], w['d'], w['object'], w['flags'], w['textures'], w['firstFace'], w['lastFace'],
                     w['firstVertex'], w['lastVertex'], *w['v'], w['nextSector'], w['firstLight'],
                     w['pixelLength'], w['tileLength'], w['tileHeight']),
@@ -110,20 +110,35 @@ def level_parts(lv):
         # chargeur connait la taille totale du bloc niveau et sait donc s'il reste des octets :
         # un .LEV retail s'arrete au cutPlane et n'en lit aucun (LEVEL.C, voir tools/ordre.py
         # pour ce que ces paires corrigent).
-        ('orderPair', _paires_d_ordre(lv.get('orderPairs') or [])),
+        ('orderPair', _paires_d_ordre(lv.get('orderPairs') or [], suivies=bool(lv.get('reject')))),
+        # TABLE DE REJET -- bloc OPTIONNEL lui aussi, apres les paires (SLEVEL.H) : quels secteurs
+        # ne se voient jamais, par classes -- le REJECT de Doom (doom3d.classes_de_rejet).
+        ('reject', _rejet(lv.get('reject'))),
     ]
 
 
-def _paires_d_ordre(paires):
-    """int n, puis n x (short a, short b, uchar plane, uchar pad) -- 6 octets par entree."""
+def _paires_d_ordre(paires, suivies=False):
+    """int n, puis n x (short a, short b, uchar plane, uchar pad) -- 6 octets par entree.  Sans
+    paire, rien -- sauf si un bloc suit (`suivies`) : n = 0, pour que le chargeur sache ou il est."""
     if not paires:
-        return b''
+        return struct.pack('>i', 0) if suivies else b''
     out = [struct.pack('>i', len(paires))]
     for a, b, plane in paires:
         if not (0 <= a < 32768 and 0 <= b < 32768 and 0 <= plane < 256):
             raise ValueError('orderPair (%r, %r, %r) hors bornes' % (a, b, plane))
         out.append(struct.pack('>hhBB', a, b, plane, 0))
     return b''.join(out)
+
+
+def _rejet(rej):
+    """int n, puis le triangle a <= b en (n*(n+1)/2+7)//8 octets : bit a*n-a*(a-1)/2+b-a (poids
+    faible d'abord, comme le REJECT de Doom) pose = les classes a et b ne se voient jamais."""
+    if not rej:
+        return b''
+    n, table = rej['classes'], bytes(rej['table'])
+    if not (0 < n < 32768) or len(table) != (n * (n + 1) // 2 + 7) // 8:
+        raise ValueError('reject : %d classes, %d octets' % (n, len(table)))
+    return struct.pack('>i', n) + table
 
 
 def level_header(lv):
@@ -203,6 +218,9 @@ def engine_problems(model):
     if not (0 < size < 900000): P.append('level size %d not in ]0,900000[ (LEVEL.C:40-41)' % size)
     if len(lv['sectors']) > L.MAXNMSECTORS: P.append('nmSectors %d > %d (UTIL.H:21)' % (len(lv['sectors']), L.MAXNMSECTORS))
     if len(lv['walls']) > L.MAXNMWALLS: P.append('nmWalls %d > %d (UTIL.H:22)' % (len(lv['walls']), L.MAXNMWALLS))
+    nrej = lv['reject']['classes'] if lv.get('reject') else 1
+    if any(not (0 <= s['rejectClass'] < nrej) for s in lv['sectors']):
+        P.append('rejectClass outside the %d classes of the reject table (HITSCAN.C canSee)' % nrej)
     if len(snd['map']) != lev_io.OT_NMTYPES: P.append('sound map %d != OT_NMTYPES (SOUND.C:233)' % len(snd['map']))
     if not (0 <= len(snd['sounds']) < MAXNMSOUNDS): P.append('dyn sounds %d not < %d (SOUND.C:237)' % (len(snd['sounds']), MAXNMSOUNDS))
     psz = 2 + 512 * len(pal['palettes'])

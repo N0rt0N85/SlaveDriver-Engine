@@ -1081,7 +1081,7 @@ class DoomConverter:
             object=0, center=[acc[0] // cnt, acc[1] // cnt, acc[2] // cnt],
             floorLevel=niveau,
             firstWall=first, lastWall=last, light=SECTOR_LIGHT, flags=0,
-            cutIndex=0, cutChannel=0, pad=0))
+            cutIndex=0, cutChannel=0, rejectClass=0))
 
     def emit_edge(self, leaf, P, Q, tag, ta, tb, nb, sec, fh, ch, light, cen):
         M = self.M
@@ -1659,6 +1659,61 @@ def _perimetre_aire(M, si):
     return per, abs(deux_a) / 2.0
 
 
+def classes_de_rejet(W, mapname, n_doom, doom_sector, fondus=()):
+    """La table de rejet du .LEV (SLEVEL.H) : le REJECT de la carte, que P_CheckSight lit AVANT de
+    tracer une ligne -- et le moteur aussi (HITSCAN.C canSee).
+
+    Un secteur .LEV prend le secteur Doom de sa feuille : la fusion ne recolle que des feuilles d'un
+    meme secteur Doom, et reattribuer_debords rend a son vrai secteur ce qu'une feuille deborde.
+    Seule exception, les penombres fondues dans leur piece (dissoudre_penombres) : un secteur de la
+    piece peut etre fait de la bande, donc la piece ne rejette que ce que la piece ET chacune de ses
+    bandes rejettent -- jamais aveugle la ou Doom verrait. Une paire n'est gardee que si elle est
+    rejetee DANS LES DEUX SENS : la table est symetrique (celles d'E1 le sont deja toutes), le
+    moteur n'en stocke que le triangle. Les secteurs de meme ligne partagent une classe : MESURE
+    E1, 74-250 secteurs Doom -> 19-119 classes, 24-893 octets au lieu des 685-7 813 du lump.
+    -> (classe par secteur .LEV, dict(classes=n, table=[octets], triangle a <= b, bit
+    a*n-a*(a-1)/2+b-a poids faible d'abord comme le REJECT)), ou (None, None) : pas de lump, ou
+    rien a rejeter."""
+    rej = bytes(W.map_lumps(mapname).get("REJECT") or b"")
+    rej += bytes(max(0, (n_doom * n_doom + 7) // 8 - len(rej)))   # court : des zeros, comme Chocolate Doom
+
+    def bit(a, b):
+        p = a * n_doom + b
+        return (rej[p >> 3] >> (p & 7)) & 1
+
+    recoit = {f: r for f, r, _ in fondus}
+
+    def piece(s):
+        while s in recoit:
+            s = recoit[s]
+        return s
+
+    membres = defaultdict(list)
+    for s in range(n_doom):
+        membres[piece(s)].append(s)
+    used = sorted(set(doom_sector))
+    ligne = {a: tuple(int(all(bit(x, y) and bit(y, x) for x in membres[a] for y in membres[b]))
+                      for b in used)
+             for a in used}
+    if not any(any(r) for r in ligne.values()):
+        return None, None
+    rang = {a: i for i, a in enumerate(used)}
+    cle, classe, rep = {}, {}, []
+    for a in used:
+        if ligne[a] not in cle:
+            cle[ligne[a]] = len(rep)
+            rep.append(a)
+        classe[a] = cle[ligne[a]]
+    n = len(rep)
+    table = bytearray((n * (n + 1) // 2 + 7) // 8)
+    for ca in range(n):
+        for cb in range(ca, n):
+            if ligne[rep[ca]][rang[rep[cb]]]:
+                p = ca * n - ca * (ca - 1) // 2 + cb - ca
+                table[p >> 3] |= 1 << (p & 7)
+    return [classe[d] for d in doom_sector], dict(classes=n, table=list(table))
+
+
 def dissoudre_penombres(M, eps=EPS_PENOMBRE):
     """Rend a sa piece toute BANDE MINCE qui n'en differe QUE par la lumiere.
 
@@ -1929,6 +1984,13 @@ def main(argv=None):
     crit["depart_present"] = dict(ok=True, depart=dict(sector_gen1=sect, build_xy=build_xy,
                                                        angle_doom=st.angle, angle_lev=angle,
                                                        feuille=lf))
+    dsec = [conv.leaf_sector[li] for li in conv.keep]
+    rclasse, rejet = classes_de_rejet(W, a.map, len(M["sectors"]), dsec, fondus)
+    if rclasse:
+        for s, c in zip(em.sectors, rclasse):
+            s["rejectClass"] = c
+        print(f"  rejet : {len(M['sectors'])} secteurs Doom -> {rejet['classes']} classes, "
+              f"{len(rejet['table'])} o (lump {(len(M['sectors']) ** 2 + 7) // 8} o)")
     out = dict(format="doom2ps/e3-geom3d v1",
                source=dict(wad=os.path.basename(a.wad), map=a.map, optim=sorted(OPTIM_ACTIFS),
                            **(dict(gros_bloc=GROS_BLOC) if "grossiers" in OPTIM_ACTIFS else {})),
@@ -1941,7 +2003,7 @@ def main(argv=None):
                sectors=em.sectors, walls=em.walls, vertices=em.vertices, faces=em.faces,
                cutPlane=cutplane, orderPairs=[list(p) for p in paires],
                texture=em.texture, vertexLight=em.vertexLight, anims=conv.anims,
-               doom_sector=[conv.leaf_sector[li] for li in conv.keep])
+               doom_sector=dsec, reject=rejet)
     if tags is not None:
         order = [tags[s] for s in sorted(tags)]
         pbs, pbv, pbw, pb_index = push_blocks(conv, order)

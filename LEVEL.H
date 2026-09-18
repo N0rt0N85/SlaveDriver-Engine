@@ -11,6 +11,8 @@ extern unsigned char *level_texture;
 extern unsigned char (*level_cutPlane)[][MAXCUTSECTORS];
 extern sOrderPair *level_orderPair;
 extern int level_nmOrderPairs;
+extern unsigned char *level_reject;
+extern int level_nmRejectClasses;
 extern unsigned char *level_vertexLight;
 extern unsigned char *level_objectParams;
 extern sObjectType *level_object;

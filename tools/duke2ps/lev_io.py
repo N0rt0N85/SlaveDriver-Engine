@@ -109,6 +109,8 @@ def _decode_level(lay):
         vertexLight=list(Lv['vertexLight']),
         cutPlane=[list(cut[i:i + MAXCUTSECTORS]) for i in range(0, len(cut), MAXCUTSECTORS)],
         orderPairs=[(p['a'], p['b'], p['plane']) for p in Lv.get('orderPairs') or []],
+        reject=(dict(classes=Lv['reject']['classes'], table=list(Lv['reject']['table']))
+                if Lv.get('reject') else None),
     )
 
 

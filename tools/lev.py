@@ -37,7 +37,7 @@ HEADER_FIELDS = ['nmSectors', 'nmWalls', 'nmVerticies', 'nmFaces', 'nmTextureInd
                  'nmWaveFace', 'nmCutSectors']   # SLEVEL.H:5-20, written CONVERT.C:3256-3269
 
 # struct formats (big-endian), one record each; sizes checked against LOADPART sizeof
-SECTOR_FMT = '>i3hhhhhhbbh'         # SLEVEL.H:181-190 / CONVERT.C:3273-3285 : object(int 0), center[3], floorLevel, firstWall, lastWall, light, flags, cutIndex, cutChannel, pad
+SECTOR_FMT = '>i3hhhhhhbbh'         # SLEVEL.H:181-190 / CONVERT.C:3273-3285 : object(int 0), center[3], floorLevel, firstWall, lastWall, light, flags, cutIndex, cutChannel, rejectClass (retail: pad, 0)
 WALL_FMT = '>iiiiihHhhHHHHHHhHhBB'   # SLEVEL.H:150-170 / CONVERT.C:3292-3312
 VERTEX_FMT = '>hhhbb'               # SLEVEL.H:115-118 / CONVERT.C:3315-3319 (x,y,z = f(16.16) = world units)
 FACE_FMT = '>HHHHBb'                # SLEVEL.H:120-124 / CONVERT.C:3322-3328
@@ -135,6 +135,16 @@ def parse_level_block(r):
     else:
         extra = []
     out['orderPairs'] = pairs
+    # OPTIONAL too, after the pairs (which are then there even when there are none): the reject
+    # table, SLEVEL.H -- int n classes, then the triangle a <= b, (n*(n+1)/2+7)/8 bytes.
+    reject = None
+    if size > 56 + sum(p['size'] for p in parts.values()):
+        off = r.p
+        n = r.i32()
+        parts['rejectCount'] = dict(off=off, count=1, size=4)
+        reject = dict(classes=n, table=bytes(raw('reject', (n * (n + 1) // 2 + 7) // 8)))
+        extra += ['rejectCount', 'reject']
+    out['reject'] = reject
     out['parts'] = parts
     out['end'] = r.p
     out['sum_parts'] = sum(p['size'] for p in parts.values())
@@ -149,7 +159,7 @@ def parse_level_block(r):
     assert prev_end == out['end']
 
     out['sectors'] = [dict(object=s[0], center=list(s[1:4]), floorLevel=s[4], firstWall=s[5], lastWall=s[6],
-                           light=s[7], flags=s[8], cutIndex=s[9], cutChannel=s[10], pad=s[11]) for s in secs]
+                           light=s[7], flags=s[8], cutIndex=s[9], cutChannel=s[10], rejectClass=s[11]) for s in secs]
     out['walls'] = [dict(normal=list(w[0:3]), d=w[3], object=w[4], flags=w[5], textures=w[6], firstFace=w[7],
                          lastFace=w[8], firstVertex=w[9], lastVertex=w[10], v=list(w[11:15]), nextSector=w[15],
                          firstLight=w[16], pixelLength=w[17], tileLength=w[18], tileHeight=w[19]) for w in walls]
@@ -252,7 +262,9 @@ def validate(lev):
     nv, nw, nf, ns, nt = H['nmVerticies'], H['nmWalls'], H['nmFaces'], H['nmSectors'], H['nmTextureIndexes']
     for i, s in enumerate(L['sectors']):
         if not (0 <= s['firstWall'] <= s['lastWall'] < nw): probs.append('sector %d wall range' % i); break
-        if s['object'] != 0 or s['pad'] != 0: probs.append('sector %d object/pad != 0' % i); break
+        if s['object'] != 0: probs.append('sector %d object != 0' % i); break
+        if not (0 <= s['rejectClass'] < (L['reject']['classes'] if L['reject'] else 1)):
+            probs.append('sector %d rejectClass %d outside the reject table' % (i, s['rejectClass'])); break
     for i, w in enumerate(L['walls']):
         if any(not (0 <= x < nv) for x in w['v']): probs.append('wall %d v out of range' % i); break
         if not (-1 <= w['nextSector'] < ns): probs.append('wall %d nextSector' % i); break

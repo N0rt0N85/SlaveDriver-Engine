@@ -345,6 +345,16 @@ int canSee(Sprite *s1,Sprite *s2)
 {MthXyz v,pos,outPos;
  int sector,outSector;
  int d2s,d2w;
+ /* GCC14: the level's reject table, when it has one (SLEVEL.H): two sectors it says never see
+    each other are not traced -- Doom's P_CheckSight reads its REJECT first */
+ if (level_reject)
+    {int a=level_sector[s1->s].rejectClass,b=level_sector[s2->s].rejectClass;
+     if (a>b)
+	{int t=a; a=b; b=t;}
+     a=a*level_nmRejectClasses-((a*(a-1))>>1)+b-a;
+     if (level_reject[a>>3] & (1<<(a&7)))
+	return 0;
+    }
  v.x=s2->pos.x-s1->pos.x;
  v.y=s2->pos.y-s1->pos.y;
  v.z=s2->pos.z-s1->pos.z;
