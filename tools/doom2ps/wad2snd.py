@@ -221,9 +221,28 @@ def sound_model(wad, ids, mobj_types):
 
 
 # ----------------------------------------------------------------------------- outils de test
+# L'arsenal du JOUEUR.  Ses projectiles ne se deduisent pas de la carte -- aucune chose posee ne
+# les fait naitre, contrairement a ceux des monstres (SPAWNED_BY_ACTION) -- et le joueur peut
+# tirer avec une arme que le niveau ne contient pas.  Seuls ceux dont le WAD a TOUTES les images
+# entrent : le shareware n'a ni plasma ni BFG (ni canon, ni bille, ni impact), et une sequence
+# atteignable sans image est un defaut que verif_doom refuse a raison.
+PLAYER_MISSILES = ["MT_ROCKET", "MT_PLASMA", "MT_BFG", "MT_EXTRABFG"]
+
+
+def _has_all_frames(wad, ids, mt):
+    """Chaque etat atteignable de `mt` a son lump dans ce WAD : nom du sprite + lettre de frame."""
+    states = ids["states"]
+    for s in reachable_states(ids, mt):
+        pre = states[s]["spritename"] + chr(ord("A") + states[s]["frame"])
+        if not any(n.startswith(pre) for n in wad.index):
+            return False
+    return True
+
+
 def present_mobj_types(wad, ids, mapname="E1M1", skill=3):
     """MT des things du niveau au skill donne (p_mobj.c:953-958 : bit 1<<(skill-1), pas de bit 16),
-    joueur compris (MT 0), starts coop/DM (2-4, 11) ignores."""
+    joueur compris (MT 0) AVEC son arsenal (PLAYER_MISSILES presents dans le WAD), starts coop/DM
+    (2-4, 11) ignores."""
     bit = 1 << (skill - 1)
     M = wadmod.read_map(wad, mapname)
     out = set()
@@ -236,6 +255,9 @@ def present_mobj_types(wad, ids, mapname="E1M1", skill=3):
         if not (t.flags & bit) or (t.flags & 16):
             continue
         out.add(ids["ed_to_mt"][str(t.type)])
+    if 0 in out:
+        idx = {n: i for i, n in enumerate(ids["mt_names"])}
+        out |= {idx[n] for n in PLAYER_MISSILES if _has_all_frames(wad, ids, idx[n])}
     return out
 
 
