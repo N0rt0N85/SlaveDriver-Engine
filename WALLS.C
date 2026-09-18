@@ -3222,7 +3222,11 @@ void drawWalls(int k,MthMatrix *view)
  slaveView=view;
  nmPolys=0;
  vdp1NmClipped=0;
- vdp1Walk=0; vdp1Big=0; vdp1BigWalk=0;
+ if (k==0)
+    {/* one count per image, every view: the last one is what the VDP1 is drawing now */
+     vdp1PrevWalk=vdp1Walk; vdp1PrevMaxX=vdp1MaxX; vdp1PrevMaxY=vdp1MaxY;
+     vdp1Walk=0; vdp1Big=0; vdp1BigWalk=0; vdp1MaxX=0; vdp1MaxY=0;
+    }
  autoTarget=NULL;
  bestAutoAimRating=INT_MAX;
 

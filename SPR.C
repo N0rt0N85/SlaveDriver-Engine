@@ -13,6 +13,7 @@
 #define BUFFERWRITES 1
 
 static int bank;
+static int listEnd[2];      /* GCC14: one past each bank's last command at its close (CRASH.C) */
 static BYTE *commandStart[2],*clutStart,*gourStart[2],*charStart;
 static BYTE *ccommand,*cgouraud;
 
@@ -427,6 +428,7 @@ void EZ_closeCommand(void)
  if (gourBufferUsed>0)
     flushGourBuffer();
 #endif
+ listEnd[bank]=((int)ccommand)>>5;
  /* make first command link to the frame's command table */
  {struct cmdTable *first=(struct cmdTable *)VRAM_ADDR;
   first->link=((int)commandStart[bank])>>3;
@@ -482,6 +484,17 @@ int EZ_cmdsUsed(void)
 
 int EZ_cmdsCap(void)
 {return commandAreaSize;
+}
+
+/* GCC14: the freeze report (CRASH.C).  In command numbers (VRAM address / 32): info[0] the bank
+   last opened, info[1..2] bank 0's first command and one past its last as its close left them,
+   info[3..4] the same for bank 1.  The VDP1 draws the bank closed before the last one. */
+void EZ_listInfo(int *info)
+{info[0]=bank;
+ info[1]=((int)commandStart[0])>>5;
+ info[2]=listEnd[0];
+ info[3]=((int)commandStart[1])>>5;
+ info[4]=listEnd[1];
 }
 
 int EZ_getNextCmdNm(void)

@@ -31,9 +31,12 @@ int vdp1NmClipped;  /* cells V-windowed in the frame: replaces the cx/cy maxima 
 /* GCC14: PROBE (STATUSTEXT) -- the VDP1's walk over the frame's cells, WALLASM.H
    vdp1WalkProbe: all cells / the cells over VDP1BIGWALK, in units of 64 pixels */
 int vdp1Walk,vdp1Big,vdp1BigWalk;
+/* The same for the list the VDP1 is drawing, the previous image's: saved by drawWalls before it
+   counts the next one, for the freeze report (CRASH.C) */
+int vdp1PrevWalk,vdp1PrevMaxX,vdp1PrevMaxY;
 
 int vdp1MaxCoord;   /* kept for display compatibility */
-int vdp1MaxX,vdp1MaxY;  /* separate: says WHICH AXIS leaves the range */
+int vdp1MaxX,vdp1MaxY;  /* separate: says WHICH AXIS leaves the range (walk probe, per image) */
 static __inline__ int vdp1TakeMaxX(void){int m=vdp1MaxX; vdp1MaxX=0; return m;}
 static __inline__ int vdp1TakeMaxY(void){int m=vdp1MaxY; vdp1MaxY=0; return m;}
 /* GCC14: split screen.  The window of the view being drawn, and its focal (65 deg over 160 px

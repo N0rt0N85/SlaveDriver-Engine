@@ -44,6 +44,7 @@ static __inline__ XyInt *probeVDP1(XyInt *poly)
      vdp1Walk     every cell: lines x the wider of A-B and D-C
      vdp1Big      the cells whose count passes VDP1BIGWALK, a quarter of the 3D window ...
      vdp1BigWalk  ... re-counted on 16 of their lines with the pre-clip applied
+     vdp1MaxX/Y   the largest |x| and |y| sent, beyond 1023 out of the VDP1's range
    Units of 64 pixels.  The window is the view's, not the sector box of RECTCLIP: a line only
    that box would pre-clip still counts. */
 #ifdef STATUSTEXT
@@ -54,6 +55,12 @@ static __inline__ int vdp1Abs(int a)
 
 static __inline__ void vdp1WalkProbe(XyInt *q)
 {int ad,bc,ab,dc,lines,len,walk,j;
+ for (j=0;j<4;j++)
+    {int a=vdp1Abs(q[j].x);
+     if (a>vdp1MaxX) vdp1MaxX=a;
+     a=vdp1Abs(q[j].y);
+     if (a>vdp1MaxY) vdp1MaxY=a;
+    }
  ad=vdp1Abs(q[3].x-q[0].x); j=vdp1Abs(q[3].y-q[0].y); if (j>ad) ad=j;
  bc=vdp1Abs(q[2].x-q[1].x); j=vdp1Abs(q[2].y-q[1].y); if (j>bc) bc=j;
  ab=vdp1Abs(q[1].x-q[0].x)+vdp1Abs(q[1].y-q[0].y);
