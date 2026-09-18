@@ -47,8 +47,9 @@ void buildRemappedBank(int bank,const unsigned char *remap);   /* bank = bank 0 
    recently used goes first, within an image too -- the painter goes far to near, so an image's
    earliest tile is its farthest.
    The wall tiles' rule, on when gameparams PIC_LOD_PX > 0 (0 = PowerSlave's cache as shipped).  A
-   wall cell asks for its tile with its size on screen, the larger side of its box in pixels, and
-   is painted flat in picMeanColour(), under its own gouraud, when mapWallPic answers -1:
+   wall cell asks for its tile with its size on screen, the SMALLER side of its box in pixels (a far
+   floor 2 px tall and 30 long shows 2 rows of its texture), and is painted flat in
+   picFirstColour(), under its own gouraud, when mapWallPic answers -1:
    - a wall never takes a slot the image being built uses, and when it takes one the image on
      screen uses, the texels only go in at pic_flush, once the VDP1 has finished that image.  The
      VDP1 draws the last image while the master builds the next: a far tile loaded early in the
@@ -61,7 +62,7 @@ void buildRemappedBank(int bank,const unsigned char *remap);   /* bank = bank 0 
    below WALLPICS; the mip pics go through mapPic. */
 #define WALLPICS 256
 int mapWallPic(int picNm,int size);
-int picMeanColour(int picNm);
+int picFirstColour(int picNm);  /* its first texel's colour: the flat cells and the far LOD */
 extern int picLodNow,picLastSmall,picLastFull;  /* the image just closed: the bar, and the cells
 						   painted flat under it / for want of a slot */
 

@@ -2762,11 +2762,11 @@ int runLevel(char *filename,int levelNm)
 		       PIC_LOD_PX a wall never takes a slot this image uses, and one the
 		       image on screen uses gets its texels once the VDP1 is done with
 		       it (Tile Flush in the tree): sw no longer means a wrong texture.
-		  tex: the size on screen, in pixels (larger side of the box), a
+		  tex: the size on screen, in pixels (smaller side of the box), a
 		       wall cell needs to bring its tile into a slot this image --
 		       PIC_LOD_PX, or the size of the last tile that fits when more
 		       compete (PIC.H)
-		  flat: cells painted flat in their tile's mean colour: too small /
+		  flat: cells painted flat in their tile's first texel: too small /
 		       every slot taken by this image.  Solo only: split screen has
 		       its B: line there. */
       /* fog : distance in units at which a fully lit sector reaches black.  4096 is

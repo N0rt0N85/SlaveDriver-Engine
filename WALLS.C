@@ -1308,7 +1308,8 @@ static int fuseWallPoly(MthXyz *coords,SectorDrawRecord *s,XyInt *q)
 #define LODCOL_MESH ((lodEnable>1)? RGB(24,0,0): RGB(0,0,0))
 
 /* GCC14: a textured wall cell, through the wall tiles' rule (PIC.H): its tile, or a flat quad in
-   the tile's mean colour when the cache refuses it.  Its size is the larger side of its box. */
+   the tile's first texel's colour when the cache refuses it.  Its size is the smaller side of its
+   box: a far floor 2 px tall and 30 long would show 2 rows of its texture. */
 static void __attribute__((noinline)) wallCell(int pic,XyInt *poly,struct gourTable *g)
 {int i,x0,x1,y0,y1;
  x0=x1=poly[0].x;
@@ -1321,8 +1322,8 @@ static void __attribute__((noinline)) wallCell(int pic,XyInt *poly,struct gourTa
     }
  x1-=x0;
  y1-=y0;
- i=mapWallPic(pic,x1>y1? x1: y1);
- EZ_distSprVClip(i,i<0? picMeanColour(pic): 0,poly,g);
+ i=mapWallPic(pic,x1<y1? x1: y1);
+ EZ_distSprVClip(i,i<0? picFirstColour(pic): 0,poly,g);
 }
 
 void drawRectWall(sWallType *theWall,MthXyz *coords,

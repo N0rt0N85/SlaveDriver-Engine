@@ -113,7 +113,6 @@ static const int picLodPx=GP_PIC_LOD_PX;
 int picLodNow,picLastSmall,picLastFull;
 static int picSmall,picFull;
 static unsigned char picSize[WALLPICS],picKeep[WALLPICS/8];
-static unsigned short picMean[WALLPICS];   /* 0 = not taken yet */
 static Pic *picPending[48];     /* slots a wall took from the image on screen: pic_flush fills them */
 static int picNmPending;
 
@@ -254,7 +253,6 @@ int initPicSystem(int _picNmBase,int *classSizes)
  picThis=picPrev=1;
  memset(picSize,0,sizeof(picSize));
  memset(picKeep,0,sizeof(picKeep));
- memset(picMean,0,sizeof(picMean));
  picLodNow=picLodPx;
  palletes=NULL;
  nmVDP2Pics=0;
@@ -578,24 +576,16 @@ int mapWallPic(int picNm,int size)
  return p->charNm;
 }
 
-/* GCC14: a wall tile's mean colour, for its cells painted flat: 64 texels on an 8x8 grid, taken
-   once per level */
-int picMeanColour(int picNm)
+/* GCC14: the colour a wall cell painted flat takes: its tile's first texel, nothing computed.  An
+   RLE tile opens on its count of blank texels, then of drawn ones. */
+int picFirstColour(int picNm)
 {Pic *p=pics+picNm;
- unsigned char *src;
- int i,t,c,r=0,g=0,b=0;
- assert((unsigned int)picNm<WALLPICS);
- if (picMean[picNm])
-    return picMean[picNm];
- src=(p->flags & PICFLAG_RLE)? unRle(p): p->data;
- for (i=0;i<64;i++)
-    {t=((i>>3)*8+4)*64+(i&7)*8+4;
-     c=p->pallete? ((unsigned short *)p->pallete)[src[t]]: ((unsigned short *)src)[t];
-     r+=c&0x1f;
-     g+=(c>>5)&0x1f;
-     b+=(c>>10)&0x1f;
-    }
- return picMean[picNm]=0x8000|(r>>6)|((g>>6)<<5)|((b>>6)<<10);
+ unsigned char *d=p->data;
+ int i;
+ if (!p->pallete)
+    return ((unsigned short *)d)[0]|0x8000;
+ i=(p->flags & PICFLAG_RLE)? (d[0]? 0: d[2]): d[0];
+ return ((unsigned short *)p->pallete)[i]|0x8000;
 }
 
 static int vxmin,vymin,vxmax,vymax,vx,vy;
