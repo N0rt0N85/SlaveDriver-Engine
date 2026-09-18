@@ -2212,6 +2212,11 @@ void wallsSplitAlloc(void)
     }
 }
 
+/* views 1..wallsSplitSets() have a set; the master traverses the others (overlay MTRAV) */
+int wallsSplitSets(void)
+{return splitSets;
+}
+
 /* a new level: its memory is gone */
 void wallsSplitReset(void)
 {int k;

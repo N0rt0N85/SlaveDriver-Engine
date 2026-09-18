@@ -54,6 +54,7 @@ void wallsSplitReset(void);
 void wallsSplitAlloc(void);
 void wallsQueueView(int k,MthMatrix *view,Sprite *c);
 void wallsQueueJoin(void);
+int wallsSplitSets(void);
 void drawWallsFinish(void);
 void wallRenderSlaveMain(void);
 void startSlave(void *slaveMain);

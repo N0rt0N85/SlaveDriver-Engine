@@ -2711,6 +2711,8 @@ int runLevel(char *filename,int levelNm)
 		 f : each view's fog distance, 512..4096 (4096 = no fog)
 		 c : each view's cells in the last image / its share of B.  A view drawn
 		     without fog and under its share gives the rest to the others.
+		 MTRAV : views the master traverses itself -- their set did not fit in the
+		     level's memory (WALLS.C wallsSplitAlloc).  Shown only then.
 		 Only the views in play are listed. */
 	 static const char *fmtF[MPMAX+1]={"","","B:%d f:%d %d","B:%d f:%d %d %d",
 					   "B:%d f:%d %d %d %d"};
@@ -2719,6 +2721,8 @@ int runLevel(char *filename,int levelNm)
 	 drawStringf(-158,-110,1,fmtF[mpPlayers],mpBudget,mpFog[0],mpFog[1],mpFog[2],mpFog[3]);
 	 if (mpRegisterLost)       /* a player's global had no copy: players would share it */
 	    drawStringf(60,-100,1,"MPLOST:%d",mpRegisterLost);
+	 if (wallsSplitSets()<mpPlayers-1)
+	    drawStringf(60,-110,1,"MTRAV:%d",mpPlayers-1-wallsSplitSets());
 	 drawStringf(-158,-100,1,fmtC[mpPlayers],mpCells[0],mpShare[0],
 		     mpCells[1],mpShare[1],mpCells[2],mpShare[2],mpCells[3],mpShare[3]);
 	}
