@@ -196,15 +196,24 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
 	   this->collide=0;      /* pickups and solid decor never move: moveSprite would only run
 				    collideSprite for nothing, every tic, for each of them -- the
 				    movers find them, a pickup tests its own reach (doom_item_func) */
-	else if (!this->target && this->sprite->floorSector!=-1 && !this->sprite->vel.x &&
-		 !this->sprite->vel.y && !this->sprite->vel.z)
-	   this->collide=0;      /* asleep and at rest on its floor (A_Look monsters, barrels): the
-				    same collision again every tic was 7-8 ms a frame on E1M1
-				    (RUNOBJECTS > COLLIDESPRITE).  A lift carries it (floorSector,
-				    updatePushBlockPositions), damage thrust or A_Chase gives it a
-				    velocity; an awake one keeps colliding (a closing door meets it) */
+	else if (this->sprite->floorSector!=-1 && !this->sprite->vel.x && !this->sprite->vel.y &&
+		 !this->sprite->vel.z && !doom_nearDoor(this->sprite))
+	   {if (!this->target)
+	       this->collide=0;
+	   }                     /* at rest on its floor, asleep or not: the same collision again
+				    every tic was 7-8 ms a frame on E1M1 asleep (RUNOBJECTS >
+				    COLLIDESPRITE), up to 19 awake.  A lift carries it (floorSector,
+				    updatePushBlockPositions), A_Chase's step gives it a velocity.
+				    Awake, it keeps its last step's answer for doomBlocked.  By a
+				    door it keeps colliding: the ceiling coming down meets it */
 	else
-	   this->collide=moveSprite(this->sprite);
+	   {this->collide=moveSprite(this->sprite);
+	    if (this->mflags & DF_STEP)
+	       {this->sprite->vel.x=0;  /* the step is taken: still until the next A_Chase */
+		this->sprite->vel.z=0;
+		this->mflags&=~DF_STEP;
+	       }
+	   }
 	/* Muzzle flash and explosion fade, then go out -- before doom_setState, which can move the
 	   actor to S_NULL and free the sprite under the light. */
 	if (this->flashTics)

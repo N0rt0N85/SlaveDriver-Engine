@@ -409,7 +409,9 @@ void A_Look(DoomActor *this)
  doom_setState(this,info->seestate);
 }
 
-/* A_Chase (p_enemy.c:659-767) in velocity: vel = speed/tics (u per tic) along movedir */
+/* A_Chase (p_enemy.c:659-767).  P_Move's whole step (speed along movedir) is the velocity of the
+   next tic only (DF_STEP, DOOM_ACTOR.C): Doom moves a monster once per A_Chase, every 2 to 4
+   tics, and so collides it once. */
 void A_Chase(DoomActor *this)
 {const DoomMobjInfo *info;
  const DoomState *st;
@@ -490,7 +492,8 @@ void A_Chase(DoomActor *this)
  setvel:
  st=&doomStates[this->state];
  if (this->movedir<8 && info->speed && st->tics>0)
-    {Fixed32 v=F(info->speed)/st->tics;
+    {Fixed32 v=F(info->speed);
+     this->mflags|=DF_STEP;
      int an=normalizeAngle(this->movedir*F(45));   /* SBL MTH_Sin/Cos: |x| >= 180 reads as 0 */
      s->vel.x=MTH_Mul(v,MTH_Cos(an));
      s->vel.z=MTH_Mul(v,MTH_Sin(an));
@@ -498,6 +501,7 @@ void A_Chase(DoomActor *this)
  else
     {s->vel.x=0;
      s->vel.z=0;
+     this->mflags&=~DF_STEP;
     }
 }
 

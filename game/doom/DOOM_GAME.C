@@ -102,6 +102,7 @@ typedef char doomMobjInfoIs44_[(sizeof(DoomMobjInfo)==44)?1:-1];
 unsigned char doomSectorDamage[MAXNMSECTORS];
 int doomLevelTime;
 static unsigned char doomSectorExit[(MAXNMSECTORS+7)>>3];   /* special 11: exit at health <= 10 */
+static unsigned char doomDoorSector[(MAXNMSECTORS+7)>>3];   /* a door's own sectors: doom_nearDoor */
 static int doomExiting;                                    /* the level is over: exit asked once */
 
 /* Floor height of sector s, read from its flat as bumpFloor does (the vertices move with a lift) */
@@ -560,6 +561,42 @@ int doom_monsterUseDoor(int w)
  return 1;
 }
 
+/* A door's own sectors, those whose ceiling its push block moves */
+static void doomMarkDoor(int pb)
+{int i,w,s;
+ for (i=level_pushBlock[pb].startWall;i<=level_pushBlock[pb].endWall;i++)
+    {w=level_PBWall[i];
+     if (level_wall[w].normal[1]>=0)
+	continue;
+     s=doomWallSector(w);
+     doomDoorSector[s>>3]|=(unsigned char)(1<<(s&7));
+    }
+}
+
+/* GCC14: a thing standing still skips its collision (DOOM_ACTOR.C), except here: in a door's
+   sector, or across a portal into one less than its radius away -- the ceiling that comes down
+   meets it.  Portals come first in a sector's walls (SPRITE.C:412); their normal points into
+   the sector. */
+int doom_nearDoor(Sprite *s)
+{int w,n;
+ MthXyz p;
+ assert(s);
+ if (doomDoorSector[s->s>>3] & (1<<(s->s&7)))
+    return 1;
+ for (w=level_sector[s->s].firstWall;w<=level_sector[s->s].lastWall;w++)
+    {n=level_wall[w].nextSector;
+     if (n==-1)
+	break;
+     if (!(doomDoorSector[n>>3] & (1<<(n&7))))
+	continue;
+     getVertex(level_wall[w].v[0],&p);
+     if (MTH_Mul(s->pos.x-p.x,level_wall[w].normal[0])+
+	 MTH_Mul(s->pos.z-p.z,level_wall[w].normal[2])<s->radius)
+	return 1;
+    }
+ return 0;
+}
+
 /* contract section 9: 8.3 names at the disc root ('+'), bounded by DOOM_NMLEVELS.  make_e1m1.py
    checks these against cd_doom/.  Where each level leads is Doom's own order (g_game.c
    G_DoCompleted): the secret exit of E1M3 goes to E1M9, E1M9 comes back to E1M4, and -1 -- after
@@ -624,6 +661,8 @@ static void doomLevelStart(void)
     doomSectorDamage[s]=0;
  for (s=0;s<(int)sizeof(doomSectorExit);s++)
     doomSectorExit[s]=0;
+ for (s=0;s<(int)sizeof(doomDoorSector);s++)
+    doomDoorSector[s]=0;
  doomLevelTime=0;
  doomNmSecretWalls=0;
  doomExiting=0;
@@ -677,8 +716,11 @@ int game_placeObject(int ot)
 	}
      case OT_NORMALDOOR:
      case OT_STUCKUPDOOR:
-	constructDoor(ot,suckShort());
-	return 1;
+	{int pb=suckShort();
+	 constructDoor(ot,pb);
+	 doomMarkDoor(pb);
+	 return 1;
+	}
      case OT_DOOM_EXIT:
      case OT_DOOM_SECRETEXIT:
 	{int channel=suckShort();
@@ -706,6 +748,7 @@ int game_placeObject(int ot)
 	 moveObject((Object *)o,objectIdleList);
 	 registerPBObject(pb,(Object *)o);
 	 o->pbNum=(short)pb;
+	 doomMarkDoor(pb);
 	 o->state=DOOM_DOOR_CLOSED;
 	 o->counter=0;
 	 o->waitCounter=0;

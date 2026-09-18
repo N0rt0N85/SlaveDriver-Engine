@@ -41,6 +41,7 @@
 #define DF_DROPPED      0x80
 #define DF_IDLE         0x100           /* already handed to objectIdleList (doom_setState)     */
 #define DF_SOLID        0x200           /* MF_SOLID: stops missiles (PIT_CheckThing); A_Fall clears it */
+#define DF_STEP         0x400           /* A_Chase's step: the velocity of the next tic only        */
 #define DI_NODIR        8               /* movedir: no direction (p_enemy.c dirtype_t)            */
 
 /* --- weapons (doomdef.h weapontype_t; index into doomWeaponInfo[]) -------------------------- */
@@ -138,6 +139,7 @@ extern int  doomLevelTime;                     /* THE 35 Hz level clock (Doom le
 extern const char *doomLevelNames[DOOM_NMLEVELS];      /* "+E1M1.LEV", ... (8.3, root)           */
 int         doom_wallIsSecret(int w);          /* OT_DOOM_SECRETWALL: 1 = monsters do not press it */
 int         doom_monsterUseDoor(int w);        /* doomBlocked: 1 = the door wall answers (P_UseSpecialLine) */
+int         doom_nearDoor(Sprite *s);          /* a door's sector under it, or within its radius */
 void        doom_bossDeath(DoomActor *mo);     /* A_BossDeath: the level's boss rule (E1M8 tag 666) */
 
 /* ============================================================================================ */
