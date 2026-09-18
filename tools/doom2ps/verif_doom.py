@@ -10,7 +10,7 @@ Usage : python tools\\doom2ps\\verif_doom.py [--lev cd_doom/E1M1.LEV] [--geom J]
 Tests 1-16 : geometrie, objets, push blocks, interrupteur ; 17-21 (contrat « Verifications PC ») :
 tuiles (prefixe 0x32, G + tileBase <= 255, MAXNMPICS), sequences atteignables (formule seq() avec la
 garde -2), sons (carte, DMX len - 32, 80 / 512 Ko), barils (avertissement), tailles et memoire
-residente contre le pool reel (LWRAM 1 Mo + 0x06100000 - _end de build/doom/MAIN.map).
+residente contre le pool reel (LWRAM 1 Mo + 0x06100000 - _end du disque de test, make_e1m1.MAP_PROGRAMME).
 """
 from __future__ import annotations
 
@@ -1199,31 +1199,29 @@ def tail_checks(a, L, S, W, V, F, tex, obj, p, M):
     # 21. TAILLES : bloc niveau < 900 000 (LEVEL.C:41), sequences < 1 Mo (SEQUENCE.C:30) ; somme
     #     RESIDENTE niveau + palettes + tuiles (4 096 par 0x32, RLE par 0x6A : PIC.C:513, :575)
     #     + sequences + STATIC (tuiles d'armes + wseq, deja en memoire) <= pool reel = LWRAM 1 Mo
-    #     + (0x06100000 - _end de build/doom/MAIN.map) (UTIL.C:352-359). Les sons vont a la SCSP.
+    #     + (0x06100000 - _end du disque de test, make_e1m1.MAP_PROGRAMME) (UTIL.C:352-359). Les
+    #     sons vont a la SCSP.
     lvl = lay["level"]["size"]
     psz = lay["tiles"]["palette_size"]
     tsz = sum(((4096 if "pixels" in t else len(t["rle"])) + 3) & ~3 for t in tiles)   # align 4 (UTIL.C:370)
     ssz = lay["sequences"]["size"]
     put("bloc niveau < 900 000, sequences < 1 Mo", 0 < lvl < 900000 and 0 < ssz < 1024 * 1024,
         f"niveau {lvl}, sequences {ssz}")
-    high, src = 435176, "defaut"
-    mp = os.path.join(ROOT, "build", "doom", "MAIN.map")
-    if os.path.exists(mp):
-        m = re.search(r"^\s*0x([0-9a-fA-F]+)\s+_end\s*=", open(mp, encoding="latin-1").read(), re.M)
-        if m:
-            high = 0x06100000 - int(m.group(1), 16)
-            src = "MAIN.map _end=0x%08x" % int(m.group(1), 16)
-    pool = 1024 * 1024 + high
-    # le demarrage VERROUILLE dans ce pool le jeu d'images des menus et le texte local (MENU.C:266-268,
-    # LOCAL.C:25-26 ; make_e1m1.verrou_initload)
+    # le pool et ce que le demarrage y VERROUILLE (jeu d'images des menus, texte local :
+    # MENU.C:266-268, LOCAL.C:25-26) comptes comme make_e1m1 : un seul map, MAP_PROGRAMME
     import make_e1m1
+    pool, src = make_e1m1.resident_pool()
     verrou, _vsrc = make_e1m1.verrou_initload()
     st_res = (static["weapon_tiles_bytes"] + static["wseq_bytes"]) if static else 0
     res = ((lvl + 3) & ~3) + ((psz + 3) & ~3) + tsz + ((ssz + 3) & ~3) + st_res
-    put("memoire residente <= pool (LWRAM 1 Mo + haut de HWRAM - verrou du demarrage)",
-        res + verrou <= pool,
-        f"niveau {lvl} + palettes {psz} + tuiles {tsz} + sequences {ssz} + STATIC {st_res} = {res} ; "
-        f"pool {pool} ({src}) - verrou {verrou} ; marge {pool - verrou - res}")
+    if pool is None:
+        put("memoire residente <= pool (LWRAM 1 Mo + haut de HWRAM - verrou du demarrage)", False,
+            f"{src} : construire d'abord le disque de test")
+    else:
+        put("memoire residente <= pool (LWRAM 1 Mo + haut de HWRAM - verrou du demarrage)",
+            res + verrou <= pool,
+            f"niveau {lvl} + palettes {psz} + tuiles {tsz} + sequences {ssz} + STATIC {st_res} = {res} ; "
+            f"pool {pool} ({src}) - verrou {verrou} ; marge {pool - verrou - res}")
 
 
 def wadmod_of(a):

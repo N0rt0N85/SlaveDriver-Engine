@@ -356,4 +356,4 @@ formule §2 (avec la garde −2) sur chaque état atteignable, **géométrie ≤
 STATIC.DAT : 95 ⇒ 160), sons < 80 et `soundTop` < 512 Ko avec les 20 statiques, `objectParams` = Σ (**5 joueur
 + 6 × 115 mobjs**, 3 porte, 4 ascenseur, **2 sector-switch**, 5 switch, 1 exit, 2 × n `OT_DOOM_DAMAGE`),
 `firstParam` cumulés ; somme mémoire résidente (niveau + palettes + tuiles + séquences) contre le pool réel
-= LWRAM 1 Mo + (0x06100000 − `_end` lu dans `build/doom/MAIN.map`) (UTIL.C:352-359 ; SPEC_CONVERTER §7).
+= LWRAM 1 Mo + (0x06100000 − `_end` lu dans `build/ndebug/stext/doom/MAIN.map`, le disque de test, le plus gros qu'on grave) (UTIL.C:352-359 ; SPEC_CONVERTER §7).

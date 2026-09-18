@@ -338,7 +338,7 @@ def budget_tuiles(G, W, ids, sinfo, sky, palette, remap, objects, params, sounds
     fixe = (align4(lay["level"]["size"]) + align4(lay["tiles"]["palette_size"])
             + sum(align4(len(t["rle"])) for t in sprites.tiles) + align4(lay["sequences"]["size"])
             + sinfo["weapon_tiles_bytes"] + align4(sinfo["wseq_bytes"]))
-    pool, psrc = resident_pool()
+    pool, psrc = pool_ou_arret()
     verrou, vsrc = verrou_initload()
     b_ram = (pool - verrou - MARGE_POOL - fixe) // 4096
     b_u8 = 255 - sinfo["tileBase"]
@@ -346,18 +346,38 @@ def budget_tuiles(G, W, ids, sinfo, sky, palette, remap, objects, params, sounds
                                   niveau=lay["level"]["size"], ram=b_ram, u8=b_u8)
 
 
+# Le programme dont la fin (_end) borne la HWRAM libre : celui du disque de TEST (NDEBUG=1
+# STATUSTEXT=1), le plus gros des disques qu'on grave -- le disque propre et celui sans sonde
+# `walk` (NOWALK=1) sont plus petits et gardent plus de marge. Le build ASSERT (build/doom, sans
+# NDEBUG=1) est ~12 Ko plus gros : il ne sert qu'a deboguer, et sur les niveaux les plus serres il
+# n'a plus les 24 Ko de la sauvegarde. Le map doit etre celui du code courant : reconstruire le
+# disque de test avant de convertir.
+MAP_PROGRAMME = os.path.join(ROOT, "build", "ndebug", "stext", "doom", "MAIN.map")
+
+
 def resident_pool():
-    """Pool reel du chargeur (UTIL.C:352-359) : LWRAM 1 Mo + (0x06100000 - _end de MAIN.map)."""
-    mp = os.path.join(ROOT, "build", "doom", "MAIN.map")
-    high = 435176
-    src = "defaut (_end = 0x06095c18)"
-    if os.path.exists(mp):
-        with open(mp, encoding="latin-1") as f:
+    """Pool reel du chargeur (UTIL.C:352-359) : LWRAM 1 Mo + (0x06100000 - _end de MAP_PROGRAMME).
+    -> (octets, source), ou (None, raison) sans ce map : un pool suppose changerait les niveaux
+    sans rien dire, l'appelant s'arrete."""
+    rel = os.path.relpath(MAP_PROGRAMME, ROOT).replace(os.sep, "/")
+    try:
+        with open(MAP_PROGRAMME, encoding="latin-1") as f:
             m = re.search(r"^\s*0x([0-9a-fA-F]+)\s+_end\s*=", f.read(), re.M)
-        if m:
-            high = 0x06100000 - int(m.group(1), 16)
-            src = "build/doom/MAIN.map (_end = 0x%08x)" % int(m.group(1), 16)
-    return 1024 * 1024 + high, src
+    except OSError:
+        return None, "%s absent" % rel
+    if not m:
+        return None, "%s sans _end" % rel
+    end = int(m.group(1), 16)
+    return 1024 * 1024 + 0x06100000 - end, "%s (_end = 0x%08x)" % (rel, end)
+
+
+def pool_ou_arret():
+    """resident_pool, ou la conversion s'arrete en disant quoi construire."""
+    pool, src = resident_pool()
+    if pool is None:
+        sys.exit("make_e1m1 : %s -- construire d'abord le disque de test "
+                 "(build.ps1 NDEBUG=1 STATUSTEXT=1 PARAMS=params/doom.cfg)" % src)
+    return pool, src
 
 
 def run_tool(args, cwd=ROOT):
@@ -561,7 +581,7 @@ def main(argv=None):
     log("  tuiles u8 : geometrie %d + tileBase %d = %d <= 255 (marge %d) ; MAXNMPICS : %d + %d = %d < 800"
         % (n_geo, tile_base, n_geo + tile_base, 255 - n_geo - tile_base, tile_base, len(model["tiles"]),
            tile_base + len(model["tiles"])))
-    pool, psrc = resident_pool()
+    pool, psrc = pool_ou_arret()
     til_res = resident_tiles(model["tiles"])
     resident = align4(lvl_size) + align4(pal_sz) + til_res + align4(seq_sz)
     static_res = sinfo["weapon_tiles_bytes"] + align4(sinfo["wseq_bytes"])
