@@ -1347,7 +1347,7 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 
  if (wallIsBlack(theWall,coords,nmWallLights,wavyIndex))
     {XyInt q[4];
-     if (fuseWallPoly(coords,s,q))
+     if (fuseWallPoly(coords,s,q) && vdp1Range(q))
 	{VDP1WALK(q);
 	 EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_FUSE,q,NULL);
 	 lodFused++;
@@ -1401,7 +1401,7 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 	 if (runStart>=0)
 	    {XyInt q[4];
 	     LODRUNQUAD(vCalc);
-	     if (clip_visible(q,s))
+	     if (clip_visible(q,s) && vdp1Range(q))
 		{VDP1WALK(q);
 		 EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_RECT,q,NULL);
 		 nmPolys++;
@@ -1579,7 +1579,7 @@ void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
      if (CELLISBLACK(gtable))
 	{XyInt q[4];
 	 int g=weldFaceStrip(wall,f,vCalc,q,lodWeldWhy);
-	 if (clip_visible(q,s))
+	 if (clip_visible(q,s) && vdp1Range(q))
 	    {VDP1WALK(q);
 	     EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_MESH,q,NULL);
 	     nmPolys++;
@@ -1673,7 +1673,7 @@ void drawWaterSurface(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 	 continue;
 	}
 
-     if (clip || !clip_visible(probeVDP1(poly),s))
+     if (clip || !clip_visible(probeVDP1(poly),s) || !vdp1Range(poly))
 	continue;
 
      assert(getPicClass(level_face[f].tile)==TILE16BPP);
@@ -2606,6 +2606,8 @@ void drawSlaveWalls(void)
 	     case -5:
 		{/* wall fused by the LOD: one quad, its colour carried in the gouraud
 		    table for lack of another free field in the record */
+		 if (!vdp1Range(slaveResult[i].poly))
+		    continue;
 		 VDP1WALK(slaveResult[i].poly);
 		 EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,
 			    slaveResult[i].gtable.entry[0],slaveResult[i].poly,NULL);
@@ -3179,6 +3181,10 @@ void wallsPipeJoin(void)
 }
 
 
+/* GCC14: the things' share of Master Draw in the L+R+Y tree -- one pointer, since pushProfile
+   finds a child by its id's address */
+static char thingsProf[]="Things";
+
 /* --- GCC14: DRAW half ----------------------------------------------------------------
    Everything that emits VDP1 commands or touches the tile cache stays here, on the
    master, its only writer. */
@@ -3225,7 +3231,7 @@ void drawWalls(int k,MthMatrix *view)
  if (k==0)
     {/* one count per image, every view: the last one is what the VDP1 is drawing now */
      vdp1PrevWalk=vdp1Walk; vdp1PrevMaxX=vdp1MaxX; vdp1PrevMaxY=vdp1MaxY;
-     vdp1Walk=0; vdp1Big=0; vdp1BigWalk=0; vdp1MaxX=0; vdp1MaxY=0;
+     vdp1Walk=0; vdp1Big=0; vdp1BigWalk=0; vdp1MaxX=0; vdp1MaxY=0; vdp1RotWalk=0;
     }
  autoTarget=NULL;
  bestAutoAimRating=INT_MAX;
@@ -3265,14 +3271,14 @@ void drawWalls(int k,MthMatrix *view)
      EZ_userClip(parms);
 #endif
      drawSector(updateList[i]-sectorDraw,view,0);
-     drawSprites(&(viewPos),view,updateList[i]-sectorDraw);
+     CFG_PROF(thingsProf); drawSprites(&(viewPos),view,updateList[i]-sectorDraw); CFG_PROF_END();
     }
 
  lastWallCmd=EZ_getNextCmdNm()-1;
  /* draw sprites in slave rendered sectors */
  for (;i>=0;i--)
     {int last=EZ_getNextCmdNm();
-     drawSprites(&(viewPos),view,updateList[i]-sectorDraw);
+     CFG_PROF(thingsProf); drawSprites(&(viewPos),view,updateList[i]-sectorDraw); CFG_PROF_END();
      if (EZ_getNextCmdNm()!=last)
 	{EZ_linkCommand(EZ_getNextCmdNm()-1,JUMP_RETURN,0);
 	 updateList[i]->spriteCommandStart=last;
@@ -3414,6 +3420,23 @@ int frustumClip(Fixed32 *p1,Fixed32 *p2,int dx,int dy,int dz,int neg)
  return 0;
 }
 
+/* GCC14: a scaled sprite (ZOOM_TL: corner pos[0], size pos[1]) is held to the VDP1's range like
+   a cell (WALLASM.H vdp1Range).  A chunk is at most ~1000 px wide at CFG_SPRITE_NEARCLIP, so one
+   past the range lies off the view but for the edge of a very near one: clamped, the pattern
+   squeezed.  A chunk wholly off the view is not sent at all. */
+static int sprRect(XyInt *pos)
+{int x0=pos[0].x,y0=pos[0].y,x1=x0+pos[1].x,y1=y0+pos[1].y;
+ if (x0>viewXmax || x1<viewXmin || y0>viewYmax || y1<viewYmin)
+    return 0;
+ if (x0<-VDP1LIM) x0=-VDP1LIM;
+ if (y0<-VDP1LIM) y0=-VDP1LIM;
+ if (x1> VDP1LIM) x1= VDP1LIM;
+ if (y1> VDP1LIM) y1= VDP1LIM;
+ pos[0].x=x0; pos[0].y=y0;
+ pos[1].x=x1-x0; pos[1].y=y1-y0;
+ return 1;
+}
+
 void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 {Sprite *o;
  Sprite *drawList[100];
@@ -3537,7 +3560,8 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	 pos[2].y=pos[1].y-width;
 	 pos[3].x=pos[0].x;
 	 pos[3].y=pos[0].y-width;
-	 EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,o->color,pos,NULL);
+	 if (vdp1Range(pos))
+	    EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,o->color,pos,NULL);
 	 continue;
 	}
      if (o->owner)
@@ -3644,8 +3668,11 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		 pos[1].x=f(shadowWidth);
 		 pos[1].y=f(shadowHeight);
 		 assert(getPicClass(0)!=TILEVDP);
-		 EZ_scaleSpr(ZOOM_MM,COLOR_4|COMPO_SHADOW,
-			     0,mapPic(0),pos,NULL);
+		 /* centred: past the range it is wholly off the view (<= 240 px wide) */
+		 if (abs(pos[0].x)+(pos[1].x>>1)<=VDP1LIM &&
+		     abs(pos[0].y)+(pos[1].y>>1)<=VDP1LIM)
+		    EZ_scaleSpr(ZOOM_MM,COLOR_4|COMPO_SHADOW,
+				0,mapPic(0),pos,NULL);
 		}
 	    }
 	}
@@ -3714,19 +3741,21 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	      gtable.entry[1]=gtable.entry[0];
 	      gtable.entry[2]=gtable.entry[0];
 	      gtable.entry[3]=gtable.entry[0];
-	      EZ_scaleSpr(ZOOM_TL|flip,
-			  UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|
-			  DRAW_GOURAU,0,pic,pos,&gtable);
+	      if (sprRect(pos))
+		 EZ_scaleSpr(ZOOM_TL|flip,
+			     UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|
+			     DRAW_GOURAU,0,pic,pos,&gtable);
 	     }
 	  else
 	     {if (i==TILESMALL8BPP)
 		 {pos[1].x>>=1;
 		  pos[1].y>>=1;
 		 }
-	      EZ_scaleSpr(ZOOM_TL | flip,
-			  UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE,
-			  (light? light: spriteBank)<<8,pic,pos,  /* light = muzzle flash */
-			  NULL);
+	      if (sprRect(pos))
+		 EZ_scaleSpr(ZOOM_TL | flip,
+			     UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE,
+			     (light? light: spriteBank)<<8,pic,pos,  /* light = muzzle flash */
+			     NULL);
 	     }
 	 }
 

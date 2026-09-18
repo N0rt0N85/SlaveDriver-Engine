@@ -2702,7 +2702,7 @@ int runLevel(char *filename,int levelNm)
 #endif
 
      /* LEGEND  polys : cells emitted (walls+floors+ceilings, sprites excluded)
-		 vcl   : cells V-windowed, i.e. outside the VDP1 range (was cx/cy)
+		 vcl   : cells brought back into the VDP1 range (WALLASM.H vdp1Range)
 		 pipe  : spins at the join of the traversal started in the tail
 			 of the previous frame.  0 = it fit entirely in the tail;
 			 -1 = nothing was in flight (earthquake, or WALLPIPE at 0). */
@@ -2730,13 +2730,17 @@ int runLevel(char *filename,int levelNm)
 			 over a quarter of the 3D window is re-counted with the pre-clip
 			 (a line wholly past one edge is skipped).  WALLASM.H vdp1WalkProbe.
 		 big  : those cells / their part of walk.  Things are not counted.
+		 rot  : walk if the walls were drawn from patterns turned a quarter --
+			vertical lines -- the rest as drawn (WALLASM.H vdp1RotProbe)
 	 Solo only: split screen has its c: line on this row.  The ASSERT build has extra: at
 	 its left end, so the line moves right there. */
      if (mpPlayers==1)
 #ifdef NDEBUG
-	drawStringf(-158,-100,1,"walk:%dk big:%d/%dk",vdp1Walk>>4,vdp1Big,vdp1BigWalk>>4);
+	drawStringf(-158,-100,1,"walk:%dk big:%d/%dk rot:%dk",vdp1Walk>>4,vdp1Big,
+		    vdp1BigWalk>>4,vdp1RotWalk>>4);
 #else
-	drawStringf(-60,-100,1,"walk:%dk big:%d/%dk",vdp1Walk>>4,vdp1Big,vdp1BigWalk>>4);
+	drawStringf(-60,-100,1,"walk:%dk big:%d/%dk rot:%dk",vdp1Walk>>4,vdp1Big,
+		    vdp1BigWalk>>4,vdp1RotWalk>>4);
 #endif
 
      if (profileShow)

@@ -27,10 +27,11 @@ extern int lodEnable,lodFused,lodCells,lodFlat;
 extern int nmMeshPolys;   /* cells from the mesh path: floors, ceilings, curved walls */
 extern int lodWeldWhy[2]; /* welds refused: [0] off the strip, [1] vertex off the edge */
 
-int vdp1NmClipped;  /* cells V-windowed in the frame: replaces the cx/cy maxima */
+int vdp1NmClipped;  /* cells brought into the VDP1's range in the frame (V window, U slide) */
 /* GCC14: PROBE (STATUSTEXT) -- the VDP1's walk over the frame's cells, WALLASM.H
-   vdp1WalkProbe: all cells / the cells over VDP1BIGWALK, in units of 64 pixels */
-int vdp1Walk,vdp1Big,vdp1BigWalk;
+   vdp1WalkProbe: all cells / the cells over VDP1BIGWALK / the same walk with the walls drawn
+   from patterns turned a quarter, in units of 64 pixels */
+int vdp1Walk,vdp1Big,vdp1BigWalk,vdp1RotWalk;
 /* The same for the list the VDP1 is drawing, the previous image's: saved by drawWalls before it
    counts the next one, for the freeze report (CRASH.C) */
 int vdp1PrevWalk,vdp1PrevMaxX,vdp1PrevMaxY;

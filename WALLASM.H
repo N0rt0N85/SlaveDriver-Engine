@@ -45,12 +45,42 @@ static __inline__ XyInt *probeVDP1(XyInt *poly)
      vdp1Big      the cells whose count passes VDP1BIGWALK, a quarter of the 3D window ...
      vdp1BigWalk  ... re-counted on 16 of their lines with the pre-clip applied
      vdp1MaxX/Y   the largest |x| and |y| sent, beyond 1023 out of the VDP1's range
+     vdp1RotWalk  the same walk if every wall were drawn from a pattern turned a quarter:
+                  lines from edge A-B to edge D-C, vertical on a wall (a wall = its V edges
+                  A-D and B-C vertical on screen), everything else counted as drawn
    Units of 64 pixels.  The window is the view's, not the sector box of RECTCLIP: a line only
    that box would pre-clip still counts. */
 #ifdef STATUSTEXT
 #define VDP1BIGWALK 16384
 static __inline__ int vdp1Abs(int a)
 {return a<0? -a: a;
+}
+
+static __inline__ int vdp1RotProbe(XyInt *q)
+{int ab,dc,ad,bc,lines,len,walk,j;
+ ab=vdp1Abs(q[1].x-q[0].x); j=vdp1Abs(q[1].y-q[0].y); if (j>ab) ab=j;
+ dc=vdp1Abs(q[2].x-q[3].x); j=vdp1Abs(q[2].y-q[3].y); if (j>dc) dc=j;
+ ad=vdp1Abs(q[3].x-q[0].x)+vdp1Abs(q[3].y-q[0].y);
+ bc=vdp1Abs(q[2].x-q[1].x)+vdp1Abs(q[2].y-q[1].y);
+ lines=(ab>dc? ab: dc)+1;
+ len=(ad>bc? ad: bc)+1;
+ if (lines>8192) lines=8192;
+ if (len>16384) len=16384;
+ walk=lines*len;
+ if (walk>VDP1BIGWALK)
+    {int in=0;
+     for (j=1;j<32;j+=2)
+	{int px=q[0].x+(((q[1].x-q[0].x)*j)>>5),py=q[0].y+(((q[1].y-q[0].y)*j)>>5);
+	 int rx=q[3].x+(((q[2].x-q[3].x)*j)>>5),ry=q[3].y+(((q[2].y-q[3].y)*j)>>5);
+	 if ((px<viewXmin && rx<viewXmin) || (px>viewXmax && rx>viewXmax) ||
+	     (py<viewYmin && ry<viewYmin) || (py>viewYmax && ry>viewYmax))
+	    continue;                   /* pre-clipped */
+	 in+=vdp1Abs(rx-px)+vdp1Abs(ry-py)+1;
+	}
+     if (in>16*16384) in=16*16384;
+     walk=(in>>4)*lines;
+    }
+ return walk;
 }
 
 static __inline__ void vdp1WalkProbe(XyInt *q)
@@ -86,6 +116,9 @@ static __inline__ void vdp1WalkProbe(XyInt *q)
      vdp1BigWalk+=walk>>6;
     }
  vdp1Walk+=walk>>6;
+ if (q[0].x==q[3].x && q[1].x==q[2].x)
+    walk=vdp1RotProbe(q);
+ vdp1RotWalk+=walk>>6;
 }
 #define VDP1WALK(q) vdp1WalkProbe(q)
 #else
@@ -93,8 +126,71 @@ static __inline__ void vdp1WalkProbe(XyInt *q)
 #endif
 
 #define VDP1DIAG 0      /* 1 = diagnostic disc: paints out-of-range cells */
-#define VDP1LIM  1023
+/* GCC14: the drawing plane is -1024..1023 AFTER the local origin is added (HW_VDP1.md:184-188),
+   and that origin reaches (240,168) in split screen (SRUINS.C mpSetViewport): 1023 - 240, with a
+   margin, keeps every view's command inside the plane.  The freeze of 2026-09-18 (vdp1Range) sat
+   on a cell windowed to y 1022 -- 1134 on the plane in solo -- as well as at x 3017. */
+#define VDP1LIM  767
 #define VCLIPONE 1024   /* cut fractions in 1/1024: (30000<<10) fits in an int */
+
+/* GCC14: past -1024..1023 the manual only says "operation cannot be guaranteed" (HW_VDP1.md:184).
+   On console it HANGS: 2026-09-18, a wall cell with two corners at x 3017 held COPR on itself
+   for over 4 s, the master waiting in SPR_WaitDrawEnd for ever (the freeze report, CRASH.C).
+   Nothing past the range may leave for the VDP1.
+   vdp1Slide moves corner p, past the range, along its edge towards q until it reaches the limit:
+   the edge keeps its line, so what shows of it on screen stays where it was.
+   vdp1Range slides along the U edges (A-B, D-C).  That keeps a wall exact -- its V edges are
+   vertical on screen, so both ends of a V edge slide to the same x -- and squeezes the pattern
+   in U, which cannot be windowed (no stride).  What is still past the range (an edge wholly past
+   one side) is clamped where it lies, off screen.  Returns 0 when the quad cannot show: all four
+   corners past one side of the range, or at or past one edge of the view (at most the view's
+   last row or column, which the neighbouring cell draws too). */
+static __inline__ void vdp1Slide(XyInt *p,const XyInt *q)
+{int k,pc,qc,lim,t;
+ for (k=0;k<2;k++)
+    {pc=k? p->y: p->x;
+     qc=k? q->y: q->x;
+     if (pc>VDP1LIM)
+	lim=VDP1LIM;
+     else if (pc<-VDP1LIM)
+	lim=-VDP1LIM;
+     else
+	continue;
+     if (lim>0? qc>=lim: qc<=lim)
+	continue;                       /* the whole edge is past this side */
+     t=((lim-qc)<<12)/(pc-qc);          /* 0..4096 from q to p */
+     p->x=q->x+(((p->x-q->x)*t)>>12);
+     p->y=q->y+(((p->y-q->y)*t)>>12);
+     if (k)
+	p->y=lim;
+     else
+	p->x=lim;
+    }
+}
+
+static __inline__ int vdp1Range(XyInt *q)
+{int i,xp=0,xm=0,yp=0,ym=0;
+ for (i=0;i<4;i++)
+    {xp+=q[i].x>VDP1LIM; xm+=q[i].x<-VDP1LIM;
+     yp+=q[i].y>VDP1LIM; ym+=q[i].y<-VDP1LIM;
+    }
+ if (!(xp|xm|yp|ym))
+    return 1;
+ if (xp==4 || xm==4 || yp==4 || ym==4)
+    return 0;
+ vdp1Slide(q+0,q+1); vdp1Slide(q+1,q+0);
+ vdp1Slide(q+3,q+2); vdp1Slide(q+2,q+3);
+ xp=xm=yp=ym=0;
+ for (i=0;i<4;i++)
+    {if (q[i].x> VDP1LIM) q[i].x= VDP1LIM;
+     if (q[i].x<-VDP1LIM) q[i].x=-VDP1LIM;
+     if (q[i].y> VDP1LIM) q[i].y= VDP1LIM;
+     if (q[i].y<-VDP1LIM) q[i].y=-VDP1LIM;
+     xp+=q[i].x>=viewXmax; xm+=q[i].x<=viewXmin;
+     yp+=q[i].y>=viewYmax; ym+=q[i].y<=viewYmin;
+    }
+ return !(xp==4 || xm==4 || yp==4 || ym==4);
+}
 
 /* GCC14: emit a wall cell with V-WINDOWING of the pattern when the quad leaves the VDP1's
    vertical range.  The pattern's V axis runs from edge (poly[0],poly[1]) to edge
@@ -103,14 +199,15 @@ static __inline__ void vdp1WalkProbe(XyInt *q)
    Facing a wall the cut is EXACT (both edges at the same depth); at an angle it is approximate,
    losing a little texture on one edge.
    Known limits: (1) U cannot be windowed -- no stride register, a U sub-rectangle shears
-   (HW_VDP1.md:160), so a horizontal overflow is not handled here; (2) the gouraud table is not
-   re-interpolated on the cut quad. */
+   (HW_VDP1.md:160): a horizontal overflow is slid along U by vdp1Range, which squeezes the
+   pattern; (2) the gouraud table is not re-interpolated on the cut quad. */
 static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
 				       struct gourTable *g)
-{int i,a,over=0,t0,t1;
+{int i,a,over=0,wide=0,t0,t1;
  XyInt src[4];
- /* `over` looks at |y| ONLY: only V can be windowed (known limits above).  Do not add x --
-    it would send x-overflowing quads to a vertical window that cannot fix them. */
+ /* `over` looks at |y| only: only V can be windowed (known limits above), and a wall's V edges
+    are vertical, so its x never enters the window.  `wide` (an |x| past the range) goes to
+    vdp1Range, after the window if there is one. */
  for (i=0;i<4;i++)
     {
 #if VDP1PROBE
@@ -122,16 +219,24 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
      if (a>vdp1MaxY) vdp1MaxY=a; if (a>vdp1MaxCoord) vdp1MaxCoord=a;
 #endif
      if (a>VDP1LIM) over=1;
+     a=poly[i].x; if (a<0) a=-a;
+     if (a>VDP1LIM) wide=1;
     }
- if (!over)
+ if (!(over|wide))
     {VDP1WALK(poly);
      EZ_specialDistSpr2(charNm,poly,g);
      return;
     }
- /* Replaces the old cx/cy maxima: counting the cells actually windowed says the same (do we
-    leave the range, how often) for one increment on the RARE path, instead of six compares
-    on EVERY cell. */
+ /* Replaces the old cx/cy maxima: counting the cells brought into range says the same (do we
+    leave the range, how often) for one increment on the RARE path. */
  vdp1NmClipped++;
+ if (!over)
+    {if (!vdp1Range(poly))
+	return;
+     VDP1WALK(poly);
+     EZ_specialDistSpr2(charNm,poly,g);
+     return;
+    }
 #if VDP1DIAG
  /* DIAGNOSTIC DISC -- fixes nothing, SHOWS.  A cell with a vertex outside the VDP1 range
     is painted flat, clamped to the range, instead of textured:
@@ -160,8 +265,10 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
     {int ya=poly[i].y,yb=poly[3-i].y,d=yb-ya,lo,hi,sp,sm;
      if (d==0)
 	{if (ya>VDP1LIM || ya<-VDP1LIM)
-	    {/* edge wholly out of range at constant height: nothing to window in V,
-		it is a horizontal overflow.  Emit as is, as before. */
+	    {/* edge wholly out of range at constant height: nothing to window in V, it is
+		an overflow along U -- slid there */
+	     if (!vdp1Range(poly))
+		return;
 	     VDP1WALK(poly);
 	     EZ_specialDistSpr2(charNm,poly,g);
 	     return;
@@ -188,6 +295,8 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
      poly[j].x=src[i].x+(((src[j].x-src[i].x)*t1)>>10);
      poly[j].y=src[i].y+(((src[j].y-src[i].y)*t1)>>10);
     }
+ if (wide && !vdp1Range(poly))
+    return;
  VDP1WALK(poly);
  EZ_specialDistSpr2V(charNm,t0,t1,poly,g);
 }
