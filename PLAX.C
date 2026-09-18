@@ -60,16 +60,13 @@ void enablePlax(int setting)
 }
 
 static unsigned short plaxPal[256];
-static int plaxFade=16;   /* 16 = palette telle qu'elle est sur le disque */
+static int plaxFade=16;   /* 16 = palette as stored on the disc */
 
-/* ASSOMBRIR LE CIEL.  Le plax est un bitmap 8 bpp sur RBG0 avec sa PROPRE banque CRAM (banc 7,
-   SCL_SET_R0CAOS(7) plus bas) : rebattre ces 256 entrees ne touche aucun autre plan, ni le VDP1,
-   ni le decalage couleur A que se partagent les degats et l'ecran de mort.  Cout : 256 ecritures
-   CRAM quand le reglage change, zero par image.
-
-   Pourquoi tricher : une brume de profondeur devrait rendre NOIR ce qui est a l'infini, donc le
-   ciel entier.  Ce serait juste et laid.  On le descend juste assez pour qu'il tienne dans la
-   meme gamme que le decor embrume. */
+/* GCC14: DARKEN THE SKY.  The plax is an 8 bpp bitmap on RBG0 with its OWN CRAM bank (bank 7,
+   SCL_SET_R0CAOS(7) below): rewriting those 256 entries touches no other plane, not the VDP1,
+   nor colour offset A (shared by damage and the death screen).  Cost: 256 CRAM writes when
+   the setting changes, none per frame.  A true depth fog would turn the whole sky black; it
+   is only lowered enough to sit in the same range as the fogged scenery. */
 void setPlaxFade(int f)
 {int i;
  if (f<0) f=0;

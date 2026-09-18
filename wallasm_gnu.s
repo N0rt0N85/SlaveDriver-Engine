@@ -137,14 +137,12 @@ _rectTransform:
 	! ... r3 = clamped z coord from above
 	shlr16 r3
 	shlr8 r3
-	! GCC14: le retrait etait z>>24 tel quel, soit un niveau tous les 256 unites et le
-	!        noir a 4096 -- au-dela de toute ligne de vue du jeu.  z>>24 sert maintenant
-	!        d'INDEX dans _fogTable (256 octets), ce qui permet n'importe quelle courbe
-	!        et pas seulement une pente.  shad aurait suffi mais n'existe qu'a partir du
-	!        SH-2E.  r0 et r3 sont les deux seuls registres libres ici : r1 porte la
-	!        lumiere du sommet, r0 vient d'etre consomme par le pas de lumiere.
-	!        Ces instructions tombent dans l'ombre de la division materielle lancee plus
-	!        haut, dont le resultat n'est relu qu'apres.
+	! GCC14: the subtraction used z>>24 as is: one level per 256 units, black
+	!        at 4096, beyond any line of sight.  z>>24 now INDEXES _fogTable
+	!        (256 bytes), so any curve works, not just a slope (shad only exists
+	!        from the SH-2E).  r0 and r3 are the only free registers here: r1
+	!        holds the vertex light, r0 was just used by the light step.  These
+	!        run in the shadow of the hardware divide started above.
 	mov r3,r0
 	mov.l .Lrt_fog,r3
 	mov.b @(r0,r3),r3
@@ -231,7 +229,7 @@ _rectTransform:
 .Lrt_vlight:	.long _level_vertexLight	! GCC14: literal pool of rectTransform
 .Lrt_divu:	.long 0xffffff00
 .Lrt_grey:	.long _greyTable
-.Lrt_fog:	.long _fogTable		! GCC14: 256 octets, indexes par z>>24 (WALLS.C)
+.Lrt_fog:	.long _fogTable		! GCC14: 256 bytes, indexed by z>>24 (WALLS.C)
 
 	.align 2
 .Lrt_callLit:	! perform function call to @r13
@@ -362,7 +360,7 @@ _normTransform:
 	mov r10,r3		! GCC14: was mov.l r10,r3
 	shlr16 r3
 	shlr8 r3
-	mov r3,r0		! GCC14: brume par table -- voir rectTransform
+	mov r3,r0		! GCC14: table fog -- see rectTransform
 	mov.l .Lnt_fog,r3
 	mov.b @(r0,r3),r3
 	extu.b r3,r3
@@ -446,4 +444,4 @@ _normTransform:
 	.align 2
 .Lnt_divu:	.long 0xffffff00	! GCC14: literal pool of normTransform
 .Lnt_grey:	.long _greyTable
-.Lnt_fog:	.long _fogTable		! GCC14: 256 octets, indexes par z>>24 (WALLS.C)
+.Lnt_fog:	.long _fogTable		! GCC14: 256 bytes, indexed by z>>24 (WALLS.C)

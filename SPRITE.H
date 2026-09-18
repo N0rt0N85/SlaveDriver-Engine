@@ -79,7 +79,7 @@ void movePushBlock(int block,int dx,int dy,int dz);
 
 /* functions to support ai routines */
 void moveCamera(void);
-extern char noClipCheat;                        /* la camera traverse les murs (cheat de test) */
+extern char noClipCheat;                        /* GCC14: test toggle, camera ignores walls */
 
 /* in order of priority */
 #define COLLIDE_SPRITE (0x8<<16)
@@ -188,9 +188,9 @@ extern int doomViewBob;                              /* DOOM_PLAYER.C: P_CalcHei
 #define CFG_PROF_END()         popProfile()
 extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, the slave's share   */
 #define CFG_STATUS_SECTOR()    drawStringf(-158,-80,1,"sector:%d vis:%d sl:%d/%d",camera->s,updateListSize,slaveSize+1,nmSlavePolys)   /* SRUINS.C:2220 */
-#define CFG_LIGHTRADIUS        181                               /* lumieres SOUSTRACTIVES seulement (addLight, AI.C) ; Doom : rayon par source, DOOM_LIGHTS.H */
-#define CFG_LIGHTSHIFT         10                                /* lumieres SOUSTRACTIVES seulement : 181^2>>10 = 31 */
-#define CFG_LIGHTSMOOTH        1                                 /* WALLS.C lightApply : attenuation s^2, bord doux */
+#define CFG_LIGHTRADIUS        181                               /* subtractive lights only (addLight); Doom: params LIGHT_* */
+#define CFG_LIGHTSHIFT         10                                /* subtractive lights only: 181^2>>10 = 31 */
+#define CFG_LIGHTSMOOTH        1                                 /* WALLS.C lightApply: s^2 falloff, soft edge */
 #else
 #define CFG_TIC_ADD(v)       (v)
 #define CFG_TIC_UNIT         2

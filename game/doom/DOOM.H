@@ -104,7 +104,7 @@ typedef struct
  unsigned short input,pushed;           /* last 60 Hz input; pushed = edges OR-ed since the last tic */
  int fire;                              /* BT_ATTACK of the current tic (held, or pushed between tics) */
  int extralight;                        /* A_Light0/1/2 (colour offset, plan section 2.5)         */
- int muzzleTics;                        /* tics restants sur l'eclair de bouche (DOOM_WEAPON.C)   */
+ int muzzleTics;                        /* tics left on the muzzle flash (DOOM_WEAPON.C)          */
  Object *attacker;                      /* last damager (P_DeathThink turns towards it)           */
  int lastFloor;                         /* camera->floorSector at the previous frame (sfx_oof)    */
  Fixed32 lastVelY;                      /* camera->vel.y at the previous frame                    */
@@ -154,7 +154,7 @@ Object     *doom_spawnPlayerMissile(int mt,int angle,int pitch);   /* P_SpawnPla
 void        doom_spawnPuff(MthXyz *pos,int sector,int melee);
 void        doom_spawnBlood(MthXyz *pos,int sector,int damage);
 int         doom_lineAttack(DoomActor *src,int yaw,int damage);   /* returns the hitScan code    */
-void        doom_missileLightsReset(void);     /* chaque niveau : oublie la bille de plasma eclairee */
+void        doom_missileLightsReset(void);     /* every level: forget the lit plasma bolt */
 void        doom_actorLevelInit(void);         /* level start: sound targets, nmSpawnFail       */
 Sprite     *doom_targetSprite(Object *t);      /* player -> camera, DoomActor -> sprite, else NULL */
 int         doom_targetAlive(Object *t);       /* player: currentState.health; actor: health && DF_SHOOTABLE */
@@ -193,8 +193,8 @@ void        doom_fireWeapon(void);             /* P_FireWeapon                  
 int         doom_checkAmmo(void);              /* P_CheckAmmo                                    */
 void        doom_bringUpWeapon(void);          /* P_BringUpWeapon                                */
 int         doom_aimSlope(Fixed32 *outPitch);  /* P_BulletSlope: autoTarget -> pitch; 0 if none  */
-void        doom_muzzleFlash(void);            /* lumiere dynamique sur camera, deux tics        */
-void        doom_muzzleTic(void);              /* son extinction, appelee par doom_playerTic     */
+void        doom_muzzleFlash(void);            /* dynamic light on camera, two tics             */
+void        doom_muzzleTic(void);              /* its fade and removal, from doom_playerTic     */
 void        doom_gunShot(int accurate,int damage,int range);   /* P_GunShot + P_LineAttack       */
 Sprite     *doom_playerLineAttack(int yaw,int pitch,Fixed32 range,int damage,int melee);   /* P_LineAttack from the camera: the sprite hit (linetarget) or NULL */
 void        doom_weaponDraw(int nmFrames);     /* SRUINS.C:2207 (CFG_RUN_WEAPON): draw the pin  */

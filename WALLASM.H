@@ -15,12 +15,10 @@ void normTransform(sVertexType *firstVertex,MthMatrix *viewMatrix,
 					       MthXyz *pos),
 		   Fixed32 nearFloor);   /* GCC14: z floor of the projection, per wall */
 
-/* SONDE -- ne modifie rien.  Les sommets de commande VDP1 tiennent sur 11 bits signes,
-   -1024..1023, et au-dela "operation cannot be guaranteed" (HW_VDP1.md:184).
-
-   ELLE COURT SUR CHAQUE CELLULE, et personne ne la lit : vdp1TakeMaxX/Y (WALLS.H:13-14) n'ont
-   aucun appelant.  A 0 elle disparait ; la mettre a 1 en meme temps qu'on ajoute la ligne
-   d'overlay qui l'affiche, jamais avant. */
+/* GCC14: PROBE -- changes nothing.  VDP1 command vertices hold 11 signed bits, -1024..1023;
+   beyond, "operation cannot be guaranteed" (HW_VDP1.md:184).  It runs on EVERY cell and nobody
+   reads it (vdp1TakeMaxX/Y, WALLS.H, have no caller): at 0 it vanishes; set it to 1 only
+   together with the overlay line that shows it. */
 #define VDP1PROBE 0
 
 static __inline__ XyInt *probeVDP1(XyInt *poly)
@@ -37,34 +35,25 @@ static __inline__ XyInt *probeVDP1(XyInt *poly)
  return poly;
 }
 
-#define VDP1DIAG 0      /* 1 = disque de diagnostic : peint les cellules hors plage */
+#define VDP1DIAG 0      /* 1 = diagnostic disc: paints out-of-range cells */
 #define VDP1LIM  1023
-#define VCLIPONE 1024   /* fractions de coupe en 1/1024 : (30000<<10) tient dans un int */
+#define VCLIPONE 1024   /* cut fractions in 1/1024: (30000<<10) fits in an int */
 
-/* Emission d'une cellule de mur avec FENETRAGE EN V du motif quand le quad sort de la plage
-   verticale du VDP1.
-
-   L'axe V du motif court de l'arete (poly[0],poly[1]) vers l'arete (poly[3],poly[2]) -- vrai
-   quelle que soit la permutation d'orientation de pattern[], qui a deja range les coins dans
-   ces emplacements.  On coupe chaque arete verticale la ou elle entre dans la plage et on garde
-   l'INTERSECTION des deux intervalles : conservateur, donc le resultat n'est jamais hors plage.
-
-   FACE a un mur, les deux aretes sont a la meme profondeur, donnent la meme fraction, et la
-   coupe est EXACTE -- c'est le cas ou il ne faut surtout rien degrader.  De biais elle est
-   approchee (les deux aretes se coupent a des fractions differentes et on prend la plus
-   serree), au prix d'un leger manque de texture sur une arete.
-
-   LIMITES CONNUES : (1) l'axe U n'est PAS fenetrable -- pas de registre de pas, un
-   sous-rectangle cisaille (HW_VDP1.md:160) ; un debordement horizontal reste donc non traite
-   ici.  (2) la table gouraud n'est pas re-interpolee sur le quad coupe : l'eclairage des coins
-   est celui des coins d'origine. */
+/* GCC14: emit a wall cell with V-WINDOWING of the pattern when the quad leaves the VDP1's
+   vertical range.  The pattern's V axis runs from edge (poly[0],poly[1]) to edge
+   (poly[3],poly[2]), whatever pattern[]'s orientation.  Each vertical edge is cut where it enters
+   the range and the INTERSECTION of the two intervals is kept: conservative, never out of range.
+   Facing a wall the cut is EXACT (both edges at the same depth); at an angle it is approximate,
+   losing a little texture on one edge.
+   Known limits: (1) U cannot be windowed -- no stride register, a U sub-rectangle shears
+   (HW_VDP1.md:160), so a horizontal overflow is not handled here; (2) the gouraud table is not
+   re-interpolated on the cut quad. */
 static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
 				       struct gourTable *g)
 {int i,a,over=0,t0,t1;
  XyInt src[4];
- /* `over` ne regarde QUE |y| : seul l'axe V est fenetrable (voir LIMITES CONNUES ci-dessus).
-    Ne pas y ajouter x -- ca enverrait au fenetrage vertical des quads qui debordent en x, que
-    ce chemin ne sait pas corriger. */
+ /* `over` looks at |y| ONLY: only V can be windowed (known limits above).  Do not add x --
+    it would send x-overflowing quads to a vertical window that cannot fix them. */
  for (i=0;i<4;i++)
     {
 #if VDP1PROBE
@@ -81,17 +70,17 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
     {EZ_specialDistSpr2(charNm,poly,g);
      return;
     }
- /* Remplace les anciens maxima cx/cy : le compte des cellules effectivement fenetrees dit la
-    meme chose (sort-on de la plage, et combien souvent) pour un increment sur le chemin RARE,
-    au lieu de six comparaisons sur CHAQUE cellule. */
+ /* Replaces the old cx/cy maxima: counting the cells actually windowed says the same (do we
+    leave the range, how often) for one increment on the RARE path, instead of six compares
+    on EVERY cell. */
  vdp1NmClipped++;
 #if VDP1DIAG
- /* DISQUE DE DIAGNOSTIC -- ne corrige rien, MONTRE.  Toute cellule dont un sommet sort de la
-    plage VDP1 est peinte a plat, bornee a la plage, au lieu d'etre texturee :
-       ROUGE   debordement en X seulement
-       BLEU    debordement en Y seulement
-       MAGENTA les deux
-    Un coup d'oeil donne l'axe, l'endroit et l'etendue -- ce qu'aucun compteur ne donne. */
+ /* DIAGNOSTIC DISC -- fixes nothing, SHOWS.  A cell with a vertex outside the VDP1 range
+    is painted flat, clamped to the range, instead of textured:
+       RED     X overflow only
+       BLUE    Y overflow only
+       MAGENTA both
+    Axis, place and extent at a glance -- what no counter gives. */
  {int j,cx=0,cy=0;
   for (j=0;j<4;j++)
      {int a;
@@ -113,8 +102,8 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
     {int ya=poly[i].y,yb=poly[3-i].y,d=yb-ya,lo,hi,sp,sm;
      if (d==0)
 	{if (ya>VDP1LIM || ya<-VDP1LIM)
-	    {/* arete entierement hors plage a hauteur constante : rien a fenetrer en V,
-		c'est un debordement horizontal.  Emettre tel quel, comme avant. */
+	    {/* edge wholly out of range at constant height: nothing to window in V,
+		it is a horizontal overflow.  Emit as is, as before. */
 	     EZ_specialDistSpr2(charNm,poly,g);
 	     return;
 	    }
@@ -130,7 +119,7 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
  if (t0<0) t0=0;
  if (t1>VCLIPONE) t1=VCLIPONE;
  if (t1-t0<=0)
-    return;   /* rien de representable : la cellule est a plus de 3 hauteurs d'ecran, hors champ */
+    return;   /* nothing representable: the cell is over 3 screen heights away, off view */
  for (i=0;i<4;i++)
     src[i]=poly[i];
  for (i=0;i<2;i++)

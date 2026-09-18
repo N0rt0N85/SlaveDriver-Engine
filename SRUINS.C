@@ -155,9 +155,9 @@ void addColorOffset(int r,int g,int b)
  colorOffset[2]+=b;
 }
 
-/* Le ciel suit la brume.  A l'infini la brume vaut son maximum, donc le ciel devrait etre noir :
-   on triche, en descendant sa palette juste assez pour qu'il ne troue plus l'image.  4096 (brume
-   coupee) rend le ciel intact ; 512 le descend au tiers. */
+/* GCC14: the sky follows the fog.  At infinity the fog is at its maximum, so the sky should be
+   black; its palette is only lowered enough not to punch a hole.  4096 (fog off) leaves it
+   intact, 512 lowers it to a third. */
 static int skyFadeFor(int fog)
 {int f=4+(12*fog)/4096;
  if (f>16) f=16;
@@ -2071,8 +2071,8 @@ int runLevel(char *filename,int levelNm)
 #endif
 
  mipBase=createMippedPics();
- setFog(fogDist);   /* remplit la table ; fogDist survit d'un niveau au suivant */
- setPlaxFade(skyFadeFor(fogDist));  /* initPlax a repose la palette d'origine au chargement */
+ setFog(fogDist);   /* fills the table; fogDist survives from one level to the next */
+ setPlaxFade(skyFadeFor(fogDist));  /* initPlax restored the original palette on load */
 
  while(1)
     {htimer=0;
@@ -2092,9 +2092,8 @@ int runLevel(char *filename,int levelNm)
       else
 	 mipChord=0;
      }
-     {/* tenir L+R+B -- ou A+B+Z -- pour faire tourner le LOD par lumiere.  Trois crans : aucune
-	 fusion, fusion, puis fusion PEINTE en bleu, qui montre lesquels des murs sont partis et
-	 sert a regler la brume jusqu'a ce que la bascule soit invisible. */
+     {/* GCC14: hold L+R+B -- or A+B+Z -- to cycle the light LOD: off, fuse, fuse PAINTED blue
+	  (shows which walls go; used to tune the fog until the switch is invisible). */
       static char lodChord=0;
       if (((((~lastInputSample)&(PER_DGT_TL|PER_DGT_TR|PER_DGT_B)))==
 	   (PER_DGT_TL|PER_DGT_TR|PER_DGT_B)) ||
@@ -2110,11 +2109,9 @@ int runLevel(char *filename,int levelNm)
       else
 	 lodChord=0;
      }
-     {/* tenir L+R+Z -- ou A+C+Z, pour les pads dont les gachettes ne rendent que de
-	 l'analogique -- pour faire tourner la brume de profondeur.  Quatre crans : le
-	 comportement d'origine, puis le noir a 2048, 1024 et 512 unites.  C'est un ECART
-	 ASSUME a Doom, qui ne noircit jamais un secteur a pleine lumiere : le but du reglage
-	 est de le juger a l'ecran, pas de le retablir. */
+     {/* GCC14: hold L+R+Z -- or A+C+Z, for pads whose triggers are analog only -- to cycle the
+	  depth fog: original, then black at 2048, 1024 and 512 units.  A deliberate departure
+	  from Doom, which never darkens a fully lit sector: the point is to judge it on screen. */
       static char fogChord=0;
       static char fogIndex=0;
       if (((((~lastInputSample)&(PER_DGT_TL|PER_DGT_TR|PER_DGT_Z)))==
@@ -2182,8 +2179,8 @@ int runLevel(char *filename,int levelNm)
      pushProfile("Walls");
      /* ok */
 #if WALLPIPE
-     /* recuperer la traversee lancee dans la queue de l'image precedente, AVANT que le
-	maitre ne touche sectorDraw[] */
+     /* collect the traversal started in last frame's tail, BEFORE the
+	master touches sectorDraw[] */
      wallsPipeJoin();
 #endif
      drawWalls(viewTransform.current);
@@ -2274,12 +2271,12 @@ int runLevel(char *filename,int levelNm)
 
 
 #ifdef STATUSTEXT
-     /* LEGENDE  fps : images par seconde, instantane puis lisse
-		 lod : murs fusionnes / cellules que la fusion a evitees / cellules emises a
-		       PLAT.  Les deux premieres ne sont plus dans polys ; la troisieme y est
-		       encore -- elle garde sa commande VDP1 et ne perd que sa texture.
-	 La ligne fps ne faisait que neuf colonnes sur la quarantaine lisibles, et -50 a -30
-	 sont pris (time, mem, puis l'arbre de profil) : le LOD tient ici. */
+     /* LEGEND  fps : frames per second, instant then smoothed
+		 lod : fused walls / cells the fusion avoided / cells emitted
+		       FLAT.  The first two are no longer in polys; the third still
+		       is -- it keeps its VDP1 command and loses only its texture.
+	 The fps line used nine of the ~40 readable columns, and -50 to -30
+	 are taken (time, mem, then the profile tree): the LOD fits here. */
      CFG_PROF("Overlay"); drawStringf(-158,-60,1,"fps:%d %d lod:%d/%d/%d",
 				      60/framesElapsed,60/(smoothVTime+1),
 				      lodFused,lodCells,lodFlat);
@@ -2297,22 +2294,22 @@ int runLevel(char *filename,int levelNm)
 	}
 #endif
 
-     /* LEGENDE  polys : cellules emises (murs+sols+plafonds, sprites exclus)
-		 vcl   : cellules fenetrees en V, donc hors plage VDP1 (etait cx/cy)
-		 pipe  : tours d'attente a la jointure de la traversee lancee dans la queue
-			 de l'image precedente.  0 = elle tenait entierement dans la queue ;
-			 -1 = rien n'etait en vol (seisme, ou WALLPIPE a 0). */
-     /* LEGENDE  polys : cellules emises, total / part de l'esclave.  La seconde divise
-		 SLAVECMDS de l'arbre pour donner le cout d'un enregistrement.
-		 (lod est sur la ligne fps, -60) */
-     /* msh : la part des cellules venue du chemin MAILLAGE -- sols, plafonds, murs courbes,
-	tout ce qui n'est pas un parallelogramme.  Ce qui reste est en grille de mur. */
+     /* LEGEND  polys : cells emitted (walls+floors+ceilings, sprites excluded)
+		 vcl   : cells V-windowed, i.e. outside the VDP1 range (was cx/cy)
+		 pipe  : spins at the join of the traversal started in the tail
+			 of the previous frame.  0 = it fit entirely in the tail;
+			 -1 = nothing was in flight (earthquake, or WALLPIPE at 0). */
+     /* LEGEND  polys : cells emitted, total / slave's share.  The second divides
+		 SLAVECMDS of the tree to give the cost of one record.
+		 (lod is on the fps line, -60) */
+     /* msh : share of cells from the MESH path -- floors, ceilings, curved walls,
+	anything that is not a parallelogram.  The rest is wall grid. */
      drawStringf(-158,-70,1,"polys:%d/%d msh:%d vcl:%d pipe:%d",nmPolys+nmSlavePolys,
 		 nmSlavePolys,nmMeshPolys,vdp1NmClipped,pipeSpin);
 
-     /* LEGENDE  wl : soudures de maillage REFUSEES -- la face noire suivante n'etait pas dans la
-		     bande / elle y etait mais un sommet saute tombait a cote de l'arete.  Dit
-		     laquelle des deux portes ouvrir pour prendre les cellules qui restent a plat. */
+     /* LEGEND  wl : mesh welds REFUSED -- the next black face was not in the
+		     strip / it was, but a skipped vertex fell off the edge.  Says
+		     which of the two doors to open for the cells still flat. */
      drawStringf(-158,-50,1,"time:%d %d:%d wl:%d/%d",
 		 (lastCalc+lastLastCalc)>>1,lastDraw,
 		 lastCalc+lastDraw,lodWeldWhy[0],lodWeldWhy[1]);
@@ -2332,15 +2329,15 @@ int runLevel(char *filename,int levelNm)
       int used[NMCLASSES];
       pic_nextFrame(nmSwaps,used);
 #ifdef STATUSTEXT
-      /* LEGENDE  tile: tuiles de la classe des murs utilisees dans CETTE image, contre les
-		       slots alloues (params/doom.cfg : PIC_SLOTS=32,31,1,0,0)
-		  sw:  evictions dans l'image.  Des que ce n'est plus 0, une tuile a ete
-		       remplacee alors qu'une commande deja emise la designait : c'est
-		       exactement la mauvaise texture a l'ecran, avec la bonne encore
-		       visible ailleurs dans la meme image. */
-      /* fog : distance en unites ou un secteur a pleine lumiere atteint le noir.  4096 est
-	 le reglage d'origine, donc hors de toute ligne de vue -- L+R+Z le fait tourner.
-	 sky : echelle 0-16 appliquee a la palette du ciel, LUE dans PLAX.C -- 16 = intacte. */
+      /* LEGEND  tile: wall-class tiles used in THIS frame, against the
+		       slots allocated (params/doom.cfg: PIC_SLOTS=32,31,1,0,0)
+		  sw:  evictions in the frame.  As soon as it is not 0, a tile was
+		       replaced while an emitted command still pointed at it:
+		       exactly the wrong texture on screen, with the right one still
+		       visible elsewhere in the same frame. */
+      /* fog : distance in units at which a fully lit sector reaches black.  4096 is
+	 the original setting, beyond any line of sight -- L+R+Z cycles it.
+	 sky : 0-16 scale applied to the sky palette, READ in PLAX.C -- 16 = intact. */
       drawStringf(-158,-90,1,"tile:%d sw:%d fog:%d sky:%d",used[0],nmSwaps[0],
 		  fogDist,getPlaxFade());
 #endif
@@ -2368,14 +2365,13 @@ int runLevel(char *filename,int levelNm)
      lastDraw=htimer-lastCalc;
 
 #if WALLPIPE
-     /* LE CREUX.  Ici le trace VDP1 est fini et le maitre n'a plus qu'a attendre le VBlank :
-	a 30 fps il a calcule 222 lignes sur 525, il en reste ~300 de vide.  La camera et la
-	geometrie sont figees depuis Motion et Post, et drawWalls de l'image suivante les
-	relira telles quelles -- la traversee lancee ici est donc identique au bit pres a
-	celle qu'il ferait lui-meme.
-	Apres ce point, seuls le menu, la question de voyage et les deux sorties peuvent
-	encore bouger la camera : chacun appelle wallsPipeDiscard().
-	Le seisme fait exception -- son jitter est tire au sommet de l'image suivante. */
+     /* GCC14: THE GAP.  VDP1 drawing is done and the master only waits for VBlank:
+	at 30 fps it computed 222 lines out of 525, ~300 are idle.  Camera and geometry
+	are frozen since Motion and Post, and next frame's drawWalls reads them as is,
+	so a traversal started here is identical to the bit.  After this point only the
+	menu, the travel question and the two exits can move the camera: each calls
+	wallsPipeDiscard().  Not while the earthquake is active -- its jitter is drawn
+	at the top of the next frame. */
      if (!earthQuake)
 	{MTH_PushMatrix(&viewTransform);
 	 MTH_RotateMatrixZ(&viewTransform, playerAngle.roll );
@@ -2441,8 +2437,8 @@ int runLevel(char *filename,int levelNm)
 
      enablePlax(1);
      if (CFG_CAMEL && hitCamel)
-	{/* la question de voyage rend la main ailleurs, ou plus tard : ce que l'esclave est
-	    en train de traverser ne vaudra plus rien */
+	{/* the travel question hands control elsewhere, or later: what the
+	    slave is traversing will be worthless */
 	 wallsPipeDiscard();
 	 enablePlax(0);
 	 if (runTravelQuestion(getText(LB_LEVELNAMES,hitCamel-100)))
@@ -2453,7 +2449,7 @@ int runLevel(char *filename,int levelNm)
 	}
      if (playerMotionEnable &&
 	 (!(lastInputSample & PER_DGT_S) || !controlerPresent || delayed_fade))
-	{/* le menu peut bouger la camera */
+	{/* the menu can move the camera */
 	 wallsPipeDiscard();
 	 enablePlax(0);
 	 runInventory(currentState.inventory,keyMask,&mapOn,

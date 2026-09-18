@@ -21,8 +21,8 @@
 #include "doom.h"
 #include "doom_lights.h"
 
-/* La bille de plasma qui porte la lumiere du flux, NULL si aucune (doomLightMissile) : declaree
-   ici parce que game_actor_func, plus bas, l'oublie quand cette bille meurt. */
+/* The plasma bolt carrying the stream's light, or NULL (doomLightMissile).  Declared here
+   because game_actor_func clears it when that bolt dies. */
 static Sprite *doomPlasmaLight;
 
 #define DOOM_MISSILERANGE F(2048)      /* p_local.h:55 */
@@ -200,14 +200,14 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
 				    velocity; an awake one keeps colliding (a closing door meets it) */
 	else
 	   this->collide=moveSprite(this->sprite);
-	/* L'eclair de bouche et l'explosion decroissent puis s'eteignent seuls.  A faire AVANT
-	   doom_setState, qui peut passer l'acteur en S_NULL et liberer le sprite sous la lumiere. */
+	/* Muzzle flash and explosion fade, then go out -- before doom_setState, which can move the
+	   actor to S_NULL and free the sprite under the light. */
 	if (this->flashTics)
 	   {this->flashTics--;
 	    if (this->sprite)
 	       {if (!this->flashTics)
 		   removeLight(this->sprite);
-		else if (this->mt==MT_ROCKET || this->mt==MT_BARREL)   /* les deux sources d'A_Explode */
+		else if (this->mt==MT_ROCKET || this->mt==MT_BARREL)   /* A_Explode's two users */
 		   doom_lightFade(this->sprite,GP_LIGHT_EXPLODE,this->flashTics,GP_LIGHT_EXPLODE_TICS);
 		else
 		   doom_lightFade(this->sprite,GP_LIGHT_MUZZLE_MONSTER,this->flashTics,GP_LIGHT_MUZZLE_TICS);
@@ -229,7 +229,7 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
 	if ((Object *)param1==_this)
 	   {if (this->sprite)
 	       {if (this->sprite==doomPlasmaLight)
-		   doomPlasmaLight=NULL;     /* la bille eclairee meurt : la suivante prendra la lumiere */
+		   doomPlasmaLight=NULL;     /* the lit bolt dies: the next one takes the light */
 		removeLight(this->sprite);   /* no-op without a light; else the list keeps a freed sprite */
 		freeSprite(this->sprite);
 	       }
@@ -614,19 +614,17 @@ static void doomMissileHit(DoomActor *this,int collide)
     doomExplodeMissile(this);
 }
 
-/* --- lumieres (teinte, rayon, intensite, durees : params/doom.cfg, cles LIGHT_*) ------------- */
+/* --- dynamic lights (tint, radius, intensity, durations: params/doom.cfg, LIGHT_*) ----------- */
 
-/* Ramene l'intensite a left/total de celle de depart ; teinte et rayon ne bougent pas. */
+/* Scales the intensity to left/total; tint and radius unchanged. */
 void doom_lightFade(Sprite *s,int r,int g,int b,int radius,int peak,int left,int total)
 {assert(s && total>0);
  (void)radius;
  changeLightEx(s,r,g,b,0,peak*left/total);
 }
 
-/* A_Explode : une roquette porte DEJA sa lumiere de vol, et la liste ne supporte pas le doublon
-   (removeLight n'enleve que la premiere occurrence, le second slot fuirait) -- on la ravive et on
-   l'elargit au lieu d'en poser une seconde.  Un baril n'en a pas : on la pose.  La decroissance
-   et l'extinction passent par flashTics, dans game_actor_func. */
+/* A_Explode.  A rocket already carries its flight light and the list takes no duplicates, so
+   that light is brightened and widened instead.  Fading and removal go through flashTics. */
 void doom_explosionLight(DoomActor *this)
 {assert(this);
  if (!this->sprite)
@@ -638,20 +636,13 @@ void doom_explosionLight(DoomActor *this)
  this->flashTics=GP_LIGHT_EXPLODE_TICS;
 }
 
-/* Chaque niveau : les sprites de l'ancien sont liberes, le pointeur ne doit pas leur survivre
-   (il bloquerait la lumiere du flux pour tout le niveau suivant). */
+/* Every level: the old level's sprites are freed, so is the lit bolt. */
 void doom_missileLightsReset(void)
 {doomPlasmaLight=NULL;
 }
 
-/* Pose la lumiere de vol d'un projectile qui vient de naitre.
-   UNE SEULE bille de plasma est eclairee.  Le fusil tire toutes les 3 tics et une bille vole a
-   25 u/tic : 75 unites entre deux billes pour une portee de 181, donc la flaque de la suivante
-   recouvre entierement celle de la precedente -- les eclairer toutes paierait quinze fois pour
-   une image identique, et la liste n'a QUE quinze slots (addLight refuse en silence au-dela).
-   Celle qui porte la lumiere est la plus ancienne encore en vie : la tete du flux, la plus loin
-   du joueur, donc celle que l'eclair de bouche n'atteint pas.  Quand elle meurt, game_actor_func
-   oublie le pointeur et la suivante prend la lumiere -- personne n'a de liste a tenir. */
+/* Flight light of a new missile.  Only ONE plasma bolt is lit, the oldest alive: bolts fly
+   75 u apart against a 160 u reach, so one pool covers the next, and the list has 15 slots. */
 static void doomLightMissile(DoomActor *th,int mt)
 {assert(th);
  if (!th->sprite)
@@ -823,16 +814,12 @@ int doom_lineAttack(DoomActor *src,int yaw,int damage)
  int hitSec,code,pitch;
  assert(src);
  assert(src->sprite);
- /* Eclair de bouche.  Le moteur porte deja cette lumiere -- c'est celle de la boule de feu de
-    l'imp (doom_spawnMissile) ; ici elle se pose sur le TIREUR, faiblit au second tic et s'eteint
-    seule (game_actor_func).  Doom n'a pas de lumiere dynamique : les images de tir y sont
-    seulement marquees "fullbright", ce qui n'eclaire rien autour.  C'est donc un AJOUT.
-    Le garde sur flashTics evite un second addLight sur le meme sprite quand un chaingunner
-    tire plusieurs tics de suite : la liste de lumieres ne supporte pas le doublon. */
+ /* Muzzle flash on the shooter -- an addition: Doom only marks firing frames fullbright.
+    The flashTics guard avoids a second light when a monster fires on consecutive tics. */
  if (!src->flashTics)
     addLightEx(src->sprite,GP_LIGHT_MUZZLE_MONSTER);
  else
-    changeLightEx(src->sprite,GP_LIGHT_MUZZLE_MONSTER);   /* rallume la moitie du tic precedent */
+    changeLightEx(src->sprite,GP_LIGHT_MUZZLE_MONSTER);   /* back to full after the half tic */
  src->flashTics=GP_LIGHT_MUZZLE_TICS;
  info=&doomMobjInfo[src->mt];
  eye=src->sprite->pos;

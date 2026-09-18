@@ -899,18 +899,15 @@ void movePushBlock(int block,int dx,int dy,int dz)
  level_pushBlock[block].dz+=dz;
 }
 
-char noClipCheat=0;     /* bascule de test, posee par le jeu (DOOM_PLAYER.C) */
+char noClipCheat=0;     /* GCC14: test toggle, set by DOOM_PLAYER.C */
 
 void moveCamera(void)
 {doFriction(camera);
  internal_moveSprite(camera);
  if (noClipCheat)
-    {/* Traversee : on saute la collision et on rattrape le secteur par les PORTAILS.  Un mur
-	PLEIN n'en est pas un, donc le franchir laisse la camera dans son ancien secteur : le
-	monde se dessine depuis la, on voit la piece par l'exterieur, et revenir sur ses pas
-	remet tout d'aplomb -- l'index reste valide, rien ne casse.  floorSector garde une valeur
-	non nulle pour que le jeu continue de croire le joueur au sol, sans quoi il ne pourrait
-	plus se deplacer du tout ; la gravite, elle, est coupee cote jeu. */
+    {/* GCC14: no collision; the sector follows portals only, so crossing a solid wall keeps
+	the old sector (the room is drawn from outside, harmless).  floorSector stays valid so the
+	player can still move; gravity is cut by the game. */
      int s=findSectorContaining(&camera->pos,camera->s);
      if (s!=camera->s)
 	moveSpriteTo(camera,s,&camera->pos);

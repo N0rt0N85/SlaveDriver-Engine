@@ -3,36 +3,34 @@
 
 #define FOCALDIST   160
 
-/* SONDE (STATUSTEXT) -- plus grande coordonnee projetee |x| ou |y| depuis le dernier
-   affichage, mesuree AVANT bornage par clampVDP1() (wallasm.h).  Le VDP1 n'accepte que
-   -1024..1023 et au-dela "operation cannot be guaranteed" (HW_VDP1.md:184).  Sert a
-   trancher : magnification normale du plan proche (~1e3) ou geometrie corrompue (>>1e4).
-   -fcommon fusionne cette definition provisoire, donc zero ligne ajoutee dans un .C. */
-/* Pipeline de traversee -- 0 arret, 1 mesure (resultat jete), 2 levier.  Le pourquoi et les
-   conditions de validite sont en tete de WALLS.C. */
+/* GCC14: PROBE (STATUSTEXT) -- largest projected |x| or |y| since the last display, measured
+   BEFORE clampVDP1() (wallasm.h).  The VDP1 takes only -1024..1023 (HW_VDP1.md:184): tells
+   normal near-plane magnification (~1e3) from corrupt geometry (>>1e4).  -fcommon merges
+   this tentative definition, so no line in a .C. */
+/* GCC14: traversal pipeline -- 0 off, 1 measure (result discarded), 2 lever.  Why, and when
+   it is valid: top of WALLS.C. */
 #define WALLPIPE 2
 void wallsPipeKick(MthMatrix *view);
 void wallsPipeJoin(void);
-void wallsPipeDiscard(void);  /* joint puis jette : la camera va bouger, ou le niveau partir */
-extern int pipeSpin;          /* tours d'attente a la jointure ; -1 = rien n'etait en vol */
+void wallsPipeDiscard(void);  /* join then discard: the camera will move, or the level go */
+extern int pipeSpin;          /* spins at the join; -1 = nothing in flight */
 
-/* Brume de profondeur : table de 256 octets indexee par z>>24, lue par l'assembleur.
-   setFog(d) = un secteur a pleine lumiere atteint le noir a d unites.  4096 rend le
-   comportement d'origine (plus loin que toute ligne de vue, donc pas de brume). */
+/* GCC14: depth fog: 256-byte table indexed by z>>24, read by the asm.  setFog(d): a fully
+   lit sector reaches black at d units.  4096 gives the original behaviour (no fog). */
 extern int fogDist;
 void setFog(int dist);
 
-/* LOD par lumiere (WALLS.C, en tete de drawRectWall) : un mur que la brume a deja rendu noir
-   partout devient UN quad plat.  0 = jamais, 1 = fusion, 2 = fusion peinte en bleu pour voir
-   lesquels partent.  lodFused/lodCells = murs fusionnes et cellules economisees dans l'image. */
+/* GCC14: light LOD (WALLS.C, top of drawRectWall): a wall the fog has turned black
+   everywhere becomes ONE flat quad.  0 = never, 1 = fuse, 2 = fuse painted blue.
+   lodFused/lodCells = walls fused and cells saved in the frame. */
 extern int lodEnable,lodFused,lodCells,lodFlat;
-extern int nmMeshPolys;   /* cellules venues du chemin maillage : sols, plafonds, murs courbes */
-extern int lodWeldWhy[2]; /* soudures refusees : [0] hors bande, [1] sommet hors de l'arete */
+extern int nmMeshPolys;   /* cells from the mesh path: floors, ceilings, curved walls */
+extern int lodWeldWhy[2]; /* welds refused: [0] off the strip, [1] vertex off the edge */
 
-int vdp1NmClipped;  /* cellules fenetrees en V dans l'image : remplace les maxima cx/cy */
+int vdp1NmClipped;  /* cells V-windowed in the frame: replaces the cx/cy maxima */
 
-int vdp1MaxCoord;   /* max(|x|,|y|) -- conserve pour compatibilite d'affichage */
-int vdp1MaxX,vdp1MaxY;  /* separes : dit SUR QUEL AXE on sort de la plage */
+int vdp1MaxCoord;   /* kept for display compatibility */
+int vdp1MaxX,vdp1MaxY;  /* separate: says WHICH AXIS leaves the range */
 static __inline__ int vdp1TakeMaxX(void){int m=vdp1MaxX; vdp1MaxX=0; return m;}
 static __inline__ int vdp1TakeMaxY(void){int m=vdp1MaxY; vdp1MaxY=0; return m;}
 #define PROJECT(x,z) ( ((x)*(FOCALDIST>>4))/(int)((z)>>4) )
@@ -46,9 +44,9 @@ void initWallRenderer(void);
 void removeLight(Sprite *s);
 void addLight(Sprite *s,int r,int g,int b);
 void changeLightColor(Sprite *s,int r,int g,int b);
-void addLightEx(Sprite *s,int r,int g,int b,int radius,int peak);    /* proportionnel : k 0..16, rayon en u, intensite 0..31 */
-void changeLightEx(Sprite *s,int r,int g,int b,int radius,int peak); /* dans le modele de la lumiere ; radius <= 0 le garde */
-int  hasLight(Sprite *s);                       /* la liste ne supporte pas le doublon */
+void addLightEx(Sprite *s,int r,int g,int b,int radius,int peak);    /* GCC14: k 0..16, radius, intensity 0..31 */
+void changeLightEx(Sprite *s,int r,int g,int b,int radius,int peak); /* GCC14: in the light's model; radius <= 0 keeps it */
+int  hasLight(Sprite *s);                       /* GCC14: no duplicates in the list */
 
 void initWater(void);
 void stepWater(void);

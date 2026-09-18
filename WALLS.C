@@ -475,38 +475,24 @@ void stepWater(void)
 }
 
 #define LIGHT
-/* --- lumieres dynamiques ----------------------------------------------------------------------
-   Deux modeles cohabitent, un par lumiere (lMode) :
-   - SOUSTRACTIF (addLight) : celui de Lobotomy, garde a l'identique pour AI.C / AI2.C.  Chaque
-     canal recoit (LIGHTRADIUS^2 - d^2)>>CFG_LIGHTSHIFT MOINS sa valeur, 0 = plein, 31 = absent.
-     La valeur ne dit pas une teinte mais une PORTEE (un canal a 12 ne s'allume qu'a moins de
-     143 u sur 181), et son pic de 31 depasse la marge d'une piece pleine -- 16 est le neutre du
-     gouraud, 31 le plafond -- donc au centre presque toute source virait au blanc, sur un
-     plateau ecrete au bord dur.
-   - PROPORTIONNEL (addLightEx) : le portage Doom.  Par source : k de 0 a 16 par canal (la
-     teinte), un RAYON, une INTENSITE de 0 a 31 (l'apport au centre).  s = (R^2 - d^2)/R^2 sur
-     0..256, adouci en s^2 quand CFG_LIGHTSMOOTH (un bord doux au lieu d'un disque), apport =
-     s * k * intensite >> 12.  Teinte, diametre et intensite se reglent separement -- pour Doom,
-     dans params/doom.cfg (cles LIGHT_*).  Cout par sommet eclaire : cinq
-     multiplications de plus que le soustractif (normalisation, adoucissement, trois canaux) --
-     le SH-2 multiplie en materiel, c'est ~0,5 us, et rien du tout sans lumiere vivante.
-   L'attenuation N.L d'origine (BETTERLIGHT) est retiree : elle ne compilait plus en ce qu'elle
-   voulait dire (un `else` pendouillant mangeait le canal rouge) et coutait une division par
-   sommet.  Le seul morceau utile -- ne pas eclairer une face qui tourne le dos a la source --
-   est dans buildLightList. */
+/* GCC14: two light models, one per light (lMode).
+   - subtractive (addLight): Lobotomy's, kept bit for bit for AI.C / AI2.C.
+   - proportional (addLightEx, Doom): tint k 0..16 per channel, then radius and intensity 0..31
+     per light.  s = (R^2 - d^2)/R^2 on 0..256, squared if CFG_LIGHTSMOOTH; adds
+     s * k * intensity >> 12.
+   BETTERLIGHT is gone: its #else left a dangling else that dropped the red channel. */
 #define MAXNMLIGHTSOURCES 15
 #define LIGHTRADIUS CFG_LIGHTRADIUS
 
 static Sprite *lightSource[MAXNMLIGHTSOURCES];
 static int nmLights,delayNmLights;
 static MthXyz tLightPos[MAXNMLIGHTSOURCES];
-static int lColor[MAXNMLIGHTSOURCES][3];   /* proportionnel : k * intensite, plie a la pose */
+static int lColor[MAXNMLIGHTSOURCES][3];   /* proportional: k * intensity */
 static int delayColor[MAXNMLIGHTSOURCES][3];
-/* Rayon, rayon^2 et (1<<24)/rayon^2, figes a la pose ou au changement de rayon : la division
-   se fait une fois par lumiere, jamais par sommet. */
+/* GCC14: radius, radius^2 and (1<<24)/radius^2, set once per light: no divide per vertex. */
 static int lRad[MAXNMLIGHTSOURCES],lRad2[MAXNMLIGHTSOURCES],lInv[MAXNMLIGHTSOURCES];
 static int delayRad[MAXNMLIGHTSOURCES];
-static char lMode[MAXNMLIGHTSOURCES];      /* 0 soustractif, 1 proportionnel */
+static char lMode[MAXNMLIGHTSOURCES];      /* 0 subtractive, 1 proportional */
 static char lightColorChanged=0,lightsDeleted=0;
 static char delayDeleteLight[MAXNMLIGHTSOURCES];
 static void lightInit(void)
@@ -545,7 +531,7 @@ void addLight(Sprite *s,int r,int g,int b)
 {lightPut(s,r,g,b,LIGHTRADIUS,0);
 }
 
-/* k de 0 a 16 par canal, rayon en unites monde, intensite de 0 a 31 (l'apport au centre). */
+/* GCC14: k 0..16 per channel, radius in world units, intensity 0..31 at the centre. */
 void addLightEx(Sprite *s,int r,int g,int b,int radius,int peak)
 {assert(radius>=16 && radius<=1024);
  assert(peak>=0 && peak<=31);
@@ -553,10 +539,8 @@ void addLightEx(Sprite *s,int r,int g,int b,int radius,int peak)
  lightPut(s,r*peak,g*peak,b*peak,radius,1);
 }
 
-/* La lumiere VIVANTE de ce sprite, -1 si aucune.  Seul [0, delayNmLights) est vivant : la
-   compaction d'updateLights ne vide pas la queue du tableau, et les anciennes recherches sur
-   les quinze slots pouvaient y trouver l'adresse d'un sprite recycle -- removeLight marquait
-   alors un slot MORT, et la prochaine lumiere posee a cet index disparaissait aussitot. */
+/* GCC14: the live light of s, or -1.  Only [0, delayNmLights) is live: scanning the stale
+   tail could match a recycled sprite and kill the next light placed at that index. */
 static int lightFind(Sprite *s)
 {int i;
  for (i=0;i<delayNmLights;i++)
@@ -565,8 +549,8 @@ static int lightFind(Sprite *s)
  return -1;
 }
 
-/* Valeurs dans le modele de la lumiere : proportionnel, k de 0 a 16 et `peak` l'intensite ;
-   soustractif, les valeurs d'origine et `peak` ignore.  radius <= 0 garde le rayon. */
+/* GCC14: values in the light's own model -- proportional: k 0..16 and intensity `peak`;
+   subtractive: raw, peak ignored.  radius <= 0 keeps the radius. */
 void changeLightEx(Sprite *s,int r,int g,int b,int radius,int peak)
 {int i=lightFind(s);
  int m;
@@ -584,7 +568,7 @@ void changeLightEx(Sprite *s,int r,int g,int b,int radius,int peak)
  lightColorChanged=1;
 }
 
-/* Le modele SOUSTRACTIF de Lobotomy (AI.C, AI2.C) ; une lumiere Doom passe par changeLightEx. */
+/* subtractive lights only (AI.C, AI2.C) */
 void changeLightColor(Sprite *s,int r,int g,int b)
 {changeLightEx(s,r,g,b,0,0);
 }
@@ -597,9 +581,7 @@ void removeLight(Sprite *s)
  delayDeleteLight[i]=1;
 }
 
-/* Ce sprite porte-t-il deja une lumiere ?  La liste ne supporte pas le doublon : removeLight
-   n'enleve que la PREMIERE occurrence, donc un second addLight sur le meme sprite fuit un slot
-   sur les quinze. */
+/* GCC14: the list takes no duplicates -- removeLight drops the first one only. */
 int hasLight(Sprite *s)
 {return lightFind(s)>=0;
 }
@@ -647,10 +629,8 @@ void updateLights(void)
     }
 }
 
-/* Apport de la lumiere i au point pos (espace vue), ajoute a *r,*g,*b.  Le seul calcul de
-   lumiere : le maitre (getLight), l'esclave (sgetLight) et les things (drawSprites) l'appellent.
-   La boite coupe avant les multiplications -- et avant tout debordement, un sommet lointain du
-   mur donnant des ecarts de plusieurs milliers d'unites. */
+/* GCC14: adds light i at pos (view space) to r,g,b.  Shared by getLight, sgetLight and
+   drawSprites; the box test runs before any multiply, and before any overflow. */
 static inline void lightApply(int i,MthXyz *pos,int *r,int *g,int *b)
 {int dx=f(pos->x-tLightPos[i].x);
  int dy=f(pos->y-tLightPos[i].y);
@@ -663,11 +643,11 @@ static inline void lightApply(int i,MthXyz *pos,int *r,int *g,int *b)
  if (u<=0)
     return;
  if (lMode[i])
-    {int sv=(u*lInv[i])>>16;          /* 0..256 : 256 sur la source, 0 au bord */
+    {int sv=(u*lInv[i])>>16;          /* 0..256 */
 #if CFG_LIGHTSMOOTH
-     sv=(sv*sv)>>8;                   /* bord doux : la parabole gardait 75 % a mi-rayon */
+     sv=(sv*sv)>>8;                   /* soft edge */
 #endif
-     *r+=(sv*lColor[i][0])>>12;       /* lColor = k * intensite <= 496 : apport <= intensite */
+     *r+=(sv*lColor[i][0])>>12;       /* <= intensity */
      *g+=(sv*lColor[i][1])>>12;
      *b+=(sv*lColor[i][2])>>12;
     }
@@ -696,12 +676,8 @@ static void buildLightList(sWallType *wall)
      dist=(f(lightSource[l]->pos.x-wallP.x))*wall->normal[0]+
 	  (f(lightSource[l]->pos.y-wallP.y))*wall->normal[1]+
 	  (f(lightSource[l]->pos.z-wallP.z))*wall->normal[2];
-     /* La source doit etre du cote VISIBLE du plan.  `dist` est exactement le produit scalaire
-	que le backface culling calcule avec camera->pos (meme sommet v[0], meme normale, plus bas
-	dans drawWalls), donc le meme signe dit la meme chose : <= 0, la lumiere est derriere la
-	face qu'on voit.  L'ancien test acceptait jusqu'a un rayon DERRIERE le plan -- une boule de
-	feu eclairait a travers la geometrie -- et il retenait des murs que la boucle par sommet
-	parcourait ensuite pour rien, en leur otant au passage leur fusion de LOD. */
+     /* GCC14: only a light on the visible side of the plane (same dot product as the backface
+	test); the old test lit walls from up to a radius behind them. */
      if (dist<=0 || dist>F(lRad[l]))
 	wallLightP[l]=0;
      else
@@ -724,7 +700,7 @@ static void sbuildLightList(sWallType *wall)
      dist=(f(lightSource[l]->pos.x-wallP.x))*wall->normal[0]+
 	  (f(lightSource[l]->pos.y-wallP.y))*wall->normal[1]+
 	  (f(lightSource[l]->pos.z-wallP.z))*wall->normal[2];
-     /* Meme face visible que buildLightList, voir le commentaire la-bas. */
+     /* GCC14: see buildLightList */
      if (dist<=0 || dist>F(lRad[l]))
 	swallLightP[l]=0;
      else
@@ -1128,106 +1104,71 @@ static int wallCrossesNear(MthXyz *coords)
 	}								\
     }
 
-/* --- LOD PAR LUMIERE -------------------------------------------------------------------------
-   Un mur n'est decoupe en grille QUE pour corriger la perspective de sa texture : le VDP1 etire
-   un motif entre quatre sommets sans diviser par pixel, donc il faut de petits quads.  Quand la
-   brume a ramene la lumiere de TOUS les sommets a zero, il n'y a plus rien a corriger -- le
-   gouraud retire 16 a chaque canal et il ne reste que du noir.  Le mur devient alors UN
-   quadrilatere : quatre sommets projetes au lieu de (h+1)(w+1), une commande VDP1 au lieu de
-   h*w, et plus aucune tuile demandee au cache.
-
-   Le critere n'est pas un reglage, c'est une egalite.  L'assembleur calcule
-   lumiere = level_vertexLight[] - fogTable[z>>24], bornee a zero ; elle vaut donc zero PARTOUT
-   si et seulement si la brume au point le plus PROCHE du mur atteint deja sa lumiere statique la
-   plus FORTE.  Les deux bornes sont prises dans le sens conservateur : jamais de fusion sur un
-   mur qui aurait encore quelque chose a montrer.  Et rien la-dedans ne regarde le temps d'image
-   -- ce n'est pas un gouverneur, le critere EST l'image.
-
-   Une lumiere dynamique casse la condition, et c'est tout l'interet : la boule de feu de l'imp
-   doit rendre sa texture au mur qu'elle eclaire.  buildLightList vient de poser nmWallLights
-   POUR CE MUR, donc le veto est gratuit et local -- le detail revient la ou la lumiere tombe et
-   nulle part ailleurs.
-
-   La brume paie le LOD : sans brume (fog 4096) la condition ne se declenche quasiment jamais, ce
-   qui est honnete puisqu'il n'y a alors rien derriere quoi cacher la simplification. */
-int lodEnable=1;         /* 0 = aucune fusion, 1 = fusion, 2 = fusion peinte en bleu */
-int lodFused,lodCells,lodFlat; /* murs fusionnes, cellules economisees, cellules aplaties */
+/* --- GCC14: light LOD ------------------------------------------------------------------------
+   A wall is split into a grid only to correct its texture perspective.  Once the fog has driven
+   EVERY vertex light to zero there is nothing left to correct (gouraud -16 = black), so the wall
+   becomes ONE quad: 4 projected vertices instead of (h+1)(w+1), one VDP1 command instead of h*w,
+   no tile.  The test is exact, not a setting: the asm computes light = level_vertexLight[] -
+   fogTable[z>>24] clamped at 0, which is zero everywhere iff the fog at the NEAREST corner
+   already reaches the wall's STRONGEST static light.  No frame-time governor.
+   A dynamic light vetoes it (nmWallLights is per wall): detail comes back where the light falls.
+   Without fog (4096) it almost never fires. */
+int lodEnable=1;         /* 0 = no fusion, 1 = fusion, 2 = fusion painted blue */
+int lodFused,lodCells,lodFlat; /* fused walls, cells saved, cells flattened */
 static int slave_lodFused,slave_lodCells,slave_lodFlat;
-/* POURQUOI une soudure de maillage a ete refusee : [0] la face noire suivante n'etait pas dans la
-   bande -- jointure en eventail, ou debut d'une autre rangee ; [1] la bande existait mais un
-   sommet saute ne tombait pas sur l'arete qui devait le remplacer.  Les deux ouvrent des portes
-   differentes : la premiere demande une adjacence plus generale, la seconde une tolerance. */
+/* Why a mesh weld was refused: [0] the next black face was not in the strip (fan joint or new
+   row); [1] the strip existed but a skipped vertex missed the replacing edge.  [0] calls for a
+   wider adjacency, [1] for a tolerance. */
 int lodWeldWhy[2];
 static int slave_lodWeldWhy[2];
-/* Cellules venues du chemin MAILLAGE (drawWall / slave_drawWall), c'est-a-dire des murs qui ne
-   sont pas des parallelogrammes.  Un sol ou un plafond de Doom est un polygone quelconque : il ne
-   peut pas etre une grille, donc il passe forcement par la.  Ce compteur dit quelle part de
-   l'image ils font -- et donc si fusionner des faces de maillage vaut d'etre construit. */
+/* Cells from the MESH path (drawWall / slave_drawWall): non-parallelogram walls, which includes
+   every Doom floor and ceiling.  Says whether welding mesh faces is worth building. */
 int nmMeshPolys;
 static int slave_nmMeshPolys;
 extern unsigned char fogTable[256];
 
-/* APLAT PAR CELLULE -- le complement de la fusion, pour ce qu'elle ne peut pas prendre : un mur
-   qui s'enfonce dans la brume est noir au fond et clair au pied, donc jamais fusionnable en
-   entier, mais ses cellules du fond le sont une a une.
-
-   Le test est EXACT et il ne coute aucune lecture.  L'assembleur range dans vCalc[].light le mot
-   gouraud final -- greyTable[lumiere] avec le bit 15 inverse quand le sommet est devant le plan
-   proche (wallasm_gnu.s, .Lrt_retFromLit).  greyTable[0] vaut 0x8000, donc un sommet BON et
-   totalement NOIR vaut exactement zero.  Les quatre valeurs sont deja chargees pour la table
-   gouraud : un OU des quatre, et zero veut dire que la cellule n'a plus rien a montrer.
-
-   Ce qui reste emis : la commande VDP1.  Ce qui part : la tuile (donc mapPic et une place dans
-   le cache), la table gouraud, et le placage de texture cote VDP1. */
+/* GCC14: flat cells -- what fusion cannot take.  A wall fading into the fog is black far and lit
+   near, never fusable whole, but its far cells go black one by one.
+   Exact and free: the asm stores the final gouraud word in vCalc[].light (greyTable[light], bit 15
+   flipped in front of the near plane, .Lrt_retFromLit); greyTable[0] = 0x8000, so a valid
+   all-black vertex is exactly 0.  The OR of the four is zero when the cell has nothing to show.
+   Kept: the VDP1 command.  Dropped: the tile (mapPic, a cache slot), the gouraud table, the
+   texture mapping. */
 #define CELLISBLACK(g) (lodEnable && \
 			!((g).entry[0]|(g).entry[1]|(g).entry[2]|(g).entry[3]))
 
-/* Meme test sur une cellule de GRILLE, avant que la boucle n'ait permute les coins pour la
-   texture : les quatre sommets sont aux indices de grille, pas dans l'ordre du motif. */
+/* Same test on a GRID cell, before the loop permutes the corners for the texture: the four
+   vertices are at grid indices, not in pattern order. */
 #define LODCELLDARK(V) (lodEnable && \
 			!((V)[row1+w].light|(V)[row1+w+1].light| \
 			  (V)[row2+w].light|(V)[row2+w+1].light))
 
-/* SOUDURE D'UNE SUITE DE CELLULES NOIRES, dans une rangee de grille.
-   Elle est EXACTE, et voici pourquoi : une rangee de la grille est une DROITE du monde -- c'est
-   une rangee d'un parallelogramme, prise le long du vecteur largeur -- et une projection
-   perspective envoie une droite sur une droite.  Les sommets projetes d'une rangee sont donc
-   COLINEAIRES, et le quad soude passe exactement par ceux qu'il saute : ni trou, ni recouvrement.
-   Ce n'est pas une approximation qu'on borne, c'est une egalite.
-
-   Le seul sommet qui sortirait de cette droite est celui que rectTransform a borne au plan proche
-   -- mais il porte alors le bit de clip, donc sa lumiere n'est pas nulle, donc il coupe la suite
-   avant qu'elle ne l'atteigne.
-
-   w vaut ici UN DE PLUS que la derniere cellule noire : c'est l'arete droite du quad. */
+/* GCC14: weld a run of black cells in a grid row.  Exact: a grid row is a world LINE (a
+   parallelogram row along the width vector) and perspective maps lines to lines, so the
+   projected vertices are collinear and the welded quad passes through the skipped ones -- no
+   gap, no overlap.  The only vertex off that line, one rectTransform clamped to the near plane,
+   carries the clip bit, so its light is not zero and it ends the run.
+   w is ONE past the last black cell: the quad's right edge. */
 #define LODRUNQUAD(V) \
    q[0].x=(V)[row1+runStart].x; q[0].y=(V)[row1+runStart].y; \
    q[1].x=(V)[row1+w].x;        q[1].y=(V)[row1+w].y; \
    q[2].x=(V)[row2+w].x;        q[2].y=(V)[row2+w].y; \
    q[3].x=(V)[row2+runStart].x; q[3].y=(V)[row2+runStart].y
 
-/* --- SOUDURE DES BANDES DE MAILLAGE ----------------------------------------------------------
-   C'est la ou est l'image : sur E1M1, 437 murs de maillage portent 3019 faces contre 851
-   cellules pour les 565 murs en grille, et a l'ecran le maillage fait 87 a 90 % des cellules.
-   Ce sont les sols et les plafonds -- verifie, tous leurs sommets sont a la meme hauteur.
-
-   Les faces consecutives d'un maillage forment une BANDE dans 46 % des cas : l'arete (v3,v2) de
-   l'une est l'arete (v0,v1) de la suivante (819 jointures), ou le contraire (585).  Une suite de
-   faces noires prises dans une bande se replie donc en un seul quadrilatere.
-
-   Contrairement a la grille de mur, la colinearite n'est PAS acquise ici : rien ne dit que le
-   convertisseur ait aligne la bande.  On ne la suppose donc pas, on la MESURE, a l'ecran, sur le
-   quad final : chaque sommet saute doit tomber a moins d'un pixel de l'arete qui le remplace.  Si
-   un seul manque, la bande entiere est abandonnee et les faces repartent une a une.  C'est la
-   condition que le proprietaire a posee -- tant que ca ne cree pas de trou -- rendue verifiable
-   au lieu d'etre pariee. */
+/* --- GCC14: weld mesh strips -----------------------------------------------------------------
+   That is where the image is: on E1M1, 437 mesh walls carry 3019 faces against 851 cells for
+   565 grid walls, and mesh is 87-90 % of the cells on screen (floors and ceilings).
+   Consecutive mesh faces form a STRIP 46 % of the time: (v3,v2) of one is (v0,v1) of the next
+   (819 joins) or the reverse (585), so a run of black faces in a strip folds into one quad.
+   Collinearity is NOT given here, so it is MEASURED on screen on the final quad: every skipped
+   vertex must lie within a pixel of the replacing edge, or the whole strip is dropped and its
+   faces go out one by one.  No holes -- checked, not assumed. */
 static int faceIsBlack(int f,struct vCalc *V)
 {return !(V[level_face[f].v[0]].light|V[level_face[f].v[1]].light|
 	  V[level_face[f].v[2]].light|V[level_face[f].v[3]].light);
 }
 
-/* |produit vectoriel| <= max(|dx|,|dy|) : "a moins d'un pixel et demi de la droite (a,b)", sans
-   racine carree ni division. */
+/* |cross product| <= max(|dx|,|dy|): within about 1.5 px of line (a,b), no sqrt, no divide. */
 static int nearSegment(XyInt *a,XyInt *b,int px,int py)
 {int dx=b->x-a->x,dy=b->y-a->y,m,n;
  int cr=dx*(py-a->y)-dy*(px-a->x);
@@ -1239,8 +1180,8 @@ static int nearSegment(XyInt *a,XyInt *b,int px,int py)
 }
 #define LODVXY(Q,V,I) {(Q).x=(V)[I].x; (Q).y=(V)[I].y;}
 
-/* Etend une bande de faces noires depuis f, remplit q[] avec le quad soude, et retourne le
-   dernier indice de la bande -- f lui-meme si rien ne se soude. */
+/* Extends a strip of black faces from f, fills q[] with the welded quad, returns the strip's
+   last index -- f itself if nothing welds. */
 static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,int *why)
 {int g,dir,j;
  unsigned short *a,*c;
@@ -1249,13 +1190,13 @@ static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,int *why
  else
     {a=level_face[f].v; c=level_face[f+1].v;
      if (a[3]==c[0] && a[2]==c[1])
-	dir=1;                     /* la bande avance dans le sens v0 -> v3 */
+	dir=1;                     /* strip runs v0 -> v3 */
      else if (a[0]==c[1] && a[3]==c[2])
-	dir=2;                     /* ... dans l'autre sens */
+	dir=2;                     /* ... the other way */
      else
 	{dir=0;
 	 if (faceIsBlack(f+1,V))
-	    why[0]++;   /* la face suivante etait noire, mais elle n'est pas dans la bande */
+	    why[0]++;   /* next face was black, but not in the strip */
 	}
      g=f;
      while (dir && g<wall->lastFace)
@@ -1275,7 +1216,7 @@ static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,int *why
      LODVXY(q[1],V,level_face[f].v[1]);
      LODVXY(q[2],V,level_face[g].v[2]);
      LODVXY(q[3],V,level_face[g].v[3]);
-     for (j=f;j<g;j++)   /* les sommets sautes sont les aretes partagees */
+     for (j=f;j<g;j++)   /* the skipped vertices are the shared edges */
 	if (!nearSegment(q+0,q+3,V[level_face[j].v[3]].x,V[level_face[j].v[3]].y) ||
 	    !nearSegment(q+1,q+2,V[level_face[j].v[2]].x,V[level_face[j].v[2]].y))
 	   {dir=0; why[1]++; break;}
@@ -1305,19 +1246,19 @@ static int wallIsBlack(sWallType *w,MthXyz *coords,int nmLit,int wavy)
 {int i,fog,n,base,maxl;
  if (!lodEnable || nmLit || wavy)
     return 0;
- fog=coords[0].z;              /* le coin le plus PROCHE, donc la brume la plus faible */
+ fog=coords[0].z;              /* NEAREST corner, so the weakest fog */
  for (i=1;i<4;i++)
     if (coords[i].z<fog)
        fog=coords[i].z;
  if (fog<=0)
     return 0;
- fog>>=24;                     /* fogTable indexe des tranches de 256 unites, comme l'asm */
+ fog>>=24;                     /* fogTable indexes 256-unit steps, like the asm */
  if (fog>255)
     fog=255;
  fog=fogTable[fog];
  if (fog<1)
-    return 0;   /* pas de brume ici -- sort avant de balayer les lumieres des murs proches */
- if (fog<31)    /* au-dela, aucune lumiere statique ne survit : inutile de les lire */
+    return 0;   /* no fog here: leave before scanning the near walls' lights */
+ if (fog<31)    /* beyond this no static light survives: no need to read them */
     {base=w->firstLight;
      n=(w->tileHeight+1)*(w->tileLength+1);
      maxl=0;
@@ -1330,20 +1271,19 @@ static int wallIsBlack(sWallType *w,MthXyz *coords,int nmLit,int wavy)
  return 1;
 }
 
-/* Les quatre coins du mur, projetes comme rectTransform les aurait projetes -- meme division par
-   z, meme negation de y (wallasm_gnu.s:_project_point et .Lrt_retFromLit).  Retourne 0 si le quad
-   n'est pas visible dans le secteur. */
+/* The wall's four corners, projected as rectTransform would (same divide by z, same y
+   negation: wallasm_gnu.s _project_point, .Lrt_retFromLit).  Returns 0 if the quad is not
+   visible in the sector. */
 static int fuseWallPoly(MthXyz *coords,SectorDrawRecord *s,XyInt *q)
 {int j;
  for (j=0;j<4;j++)
     project_point(coords+j,q+j);
  return clip_visible(q,s);
 }
-/* LOD PAINTED peint chaque etage d'une couleur DIFFERENTE, parce qu'un seul bleu ne repond pas a
-   la question qu'on lui pose.  Voir d'un coup d'oeil quel chemin a pris une surface :
-      VERT   un mur entier replie en un seul quad
-      BLEU   une soudure de cellules noires dans une grille de mur
-      ROUGE  une face de maillage -- donc un sol, un plafond ou un mur courbe */
+/* LOD PAINTED gives each stage its own colour, to see at a glance which path a surface took:
+      GREEN  a whole wall folded into one quad
+         BLUE   a weld of black cells in a wall grid
+         RED    a mesh face -- floor, ceiling or curved wall */
 #define LODCOL_FUSE ((lodEnable>1)? RGB(0,24,0): RGB(0,0,0))
 #define LODCOL_RECT ((lodEnable>1)? RGB(0,0,24): RGB(0,0,0))
 #define LODCOL_MESH ((lodEnable>1)? RGB(24,0,0): RGB(0,0,0))
@@ -1353,7 +1293,7 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 {MthXyz vWidth,vHeight;
  XyInt poly[4];
  int w,h,clip;
- int runStart;   /* debut de la suite de cellules noires en cours, -1 = aucune */
+ int runStart;   /* start of the current run of black cells, -1 = none */
  int light;
  int tex,row1,row2;
  register char *ppattern;
@@ -1754,7 +1694,7 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 {MthXyz vWidth,vHeight;
  XyInt poly[4];
  int w,h,v,clip;
- int runStart;   /* debut de la suite de cellules noires en cours, -1 = aucune */
+ int runStart;   /* start of the current run of black cells, -1 = none */
  int light;
  int tex,row1,row2;
  int width=theWall->tileLength; /* GCC14: not const, halved under #if MIPMAP */
@@ -2430,33 +2370,24 @@ void findDoorways(int sectorNm,MthMatrix *view)
 
 volatile int slaveDrawStart;
        /* index in the update list at which to start drawing */
-/* --- Pipeline de traversee -------------------------------------------------------------
-   La camera et level_vertex[] sont figes des la fin de la boucle de jeu : movePlayer et
-   updatePushBlockPositions ont deja ecrit, et drawWalls de l'image SUIVANTE les relit tels
-   quels.  Une traversee lancee la produit donc exactement le meme resultat que celle du
-   sommet de l'image suivante -- pas une approximation.
-     0  arret, comportement d'origine.
-     1  MESURE : l'esclave traverse dans la queue, le maitre retraverse au sommet de l'image
-        suivante et ECRASE ce que l'esclave a produit.  L'image est identique au disque
-        d'origine ; le seul ajout est `pipeSpin`, les tours d'attente a la jointure, qui
-        repond a la seule question qui decide : la traversee tient-elle dans la queue ?
-     2  LEVIER : le maitre saute sa propre traversee.
-   Le lancement est place a la TOUTE FIN de la boucle de jeu, apres les quatre `return` et
-   apres le menu : aucune sortie ne peut laisser l'esclave en vol pendant que le maitre
-   recharge le niveau, et plus rien ne peut bouger la camera entre le lancement et la
-   jointure.  Le seisme fait exception -- il tire son jitter au sommet de l'image suivante,
-   donc on ne lance pas tant qu'il est actif.
-   L'interrupteur WALLPIPE est dans WALLS.H : la boucle de jeu en a besoin aussi. */
+/* --- GCC14: traversal pipeline ---------------------------------------------------------
+   Camera and level_vertex[] are frozen once the game loop ends (movePlayer and
+   updatePushBlockPositions have written) and next frame's drawWalls reads them as is, so a
+   traversal started there gives exactly the same result.
+     0  off, original behaviour.
+       1  MEASURE: the slave traverses in the tail, the master re-traverses and OVERWRITES it.
+          Same image; pipeSpin (spins at the join) says whether the traversal fits in the tail.
+          2  LEVER: the master skips its own traversal.
+        Launched at the VERY END of the game loop, after the four returns and the menu, so no exit
+        leaves the slave running while the level reloads.  Not while the earthquake is active: its
+     jitter is drawn at the top of the next frame.  WALLPIPE is in WALLS.H (the loop needs it). */
 
-/* Brume de profondeur.  Les deux transformations de sommets retiraient z>>24 a la lumiere du
-   sommet, soit un niveau tous les 256 unites et le noir a 4096 -- plus loin que toute ligne de
-   vue, donc en pratique pas de brume.  z>>24 sert maintenant d'index dans cette table, lue par
-   wallasm_gnu.s (_fogTable) : la pente devient reglable, et la forme aussi le jour ou on
-   voudra autre chose qu'une droite.
-   ⚠ C'est un ECART ASSUME a Doom : Doom ne noircit JAMAIS un secteur a pleine lumiere, quelle
-   que soit la distance.  Le reglage existe pour en juger a l'ecran. */
+/* GCC14: depth fog.  Both vertex transforms subtracted z>>24 (one level per 256 u, black at
+   4096 -- beyond any line of sight, so no fog).  z>>24 now indexes this table (wallasm_gnu.s
+   _fogTable), so slope and shape are tunable.  A deliberate departure from Doom, which never
+   darkens a fully lit sector: the setting exists to judge it on screen. */
 unsigned char fogTable[256];
-int fogDist=4096;      /* distance ou un secteur a pleine lumiere (16) atteint le noir */
+int fogDist=4096;      /* distance at which a fully lit sector (16) reaches black */
 
 void setFog(int dist)
 {int i;
@@ -2464,16 +2395,16 @@ void setFog(int dist)
     dist=256;
  fogDist=dist;
  for (i=0;i<256;i++)
-    {int v=(i*256*16)/dist;     /* i indexe des tranches de 256 unites */
+    {int v=(i*256*16)/dist;     /* i indexes 256-unit steps */
      fogTable[i]=(v>31)? 31: v;
     }
 }
 
-volatile int slaveJob;         /* 0 = dessiner, 1 = traverser */
+volatile int slaveJob;         /* 0 = draw, 1 = traverse */
 static MthMatrix pipeMatrix;   /* copie stable : viewTransform sera depile entre-temps */
 static int pipeInFlight;
 static int pipeDone;
-int pipeSpin=-1;               /* tours d'attente a la jointure ; -1 = rien n'etait en vol */
+int pipeSpin=-1;               /* spins at the join; -1 = nothing in flight */
 
 void wallsTraverse(MthMatrix *view,int onSlave);
 
@@ -2517,8 +2448,8 @@ void drawSlaveWalls(void)
 	{switch (slaveResult[i].tile)
 	    {
 	     case -5:
-		{/* mur fusionne par le LOD : un seul quad, la couleur est dans la table gouraud
-		    faute d'un autre champ libre dans l'enregistrement */
+		{/* wall fused by the LOD: one quad, its colour carried in the gouraud
+		    table for lack of another free field in the record */
 		 EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,
 			    slaveResult[i].gtable.entry[0],slaveResult[i].poly,NULL);
 		 continue;
@@ -2611,9 +2542,8 @@ void wallRenderSlaveMain(void)
      while (!(*FTCSR & 0x80)) ;
      /* sync */
      *FTCSR=0x0;
-     /* Purger AVANT de lire slaveJob : il vient d'etre ecrit par le maitre, et le cache de
-	l'esclave peut encore porter la valeur du travail precedent.  (slaveDraw purge aussi
-	a son entree ; la double purge est sans effet de bord.) */
+     /* Purge BEFORE reading slaveJob: the master just wrote it and the slave's cache
+	may still hold the previous job (slaveDraw purges on entry too; harmless). */
      *CACHECNTRL=0x10;
      *CACHECNTRL=0x01;
      if (slaveJob)
@@ -2786,15 +2716,13 @@ static void sortLeafList(SectorDrawRecord **leafList,int leafListSize)
 
 
 int slaveSize=1;
-/* --- Moitie TRAVERSEE ------------------------------------------------------------------
-   Separee de la moitie DESSIN pour pouvoir tourner sur l'esclave, dans la queue de l'image
-   PRECEDENTE (voir WALLPIPE).  Elle n'ecrit que sectorDraw[], updateList[], drawList[],
-   doorwayCache et tLightPos ; elle ne touche ni le VDP1, ni le cache de tuiles, ni les
-   compteurs lus par l'overlay, ni plaxBB -- tout cela reste dans la moitie dessin, qui
-   s'execute pendant que l'image precedente est encore a l'ecran.
-   `onSlave` coupe le profileur, dont l'etat appartient au maitre. */
-static SectorDrawRecord *leafList[MAXNMSECTORS];  /* 2,4 Ko : hors pile, celle de l'esclave
-						     est petite */
+/* --- GCC14: TRAVERSAL half ----------------------------------------------------------
+   Split from the DRAW half so it can run on the slave, in the tail of the PREVIOUS frame
+   (WALLPIPE).  Writes only sectorDraw[], updateList[], drawList[], doorwayCache and
+   tLightPos; never the VDP1, the tile cache, the overlay counters or plaxBB.
+   `onSlave` disables the profiler, which the master owns. */
+static SectorDrawRecord *leafList[MAXNMSECTORS];  /* 2.4 KB: off the stack, the slave's
+						     is small */
 
 void wallsTraverse(MthMatrix *view,int onSlave)
 {int i;
@@ -2817,9 +2745,8 @@ void wallsTraverse(MthMatrix *view,int onSlave)
  sectorDraw[camera->s].xmax=XMAX;
  sectorDraw[camera->s].ymax=YMAX;
  sectorDraw[camera->s].flags|=SDFLAG_BBVALID;
- /* Le secteur de la camera n'est atteint par aucun portail, donc findDoorways ne lui pose
-    jamais de distance : sans cette ligne il garde celle d'une image precedente.  Seul le tri
-    des feuilles la lisait jusqu'ici, et un mauvais ordre passait inapercu. */
+ /* No portal reaches the camera's sector, so findDoorways never sets its distance:
+    without this it kept an old frame's value (read by the leaf sort). */
  sectorDraw[camera->s].distance=0;
  updateListSize=1;
  updateList[0]=sectorDraw+camera->s;
@@ -2968,15 +2895,15 @@ void wallsTraverse(MthMatrix *view,int onSlave)
 }
 
 
-/* Lance sur l'esclave la traversee de l'image SUIVANTE.  A appeler a la fin de la boucle de
-   jeu, avec la matrice de vue telle qu'elle sera rebatie au sommet de l'image suivante. */
+/* Starts NEXT frame's traversal on the slave.  Call at the end of the game loop, with the
+   view matrix as the next frame will rebuild it. */
 void wallsPipeKick(MthMatrix *view)
 {
 #if WALLPIPE
  int k;
  char *d=(char *)&pipeMatrix,*s=(char *)view;
  if (pipeInFlight)
-    return;                     /* deja en vol : ne jamais relancer sans jointure */
+    return;                     /* already in flight: never relaunch without a join */
  for (k=0;k<(int)sizeof(MthMatrix);k++)
     d[k]=s[k];
  pipeDone=0;
@@ -2986,10 +2913,9 @@ void wallsPipeKick(MthMatrix *view)
 #endif
 }
 
-/* Joint puis JETTE : a appeler partout ou la camera va encore bouger avant l'image suivante
-   (menu, question de voyage) ou ou le niveau va partir (les sorties de runLevel).  Ne jamais
-   sortir de la boucle de jeu avec une traversee en vol : l'esclave lirait level_vertex[]
-   pendant que le maitre le recharge. */
+/* Join then DISCARD: call wherever the camera will still move before the next frame (menu,
+   travel question) or the level will go (runLevel exits).  Never leave the game loop with a
+   traversal in flight: the slave would read level_vertex[] while the master reloads it. */
 void wallsPipeDiscard(void)
 {
 #if WALLPIPE
@@ -2998,8 +2924,8 @@ void wallsPipeDiscard(void)
 #endif
 }
 
-/* Joint la traversee lancee dans la queue.  A appeler AVANT drawWalls -- et avant toute
-   liberation du niveau, sans quoi l'esclave lirait de la geometrie rechargee sous lui. */
+/* Joins the traversal started in the tail.  Call BEFORE drawWalls -- and before freeing the
+   level, or the slave reads geometry reloaded under it. */
 void wallsPipeJoin(void)
 {
 #if WALLPIPE
@@ -3011,16 +2937,15 @@ void wallsPipeJoin(void)
  while (!(*FTCSR & 0x80))
     i++;
  *FTCSR=0x0;
- /* L'esclave vient d'ecrire sectorDraw[], updateList[], drawList[], doorwayCache et
-    tLightPos par des adresses NORMALES -- pas par l'alias cache-through que ses resultats
-    de dessin empruntent.  Le cache du maitre porte encore les lignes de l'image
-    precedente ; sans cette purge il dessine avec des boites de decoupe, un ordre et des
-    entrees de liste perimes, et une face finit peinte avec la tuile d'une autre. */
+ /* The slave wrote sectorDraw[], updateList[], drawList[], doorwayCache and tLightPos
+    through NORMAL addresses, not the cache-through alias.  The master's cache still holds
+    last frame's lines: without this purge it draws with stale clip boxes, order and list
+    entries, and a face gets another face's tile. */
  *CACHECNTRL=0x10;
  *CACHECNTRL=0x01;
  pipeInFlight=0;
  slaveJob=0;
- pipeSpin=i;               /* 0 = la traversee tenait entierement dans la queue */
+ pipeSpin=i;               /* 0 = the traversal fit entirely in the tail */
 #if WALLPIPE>=2
  pipeDone=1;
 #endif
@@ -3028,9 +2953,9 @@ void wallsPipeJoin(void)
 }
 
 
-/* --- Moitie DESSIN --------------------------------------------------------------------
-   Tout ce qui emet des commandes VDP1 ou touche le cache de tuiles reste ici, sur le
-   maitre, qui en est le seul ecrivain. */
+/* --- GCC14: DRAW half ----------------------------------------------------------------
+   Everything that emits VDP1 commands or touches the tile cache stays here, on the
+   master, its only writer. */
 void drawWalls(MthMatrix *view)
 {int i;
  XyInt parms[2];
@@ -3059,7 +2984,7 @@ void drawWalls(MthMatrix *view)
  bestAutoAimRating=INT_MAX;
 
 #if WALLPIPE>=2
- if (!pipeDone)     /* l'esclave ne l'a pas faite dans la queue : la faire ici */
+ if (!pipeDone)     /* the slave did not do it in the tail: do it here */
 #endif
     wallsTraverse(view,0);
  pipeDone=0;
@@ -3112,9 +3037,8 @@ void drawWallsFinish(void)
  drawDebugLines();
 #endif
  updateLights();
- /* La part de l'esclave dans les compteurs de LOD.  Meme regle que la boite du plax juste en
-    dessous : l'esclave les ecrit par des adresses normales, et drawSlaveWalls a purge le cache du
-    maitre avant qu'on arrive ici. */
+ /* The slave's share of the LOD counters.  Same rule as the plax box below: written through
+    normal addresses, and drawSlaveWalls purged the master's cache before this point. */
  lodFused+=slave_lodFused;
  lodCells+=slave_lodCells;
  lodFlat+=slave_lodFlat;
@@ -3371,31 +3295,18 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	{light=NMOBJECTPALLETES;
 	 o->flags&=~SPRITEFLAG_FLASH;
 	}
-     /* Brume de profondeur sur les objets.  Meme table que les murs (WALLS.C:setFog), donc un
-	seul reglage pour toute l'image, mais ADOUCIE d'un quart : un monstre doit rester lisible
-	un peu plus loin que le decor qui l'entoure.  Lobotomy assombrissait deja les objets avec
-	la distance -- le code est deux lignes plus haut, en commentaire, par bancs de palette ;
-	on passe par le gouraud parce que les tuiles de Doom sont en 16 bpp. */
+     /* GCC14: depth fog on things.  Same table as the walls (setFog), softened by a quarter so a
+	monster stays readable a little further than its surroundings. */
      {int d=tformed.z>>24;
       if (d>255) d=255;
       if (d<0) d=0;
       spriteFog=fogTable[d];
       spriteFog-=spriteFog>>2;
-      /* Les tuiles d'objets de Doom sont en TILE8BPP (params/doom.cfg : PIC_SLOTS=32,31,...),
-	 donc en BANC COULEUR, et le gouraud y decale l'index de palette au lieu du RGB
-	 (mesure materiel, saturn-refs/knowledge/HW_VDP1.md:783) : illisible sur PLAYPAL, qui
-	 n'est pas ordonnee en luminance.  Le banc assombri est le seul chemin, et c'est celui
-	 que Lobotomy avait prevu -- la ligne qui le choisissait est deux lignes plus haut, en
-	 commentaire, par la distance brute. */
-      /* L'INVERSE de la brume.  Une lumiere dynamique retranche de spriteFog AVANT le choix du
-	 banc : l'assombrissement devient plus faible, ou nul.  Meme calcul que les murs
-	 (lightApply), le canal le plus fort menant, pour qu'une chose et le mur derriere elle
-	 restent dans la meme plage.  Les deux positions sont deja en espace vue -- tLightPos est
-	 transforme une fois par image, tformed est le sprite -- et la boite de lightApply coupe
-	 avant les multiplications.  Sans lumiere vivante, rien du tout.
-	 Deux limites assumees : la distance est prise aux PIEDS, comme la projection (l'ecart avec
-	 le centre vaut au plus un rayon de sprite), et le banc 0 est la palette telle quelle --
-	 une chose deja proche ne peut pas s'eclaircir au-dela. */
+      /* Doom's thing tiles are TILE8BPP (PIC_SLOTS), i.e. colour-bank mode, where gouraud shifts the
+	 palette INDEX, not the RGB (HW measure, saturn-refs/knowledge/HW_VDP1.md:783): noise on
+	 PLAYPAL.  A darkened bank is the only way, as Lobotomy planned (the commented line above). */
+      /* GCC14: a dynamic light reduces the fog before the bank is chosen (strongest channel,
+	 same maths as the walls).  Measured at the feet; bank 0 is the ceiling. */
       if (nmLights)
 	 {int li,lr,lg,lb,best=0;
 	  for (li=0;li<nmLights;li++)
@@ -3523,7 +3434,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		 {if (light==NMOBJECTPALLETES)
 		     gtable.entry[0]=RGB(31,31,31);
 		 else
-		    {int g=16-light*2-spriteFog;   /* brume adoucie, voir plus haut */
+		    {int g=16-light*2-spriteFog;   /* softened fog, see above */
 		     if (g<0) g=0;
 		     gtable.entry[0]=greyTable[g];
 		    }
@@ -3542,7 +3453,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		 }
 	      EZ_scaleSpr(ZOOM_TL | flip,
 			  UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE,
-			  (light? light: spriteBank)<<8,pic,pos,  /* light = eclair de tir */
+			  (light? light: spriteBank)<<8,pic,pos,  /* light = muzzle flash */
 			  NULL);
 	     }
 	 }

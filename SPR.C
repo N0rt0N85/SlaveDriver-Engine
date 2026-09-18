@@ -243,19 +243,18 @@ void EZ_specialDistSpr(struct slaveDrawResult *sdr,int charNm)
  }
  setGourPara(cmd,&sdr->gtable);
 }
-/* Comme EZ_specialDistSpr2, mais ne lit que les lignes [v0,v0+vh) du motif.  Fenetrer en V est
-   la SEULE coupe de source legale : CMDSRCA est une adresse et CMDSIZE une taille, il n'existe
-   aucun registre de pas, donc sauter des lignes entieres reste contigu alors qu'un
-   sous-rectangle en U cisaille en diagonale (HW_VDP1.md:160 ; mesure Mimas 2026-08-24 sur les
-   quads de sol).  COLOR_5 = 16 bpp, donc une ligne fait largeur*2 octets = (xysize>>8)*2
-   unites de 8 -- entier exact pour nos tuiles de 64 (16 unites par ligne). */
+/* GCC14: like EZ_specialDistSpr2, but reads only rows [v0,v0+vh) of the pattern.
+   V-windowing is the ONLY legal source cut: CMDSRCA is an address and CMDSIZE a size, with no
+   stride register, so skipping whole rows stays contiguous while a U sub-rectangle shears
+   (HW_VDP1.md:160; Mimas measure 2026-08-24).  COLOR_5 = 16 bpp, so a row is width*2 bytes
+   = (xysize>>8)*2 units of 8 -- exact for our 64-wide tiles (16 units per row). */
 void EZ_specialDistSpr2V(short charNm,int t0,int t1,XyInt *xy,
 			 struct gourTable *gTable)
 {struct cmdTable *cmd;
  int h,v0,vh;
  validPtr(xy);
  h=chars[charNm].xysize&0xff;
- v0=(t0*h)>>10;            /* t0,t1 : fractions de la hauteur du motif, en 1/1024 */
+ v0=(t0*h)>>10;            /* t0,t1: fractions of the pattern height, in 1/1024 */
  vh=((t1*h)>>10)-v0;
  if (vh<1) vh=1;
  if (v0+vh>h) vh=h-v0;

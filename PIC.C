@@ -168,8 +168,8 @@ void setDrawModeBit(int class,int bit,int onOff)
 
 void pic_nextFrame(int *swaps,int *used)
 {
- /* Les disques de mesure sont des builds NDEBUG : sans cela, les deux seuls compteurs qui
-    disent si le cache de tuiles deborde n'existent que dans le build ou personne ne mesure. */
+ /* Measurement discs are NDEBUG builds: without this, the only two counters that say
+    whether the tile cache overflows exist only in the build nobody measures. */
 #if !defined(NDEBUG) || defined(STATUSTEXT)
  int i,j;
  if (swaps)
@@ -636,11 +636,10 @@ void loadPalletes(int fd)
      colorRam[i]=objectPal[i];
   /* SCL_SetColRam(0,0,256,objectPal); */
 
-  /* Les bancs assombris.  Le pas d'origine etait r-=i, donc -4/31 au plus sur cinq bancs : de
-     quoi marquer une distance, pas de quoi suivre une brume qui va au noir.  On etale le meme
-     mecanisme sur SPRITEFOGMAX (UTIL.H), et SOUSTRACTIVEMENT -- comme le gouraud des murs, qui
-     retire un offset au lieu de multiplier, sans quoi les objets ne tiendraient pas la meme
-     gamme que le decor a la meme distance. */
+  /* GCC14: the darkened banks.  The original step was r-=i, at most -4/31 over five
+     banks: enough to mark distance, not to follow a fog going to black.  Same mechanism
+     spread over SPRITEFOGMAX (UTIL.H), and SUBTRACTIVE like the walls' gouraud, so
+     things keep the same range as the scenery at the same distance. */
   for (i=1;i<NMOBJECTPALLETES;i++)
      {int r,g,b,sub=(SPRITEFOGMAX*i)/(NMOBJECTPALLETES-1);
       for (c=0;c<256;c++)

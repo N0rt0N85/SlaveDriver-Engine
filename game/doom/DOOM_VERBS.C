@@ -654,6 +654,6 @@ void A_Fall(DoomActor *this)
 /* A_Explode (p_enemy.c:1604-1607) */
 void A_Explode(DoomActor *this)
 {assert(this);
- doom_explosionLight(this);                     /* un AJOUT : Doom n'eclaire rien (DOOM_LIGHTS.H) */
+ doom_explosionLight(this);                     /* an addition: Doom has no dynamic light */
  doom_radiusAttack(this,this->target,128);
 }

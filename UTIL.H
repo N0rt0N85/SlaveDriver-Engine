@@ -21,16 +21,14 @@ extern int extraStuff;
 #define MAXNMSECTORS 600
 #define MAXNMWALLS 5500
 #define ROUTESIZE 8
-/* Bancs CRAM de la palette des objets.  La CRAM est en 2048 couleurs (INITMAIN.C:286), soit
-   HUIT bancs de 256 : 0..NMOBJECTPALLETES-1 pour l'objet du plus clair au plus sombre,
-   NMOBJECTPALLETES pour l'eclair de tir (PIC.C:660, AI2.C:247), et le 7e pour le ciel
-   (PLAX.C, SCL_SET_R0CAOS(7)).  A 6 on occupe 0..5 + 6 pour l'eclair : la CRAM est pleine, il
-   n'y a pas de septieme banc a prendre. */
+/* GCC14: CRAM banks of the object palette.  CRAM holds 2048 colours (INITMAIN.C:286), EIGHT
+   banks of 256: 0..NMOBJECTPALLETES-1 for the object, lightest to darkest, NMOBJECTPALLETES
+   for the muzzle flash (PIC.C:660, AI2.C:247), bank 7 for the sky (PLAX.C,
+   SCL_SET_R0CAOS(7)).  At 6 the CRAM is full: there is no other bank to take. */
 #define NMOBJECTPALLETES 6
-/* Assombrissement du banc le plus sombre, en unites de 5 bits -- a comparer aux 16 que la brume
-   retire au plus a un mur.  12 = trois quarts, ce qui laisse un monstre lisible un peu plus loin
-   que le decor qui l'entoure.  PIC.C:loadPalletes fabrique les bancs, WALLS.C:drawSprites en
-   choisit un ; les deux lisent cette constante, donc la correspondance ne peut pas deriver. */
+/* Darkening of the darkest bank, in 5-bit units (the fog takes at most 16 from a wall).
+   12 = three quarters, so a monster stays readable a little further than its surroundings.
+   PIC.C:loadPalletes builds the banks, WALLS.C:drawSprites picks one; both read this. */
 #define SPRITEFOGMAX 12
 
 #define DISABLE INT_ChgMsk(INT_MSK_NULL,INT_MSK_DMA0|INT_MSK_SPR)

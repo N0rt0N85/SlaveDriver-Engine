@@ -175,16 +175,10 @@ static void doomDecreaseAmmo(int amount)
     doomPlayer.ammo[ammo]=0;
 }
 
-/* --- eclair de bouche du joueur ---------------------------------------------------------------
-   La lumiere se pose sur `camera`, le sprite du joueur, donc elle eclaire exactement les murs que
-   le backface culling garde : buildLightList calcule contre la position de la source le meme
-   produit scalaire que drawWalls contre camera->pos.  Doom n'a pas cela -- son A_Light1/2 est un
-   decalage de couleur d'ECRAN (doomFlashTic), qui n'eclaire aucun mur ; c'est donc un AJOUT, le
-   symetrique de celui des monstres, reglable a part (LIGHT_MUZZLE_PLAYER) : c'est le seul que
-   le joueur voit a chaque tir.  Un tic plein, un tic a moitie,
-   et la meme garde contre le doublon : une chaingun tire tous les 4 tics, un plasma tous les 3,
-   donc un tir peut tomber sur un eclair encore a moitie -- on le rallume au lieu d'en poser un
-   second. */
+/* --- player muzzle flash ------------------------------------------------------------------------
+   A light on `camera`, so it lights exactly the walls the backface test keeps.  An addition:
+   Doom's A_Light1/2 is a screen tint.  Tuned apart (LIGHT_MUZZLE_PLAYER) because it sits on the
+   view; a shot landing on a half-faded flash relights it instead of adding a second light. */
 void doom_muzzleFlash(void)
 {assert(camera);
  if (!doomPlayer.muzzleTics)
@@ -194,8 +188,7 @@ void doom_muzzleFlash(void)
  doomPlayer.muzzleTics=GP_LIGHT_MUZZLE_TICS;
 }
 
-/* Appele par doom_playerTic AVANT les psprites : un eclair pose au tic N vit N en plein, N+1 a
-   moitie, et s'eteint au debut de N+2. */
+/* Called by doom_playerTic before the psprites: full on tic N, half on N+1, off at N+2. */
 void doom_muzzleTic(void)
 {if (!doomPlayer.muzzleTics || !camera)
     return;
@@ -475,10 +468,9 @@ void A_FireMissile(DoomPlayer *p,int ps)
  doom_spawnPlayerMissile(MT_ROCKET,normalizeAngle(playerAngle.yaw+F(90)),pitch);
 }
 
-/* A_FirePlasma (p_pspr.c:721-731) : une bille par tir, image d'eclair tiree entre les deux
-   (P_Random()&1), pas de son propre -- c'est le seesound du missile.  Le verbe etait vide (le
-   fusil a plasma est hors du shareware) ; la lumiere du flux n'a de site atteignable que si le
-   tir existe. */
+/* A_FirePlasma (p_pspr.c:721-731): one bolt, flash frame picked by P_Random()&1, no sound of
+   its own (the missile's seesound).  Not in the shareware; implemented so the stream's light
+   can be reached. */
 void A_FirePlasma(DoomPlayer *p,int ps)
 {Fixed32 pitch;
  assert(p);

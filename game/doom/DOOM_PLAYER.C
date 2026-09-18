@@ -140,7 +140,7 @@ void doom_playerInit(void)
  doomPlayer.pendingWeapon=doomPlayer.readyWeapon;   /* P_SetupPsprites: pendingweapon = readyweapon */
  doomPlayer.refire=0;
  doomPlayer.attackDown=0;
- doomPlayer.muzzleTics=0;              /* lightInit() a deja vide la liste du moteur */
+ doomPlayer.muzzleTics=0;              /* lightInit() already emptied the engine list */
  doom_missileLightsReset();
  doomPlayer.damageCount=0;
  doomPlayer.bonusCount=0;
@@ -188,8 +188,7 @@ void doom_playerFrame(unsigned short input,unsigned short pushed)
  doomPlayer.lastFloor=camera->floorSector;
  doomPlayer.lastVelY=camera->vel.y;
  camera->friction=F(1);
- /* En traversee, la camera flotte : sans plancher sous elle, la gravite la ferait tomber hors
-    du monde sans retour possible. */
+ /* No clipping: no floor under the camera, so gravity is off. */
  camera->gravity=noClipCheat?0:DOOM_GRAVITY_FR;
  if (noClipCheat)
     camera->vel.y=0;
@@ -379,22 +378,19 @@ void doom_useRefused(void)
     doom_playerSound(sfx_noway);
 }
 
-/* --- bascules de test (rien de tout cela n'est dans Doom) -------------------------------------
-   Meme idiome que les accords du moteur (SRUINS.C, boucle principale) : tenir la combinaison, une
-   bascule par appui, et une variante a trois boutons de face pour les pads dont les gachettes ne
-   rendent que de l'analogique.  Toutes les lettres avec L+R sont deja prises par le moteur --
-   X mipmapping, B LOD, Z brume, Y profil, et leurs variantes X+Y+Z, A+B+Z, A+C+Z, A+B+C -- donc
-   ces trois-ci passent par la croix :
-      L+R+HAUT    (ou A+B+X)   toutes les armes implementees, munitions au maximum
-      L+R+BAS     (ou A+C+X)   invulnerabilite
-      L+R+GAUCHE  (ou B+C+X)   traversee des murs
-   Tenir L et R ensemble annule leurs deux poussees laterales ; la croix fait avancer ou tourner
-   le temps de l'appui, sans consequence.  Les bits du pad sont ACTIFS BAS -- 0 = enfoncee. */
+/* --- test toggles (not in Doom) -----------------------------------------------------------------
+   Same idiom as the engine chords (SRUINS.C): hold the chord, one flip per press, and a
+   face-button alternative for analog-trigger pads.  Every L+R letter is taken by the engine,
+   so these use the d-pad:
+      L+R+UP     (A+B+X)   every implemented weapon, full ammo
+      L+R+DOWN   (A+C+X)   invulnerability
+      L+R+LEFT   (B+C+X)   no clipping
+   L and R together cancel out; pad bits are active low. */
 #define DOOM_CHEAT_WEAPONS ((1<<wp_fist)|(1<<wp_pistol)|(1<<wp_shotgun)|\
 			    (1<<wp_chaingun)|(1<<wp_missile)|(1<<wp_plasma))
 static char doomCheatGod;
 
-/* Vrai une seule fois par appui de `chord` ou de `alt` ; `held` retient l'accord jusqu'au relache. */
+/* True once per press of `chord` or `alt`; `held` latches until release. */
 static int doomChord(unsigned short input,unsigned short chord,unsigned short alt,char *held)
 {if (((~input)&chord)==chord || ((~input)&alt)==alt)
     {if (*held)
@@ -442,7 +438,7 @@ void doom_playerTic(void)
     (doomPlayer.pushed & IMASK(ACTION_FIRE));
  doomPlayer.pushed=0;
  doomCheatTic();
- doom_muzzleTic();                             /* avant les psprites : l'eclair vit deux tics */
+ doom_muzzleTic();                             /* before the psprites: the flash lives two tics */
  if (currentState.health<=0)
     {doomDeathTic();
      doom_psprTic();                            /* P_DeathThink calls P_MovePsprites: A_Lower */
