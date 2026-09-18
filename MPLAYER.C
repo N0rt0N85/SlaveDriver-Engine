@@ -23,7 +23,7 @@ Object *mpObj[MPMAX];
 #define MPSTORE     1024
 static struct {void *addr; short size,offs;} mpBlock[MPMAXBLOCKS];
 static int mpNmBlocks,mpUsed;
-static char mpStore[MPMAX][MPSTORE];
+static char mpStore[MPMAX][MPSTORE] __attribute__((aligned(4)));
 int mpRegisterLost;             /* blocks refused for lack of room: must read 0 (STATUSTEXT) */
 
 /* The two limits are checked in NDEBUG too: a block past MPSTORE would be written into the
@@ -44,16 +44,34 @@ void mpRegister(void *addr,int size)
  mpNmBlocks++;
 }
 
+/* GCC14: most blocks are one int or a few.  A memcpy call for each made a swap cost 0.34-0.48 ms
+   on console (POSTTIC, where the swaps are nearly all the work), ~37 swaps an image in 4p:
+   aligned words are copied one by one, only the rest goes through memcpy. */
+static __inline__ void mpCopy(void *dst,const void *src,int size)
+{if (!(((int)dst|(int)src|size)&3))
+    {int *d=(int *)dst;
+     const int *s=(const int *)src;
+     for (size>>=2;size>0;size--)
+	*d++=*s++;
+    }
+ else if (size==2 && !(((int)dst|(int)src)&1))
+    *(short *)dst=*(const short *)src;
+ else if (size==1)
+    *(char *)dst=*(const char *)src;
+ else
+    memcpy(dst,src,size);
+}
+
 static void mpCopyOut(int k)
 {int i;
  for (i=0;i<mpNmBlocks;i++)
-    memcpy(mpStore[k]+mpBlock[i].offs,mpBlock[i].addr,mpBlock[i].size);
+    mpCopy(mpStore[k]+mpBlock[i].offs,mpBlock[i].addr,mpBlock[i].size);
 }
 
 static void mpCopyIn(int k)
 {int i;
  for (i=0;i<mpNmBlocks;i++)
-    memcpy(mpBlock[i].addr,mpStore[k]+mpBlock[i].offs,mpBlock[i].size);
+    mpCopy(mpBlock[i].addr,mpStore[k]+mpBlock[i].offs,mpBlock[i].size);
 }
 
 void mpSwitch(int k)
@@ -97,12 +115,12 @@ static char *mpCopyOf(int k,void *addr,int size)
 void mpPeek(int k,void *addr,int size,void *out)
 {char *c;
  if (k==mpCur)
-    {memcpy(out,addr,size);
+    {mpCopy(out,addr,size);
      return;
     }
  c=mpCopyOf(k,addr,size);
  assert(c);                     /* not a registered global: there is no per-player copy */
- memcpy(out,c? c: (char *)addr,size);
+ mpCopy(out,c? c: (char *)addr,size);
 }
 
 int mpPeekInt(int k,int *addr)
