@@ -42,6 +42,13 @@ int  mpIndexOfSprite(struct __sprite *s);   /* -1 = not a player's body */
 int  mpIndexOfObject(struct __object *o);
 #define mpIsPlayer(s) (mpIndexOfSprite(s)>=0)
 
+/* Colours: player k>0's body is drawn from CRAM bank mpBank[k] (0 = its normal fogged banks),
+   bank 0 seen through the game's remap (CFG_MP_TRANSLATION, SPRITE.H).  The banks come from the
+   top of the object palette's fog and from the sky's, which split screen does not show.
+   mpSetBanks() after every change of mpPlayers and after a level's palettes are loaded. */
+extern unsigned char mpBank[MPMAX];
+void mpSetBanks(void);
+
 /* Pads: player k reads its own 60 Hz queue (V_BLANK.C fills them).  A pad that is absent
    mirrors another -- player 3 plays pad 1, player 4 pad 2 -- so 3 and 4 players can be tried
    on an emulator that offers two pads. */

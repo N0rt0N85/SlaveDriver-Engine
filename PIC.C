@@ -610,6 +610,46 @@ static void load16BPPRLETile(fd,lock)
     mem_free(buffer);
 }
 
+/* GCC14: the darkened banks 1..n-1, built from bank 0.  The original step was r-=i, at most
+   -4/31 over five banks: enough to mark distance, not to follow a fog going to black.  Same
+   mechanism spread over SPRITEFOGMAX (UTIL.H), and SUBTRACTIVE like the walls' gouraud, so
+   things keep the same range as the scenery at the same distance.  n < NMOBJECTPALLETES frees
+   the top banks for something else (split screen: the players' colours, MPLAYER.C);
+   drawSprites reads nmObjectFogBanks. */
+int nmObjectFogBanks=NMOBJECTPALLETES;
+void buildObjectFogBanks(int n)
+{unsigned short *colorRam=(unsigned short *)SCL_COLRAM_ADDR;
+ int i,c,r,g,b,sub;
+ assert(n>=2 && n<=NMOBJECTPALLETES);
+ nmObjectFogBanks=n;
+ for (i=1;i<n;i++)
+    {sub=(SPRITEFOGMAX*i)/(n-1);
+     for (c=0;c<256;c++)
+	{unsigned short v=colorRam[c];
+	 r=(v & 0x1f)-sub;
+	 g=((v>>5) & 0x1f)-sub;
+	 b=((v>>10) & 0x1f)-sub;
+	 if (r<0) r=0;
+	 if (g<0) g=0;
+	 if (b<0) b=0;
+	 colorRam[i*256+c]=RGB(r,g,b);
+	}
+    }
+}
+
+/* GCC14: bank `bank` = bank 0 seen through an index remap (Doom's player translations: the
+   green ramp read as another ramp).  The sprite's pixels are unchanged; only its bank is. */
+void buildRemappedBank(int bank,const unsigned char *remap)
+{unsigned short *colorRam=(unsigned short *)SCL_COLRAM_ADDR;
+ unsigned short tmp[256];
+ int c;
+ assert(bank>0 && bank<8 && bank!=NMOBJECTPALLETES);
+ for (c=0;c<256;c++)
+    tmp[c]=colorRam[remap[c]];
+ for (c=0;c<256;c++)
+    colorRam[bank*256+c]=tmp[c];
+}
+
 void loadPalletes(int fd)
 {int size,i,j;
  unsigned short *colorRam=(unsigned short *)SCL_COLRAM_ADDR;
@@ -636,31 +676,7 @@ void loadPalletes(int fd)
      colorRam[i]=objectPal[i];
   /* SCL_SetColRam(0,0,256,objectPal); */
 
-  /* GCC14: the darkened banks.  The original step was r-=i, at most -4/31 over five
-     banks: enough to mark distance, not to follow a fog going to black.  Same mechanism
-     spread over SPRITEFOGMAX (UTIL.H), and SUBTRACTIVE like the walls' gouraud, so
-     things keep the same range as the scenery at the same distance. */
-  for (i=1;i<NMOBJECTPALLETES;i++)
-     {int r,g,b,sub=(SPRITEFOGMAX*i)/(NMOBJECTPALLETES-1);
-      for (c=0;c<256;c++)
-	 {r=objectPal[c] & 0x1f;
-	  g=(objectPal[c]>>5) & 0x1f;
-	  b=(objectPal[c]>>10) & 0x1f;
-	  r-=sub;
-	  if (r<0)
-	     r=0;
-	  g-=sub;
-	  if (g<0)
-	     g=0;
-	  b-=sub;
-	  if (b<0)
-	     b=0;
-	  tempSpace[c]=RGB(r,g,b);
-	 }
-      for (j=0;j<256;j++)
-	 colorRam[i*256+j]=tempSpace[j];
-      /* SCL_SetColRam(0,i*256,256,tempSpace); */
-     }
+  buildObjectFogBanks(NMOBJECTPALLETES);
   /* make flash pallete */
   for (c=0;c<256;c++)
      tempSpace[c]=0xffff;

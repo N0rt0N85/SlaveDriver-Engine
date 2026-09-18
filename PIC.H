@@ -37,6 +37,11 @@ int loadPicSetAsPics(int fd,int class);
 
 int createMippedPics(void);
 
+/* GCC14: CRAM banks of the object palette (UTIL.H NMOBJECTPALLETES) */
+extern int nmObjectFogBanks;                    /* banks 0..n-1 carry the things' fog */
+void buildObjectFogBanks(int n);                /* rebuild 1..n-1 from bank 0 */
+void buildRemappedBank(int bank,const unsigned char *remap);   /* bank = bank 0 through remap[] */
+
 /* Which slot a miss evicts (PIC.C map, expanded there only).  PowerSlave: the least recently
    used by FRAME.  A Doom view can need more wall tiles than there are slots; the victim is then a
    tile this very frame already drew with, and every cell drawn with it shows the new texture.

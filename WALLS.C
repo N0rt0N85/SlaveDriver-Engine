@@ -3350,9 +3350,15 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	  if (spriteFog<0)
 	     spriteFog=0;
 	 }
-      spriteBank=(spriteFog*(NMOBJECTPALLETES-1))/SPRITEFOGMAX;
-      if (spriteBank>NMOBJECTPALLETES-1)
-	 spriteBank=NMOBJECTPALLETES-1;
+      spriteBank=(spriteFog*(nmObjectFogBanks-1))/SPRITEFOGMAX;
+      if (spriteBank>nmObjectFogBanks-1)
+	 spriteBank=nmObjectFogBanks-1;
+      /* another player's body wears its own colours (MPLAYER.C mpSetBanks): one bank, no fog */
+      if (mpPlayers>1)
+	 {int k=mpIndexOfSprite(o);
+	  if (k>0 && mpBank[k])
+	     spriteBank=mpBank[k];
+	 }
      }
      /* tformed is center of sprite */
      project_point(&tformed,&feetScreenPos);

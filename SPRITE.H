@@ -268,6 +268,8 @@ void doom_drawSplitHud(int view,int nmViews);         /* DOOM_HUD.C */
 #define CFG_DRAW_SPLITHUD(k,n) doom_drawSplitHud(k,n)           /* SRUINS.C view loop, 2-4 players: the compact HUD of view k */
 short doom_playerBodySeq(Sprite *body,Sprite *viewer,int health);
 #define CFG_MP_BODYSEQ(b,v,h) doom_playerBodySeq(b,v,h)       /* SRUINS.C mpShowBodies: the frame of a player's body seen from a view */
+const unsigned char *doom_playerTranslation(int k);
+#define CFG_MP_TRANSLATION(k) doom_playerTranslation(k)          /* MPLAYER.C mpSetBanks: player k's palette remap, NULL = none */
 #define CFG_DRAW_AIRMETER(f)                                     /* SRUINS.C:2214: no air meter   */
 #define CFG_AIR_PICS(x)                                          /* SRUINS.C:1978-1979: nor its two pics -- meter_bubble/back, 16 KB, leave the link */
 /* PowerSlave paths a Doom level never takes, compiled out so their code leaves the link: water
@@ -300,6 +302,7 @@ short doom_playerBodySeq(Sprite *body,Sprite *viewer,int health);
 #define CFG_MP_NEWPLAYER()
 #define CFG_DRAW_SPLITHUD(k,n)
 #define CFG_MP_BODYSEQ(b,v,h) (-1)                              /* PowerSlave has no body to show */
+#define CFG_MP_TRANSLATION(k) ((const unsigned char *)0)
 #define CFG_DRAW_AIRMETER(f)   drawAirMeter(f)
 #define CFG_AIR_PICS(x)        x
 #define CFG_WATER              1

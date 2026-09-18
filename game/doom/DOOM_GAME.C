@@ -688,15 +688,15 @@ void doom_item_func(Object *_this,int message,int param1,int param2)
  /* every living player in turn, the first to touch takes it -- with ITS state loaded, so the
     ammo goes in the right pocket (MPLAYER.H).  Solo: player 1, as before. */
  for (k=0;k<mpPlayers;k++)
-    {c=mpBody[k];
-     if (mpPeekInt(k,&currentState.health)<=0)
-	continue;
+    {c=mpBody[k];               /* the body's own fields first: they cost nothing */
      if (!c->vel.x && !c->vel.z)
 	continue;
      if (abs(s->pos.x-c->pos.x)>=reach || abs(s->pos.z-c->pos.z)>=reach)
 	continue;
      delta=(s->pos.y-s->radius)-(c->pos.y-F(GP_PLAYER_RADIUS+GP_PLAYER_EYE_HOVER));
      if (delta>F(56) || delta<F(-8))
+	continue;
+     if (mpPeekInt(k,&currentState.health)<=0)
 	continue;
      prev=mpBegin(k);
      got=doom_playerGetObject(this->mt,(this->mflags & DF_DROPPED)?1:0);

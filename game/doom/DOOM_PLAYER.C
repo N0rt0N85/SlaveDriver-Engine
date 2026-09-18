@@ -881,6 +881,22 @@ int doom_playerGetObject(int mt,int dropped)
  return 1;
 }
 
+/* GCC14: the other players' colours, Doom's own (R_InitTranslationTables, r_draw.c): the green
+   ramp 0x70-0x7f of PLAYPAL read as the grey 0x60, the brown 0x40 and the red 0x20 ramps, for
+   players 2, 3, 4.  Player 1 keeps green.  The object palette is PLAYPAL index for index (doom2ps
+   rle8.object_palette moves only 0 and 255, outside the ramps). */
+const unsigned char *doom_playerTranslation(int k)
+{static unsigned char table[MPMAX][256];
+ static const unsigned char ramp[MPMAX]={0x70,0x60,0x40,0x20};
+ int i;
+ if (k<=0 || k>=MPMAX)
+    return NULL;
+ if (!table[k][1])
+    for (i=0;i<256;i++)
+       table[k][i]=(unsigned char)((i>=0x70 && i<=0x7f)? ramp[k]+(i&15): i);
+ return table[k];
+}
+
 /* GCC14: a player's body as another player sees it (MPLAYER.H, SRUINS.C mpShowBodies).  Doom's
    S_PLAY frames: standing, the four of S_PLAY_RUN while it moves (4 tics each), the corpse of
    S_PLAY_DIE7 once dead.  getFacingAngle works in the sprite convention, and a player's body

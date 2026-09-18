@@ -2015,6 +2015,7 @@ static void mpLevelBuild(void)
     mpInLevel[k]=0;
  for (k=1;k<mpPlayers;k++)
     mpBuild(k);
+ mpSetBanks();                  /* loadPalletes and initPlax just rebuilt banks 1..7 */
 }
 
 /* A new game: the count armed at the menu, and no player carries anything into it. */
@@ -2075,6 +2076,7 @@ static void mpPollStart(void)
 	 setFog(mpSoloFog);
 	}
      mpArmed=mpPlayers;
+     mpSetBanks();
      mpSetViewport(0,0);
      {static char *msg[MPMAX]={"1 PLAYER","2 PLAYERS","3 PLAYERS","4 PLAYERS"};
       changeMessage(msg[mpPlayers-1]);
@@ -2091,17 +2093,17 @@ static void mpPollStart(void)
    distance, continuously between 4096 and 512, so that its cell count tracks its share: the fog
    IS the LOD, since the light LOD folds and welds whatever the fog has blacked out.
 
-   The budget starts at the hardware ceiling -- the command list, less what the image spends on
-   things, weapons, HUD and overlay -- and gives ground only when the image misses its frame
-   rate.  The frame rate aimed at is 30 fps; a target still missed with the budget at its floor
-   drops to 20, then 15, and climbs back once there is room to spare.  Solo is left alone: its
-   fog stays the L+R+Z toggle. */
+   The budget IS the hardware ceiling -- the command list, less what the image spends on things,
+   weapons, HUD and overlay.  The frame rate does not steer it: on the console the split image is
+   master-bound (traversal, sprites, logic), not cell-bound, and fog driven by the fps darkened
+   every view to 512 for a few percent (HW, 4p: 7 fps either way).  So the fog closes in only
+   where the list would overflow.  Solo is left alone: its fog stays the L+R+Z toggle. */
 #define MPFOGMIN 512
 #define MPFOGMAX 4096
 static int mpView;              /* the view being drawn */
 static int mpFog[MPMAX]={MPFOGMAX,MPFOGMAX,MPFOGMAX,MPFOGMAX};
 static int mpCells[MPMAX],mpShare[MPMAX];
-static int mpBudget=0x7fff,mpBudgetMax,mpTargetFields=2,mpOver,mpUnder;
+static int mpBudget;
 
 static void mpSetViewFog(int k)
 {if (mpPlayers>1)
@@ -2112,28 +2114,16 @@ static void mpViewDone(int k)
 {mpCells[k]=nmPolys+nmSlavePolys;
 }
 
-/* once per image, after the VDP1 is done: fields = what the last image took, work = the lines
-   this one needed until its list was drawn (calc + draw) */
-static void mpBalance(int fields,int work)
+/* once per image, after the VDP1 is done */
+static void mpBalance(void)
 {int k,n,left,changed,eq,cells=0;
  int want[MPMAX],done[MPMAX];
  if (mpPlayers==1)
     return;
  for (k=0;k<mpPlayers;k++)
     cells+=mpCells[k];
- mpBudgetMax=EZ_cmdsCap()-(EZ_cmdsUsed()-cells)-32;
- if (fields>mpTargetFields)
-    {mpBudget-=mpBudget>>4; mpOver++; mpUnder=0;}
- else if (work<mpTargetFields*263*3/4)
-    {mpBudget+=(mpBudget>>4)+1; mpUnder++; mpOver=0;}
- else
-    {mpOver=0; mpUnder=0;}
- if (mpBudget>mpBudgetMax) mpBudget=mpBudgetMax;
+ mpBudget=EZ_cmdsCap()-(EZ_cmdsUsed()-cells)-32;
  if (mpBudget<48*mpPlayers) mpBudget=48*mpPlayers;
- if (mpOver>45 && mpTargetFields<4)        /* 1.5 s missed, budget long since at its floor */
-    {mpTargetFields++; mpOver=0;}
- if (mpUnder>120 && mpTargetFields>2)      /* 4 s with a quarter of the frame to spare */
-    {mpTargetFields--; mpUnder=0;}
  /* max-min: a view drawn without fog and under its share wants what it used, plus an eighth
     to turn round in; a fogged view wants all it can get */
  for (k=0;k<mpPlayers;k++)
@@ -2436,7 +2426,8 @@ int runLevel(char *filename,int levelNm)
 	      static short fogVal[4]={4096,2048,1024,512};
 	      fogIndex=(fogIndex+1)&3;
 	      setFog(fogVal[(int)fogIndex]);
-	      setPlaxFade(skyFadeFor(fogVal[(int)fogIndex]));
+	      if (mpPlayers==1)   /* split screen lends bank 7 to a player (MPLAYER.C) */
+	         setPlaxFade(skyFadeFor(fogVal[(int)fogIndex]));
 	      changeMessage(fogName[(int)fogIndex]);
 	      fogChord=1;
 	     }
@@ -2645,17 +2636,19 @@ int runLevel(char *filename,int levelNm)
      CFG_STATUS_SECTOR();
 
      if (mpPlayers>1)
-	{/* LEGEND  B : the split-screen cell budget / its ceiling -- the 1448-command list less
-		     what this image spent outside the cells (things, guns, HUD, this overlay)
-		 t : fields aimed at per image: 2 = 30 fps, 3 = 20, 4 = 15
+	{/* LEGEND  B : the split-screen cell budget -- the 1448-command list less what this
+		     image spent outside the cells (things, guns, HUD, this overlay)
 		 f : each view's fog distance, 512..4096 (4096 = no fog)
 		 c : each view's cells in the last image / its share of B.  A view drawn
-		     without fog and under its share gives the rest to the others. */
-	 drawStringf(-158,-110,1,"B:%d/%d t:%d f:%d %d %d %d",mpBudget,mpBudgetMax,
-		     mpTargetFields,mpFog[0],mpFog[1],mpFog[2],mpFog[3]);
+		     without fog and under its share gives the rest to the others.
+		 Only the views in play are listed. */
+	 static const char *fmtF[MPMAX+1]={"","","B:%d f:%d %d","B:%d f:%d %d %d","B:%d f:%d %d %d %d"};
+	 static const char *fmtC[MPMAX+1]={"","","c:%d/%d %d/%d","c:%d/%d %d/%d %d/%d",
+					   "c:%d/%d %d/%d %d/%d %d/%d"};
+	 drawStringf(-158,-110,1,fmtF[mpPlayers],mpBudget,mpFog[0],mpFog[1],mpFog[2],mpFog[3]);
 	 if (mpRegisterLost)       /* a player's global had no copy: players would share it */
 	    drawStringf(60,-100,1,"MPLOST:%d",mpRegisterLost);
-	 drawStringf(-158,-100,1,"c:%d/%d %d/%d %d/%d %d/%d",mpCells[0],mpShare[0],
+	 drawStringf(-158,-100,1,fmtC[mpPlayers],mpCells[0],mpShare[0],
 		     mpCells[1],mpShare[1],mpCells[2],mpShare[2],mpCells[3],mpShare[3]);
 	}
 
@@ -2739,7 +2732,7 @@ int runLevel(char *filename,int levelNm)
      EZ_closeCommand();
      SPR_WaitDrawEnd();
      lastDraw=htimer-lastCalc;
-     mpBalance(framesElapsed,lastCalc+lastDraw);
+     mpBalance();
 
 #if WALLPIPE
      /* GCC14: THE GAP.  VDP1 drawing is done and the master only waits for VBlank:

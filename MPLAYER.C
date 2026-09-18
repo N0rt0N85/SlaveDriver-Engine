@@ -6,6 +6,8 @@
 #include "object.h"
 #include "mplayer.h"
 #include "print.h"
+#include "pic.h"
+#include "plax.h"
 #include <sega_per.h>
 
 int mpPlayers=1;
@@ -74,26 +76,42 @@ void mpStoreAs(int k)
  mpCopyOut(k);
 }
 
+/* Where player k's copy of addr lives (NULL = not registered).  Pickups, targeting and sight ask
+   for the same few globals per thing, per player, per tic: the last block found is tried first,
+   so the walk over the registry is paid once per new address, not per call. */
+static char *mpCopyOf(int k,void *addr,int size)
+{static int last;
+ int i;
+ char *a=(char *)addr;
+ if (last<mpNmBlocks && a>=(char *)mpBlock[last].addr &&
+     a+size<=(char *)mpBlock[last].addr+mpBlock[last].size)
+    return mpStore[k]+mpBlock[last].offs+(a-(char *)mpBlock[last].addr);
+ for (i=0;i<mpNmBlocks;i++)
+    if (a>=(char *)mpBlock[i].addr && a+size<=(char *)mpBlock[i].addr+mpBlock[i].size)
+       {last=i;
+	return mpStore[k]+mpBlock[i].offs+(a-(char *)mpBlock[i].addr);
+       }
+ return NULL;
+}
+
 void mpPeek(int k,void *addr,int size,void *out)
-{int i;
+{char *c;
  if (k==mpCur)
     {memcpy(out,addr,size);
      return;
     }
- for (i=0;i<mpNmBlocks;i++)
-    if ((char *)addr>=(char *)mpBlock[i].addr &&
-	(char *)addr+size<=(char *)mpBlock[i].addr+mpBlock[i].size)
-       {memcpy(out,mpStore[k]+mpBlock[i].offs+((char *)addr-(char *)mpBlock[i].addr),size);
-	return;
-       }
- assert(0);                     /* not a registered global: there is no per-player copy */
- memcpy(out,addr,size);
+ c=mpCopyOf(k,addr,size);
+ assert(c);                     /* not a registered global: there is no per-player copy */
+ memcpy(out,c? c: (char *)addr,size);
 }
 
 int mpPeekInt(int k,int *addr)
-{int v;
- mpPeek(k,addr,sizeof(int),&v);
- return v;
+{int *c;
+ if (k==mpCur)
+    return *addr;
+ c=(int *)mpCopyOf(k,addr,sizeof(int));
+ assert(c);
+ return c? *c: *addr;
 }
 
 int mpIndexOfSprite(Sprite *s)
@@ -114,6 +132,32 @@ int mpIndexOfObject(Object *o)
     if (mpObj[k]==o)
        return k;
  return -1;
+}
+
+/* The CRAM holds eight banks of 256 (UTIL.H): the things' fog 0..5, the muzzle flash 6, the sky 7.
+   Split screen shows no sky, so player 2 takes bank 7 and the fog keeps its six steps; players 3
+   and 4 each take the darkest fog bank left, the fog spreading the same range over fewer steps.
+   Back to solo: six fog banks and the sky's palette again. */
+unsigned char mpBank[MPMAX];
+
+void mpSetBanks(void)
+{static const unsigned char take[MPMAX]={0,7,5,4};
+ static char tookSky;           /* PowerSlave loads weapon palettes into bank 7 (SEQUENCE.C):
+				   only give back what was taken */
+ int k,extra=0;
+ for (k=0;k<MPMAX;k++)
+    mpBank[k]=0;
+ for (k=1;k<mpPlayers;k++)
+    if (CFG_MP_TRANSLATION(k))
+       extra=k;
+ buildObjectFogBanks(extra>=3? 4: extra==2? 5: NMOBJECTPALLETES);
+ for (k=1;k<=extra;k++)
+    {buildRemappedBank(take[k],CFG_MP_TRANSLATION(k));
+     mpBank[k]=take[k];
+    }
+ if (!extra && tookSky)
+    retryPlaxPal();             /* bank 7 is the sky's again */
+ tookSky=(extra>0);
 }
 
 /* The count for the next game, at the title menu: START on pad 2 cycles 1-2-3-4, and the line
