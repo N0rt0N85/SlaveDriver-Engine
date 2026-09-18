@@ -38,7 +38,16 @@ static __inline__ int vdp1TakeMaxY(void){int m=vdp1MaxY; vdp1MaxY=0; return m;}
 extern int viewXmin,viewXmax,viewYmin,viewYmax,viewCx,viewCy,focalDist;
 #define PROJECT(x,z) ( ((x)*(focalDist>>4))/(int)((z)>>4) )
 
-void drawWalls(MthMatrix *view);
+void drawWalls(int view,MthMatrix *matrix);   /* view: 0 solo; 0..n-1 in split screen */
+/* GCC14: split screen, views 1.. traversed by the slave (WALLS.C TravSet).  At the level start
+   wallsSplitReset; wallsSplitAlloc once the level has several players; each image, before
+   drawWalls(0), wallsQueueView(1..n-1) with the matrix and camera each view is drawn from;
+   wallsQueueJoin before the geometry moves. */
+void wallsSplitReset(void);
+void wallsSplitAlloc(void);
+void wallsQueueView(int k,MthMatrix *view,Sprite *c);
+void wallsQueueJoin(void);
+extern int travSpin;          /* spins at its join: 0 = the slave was done in time */
 void drawWallsFinish(void);
 void wallRenderSlaveMain(void);
 void startSlave(void *slaveMain);

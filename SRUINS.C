@@ -2016,6 +2016,9 @@ static void mpLevelBuild(void)
  for (k=1;k<mpPlayers;k++)
     mpBuild(k);
  mpSetBanks();                  /* loadPalletes and initPlax just rebuilt banks 1..7 */
+ wallsSplitReset();             /* the level's low RAM was reset with it */
+ if (mpPlayers>1)
+    wallsSplitAlloc();
 }
 
 /* A new game: the count armed at the menu, and no player carries anything into it. */
@@ -2044,6 +2047,19 @@ static void mpPark(int k)
  mpBody[k]->sequence=-1;
 }
 
+/* The loaded player's view matrix, pushed on viewTransform (the caller pops it) -- as the view
+   loop builds it, less the earthquake's jitter, which is view 0's alone. */
+static void mpPushViewMatrix(MthMatrixTbl *vt)
+{MTH_PushMatrix(vt);
+ MTH_RotateMatrixZ(vt, playerAngle.roll );
+ MTH_RotateMatrixX(vt, playerAngle.pitch );
+ MTH_RotateMatrixY(vt, playerAngle.yaw );
+ MTH_MoveMatrix(vt,
+		-camera->pos.x,
+		-camera->pos.y+playerHeightOffset+CFG_VIEW_BOB,
+		-camera->pos.z);
+}
+
 /* The others' bodies as view `viewer` sees them, its own hidden.  The game picks the frame
    (CFG_MP_BODYSEQ); -1 = not drawn.  Solo: the camera keeps its -1, as it always had. */
 static void mpShowBodies(int viewer)
@@ -2067,6 +2083,7 @@ static void mpPollStart(void)
      if (mpPlayers<MPMAX)
 	{mpPlayers++;
 	 mpBuild(mpPlayers-1);
+	 wallsSplitAlloc();
 	}
      else
 	{int k;
@@ -2462,6 +2479,20 @@ int runLevel(char *filename,int levelNm)
 	player at once; views 1.. are then drawn from the world as this image left it. */
      EZ_openCommand();
      EZ_sysClip();
+     /* split screen: views 1.. are traversed by the slave while view 0 is drawn and the logic
+	runs (WALLS.C TravSet), from the cameras as they are now -- as view 0's was, in the last
+	image's tail */
+     if (mpPlayers>1)
+	{int k;
+	 for (k=1;k<mpPlayers;k++)
+	    {mpSwitch(k);
+	     mpSetViewport(k,0);
+	     mpPushViewMatrix(&viewTransform);
+	     wallsQueueView(k,viewTransform.current,camera);
+	     MTH_PopMatrix(&viewTransform);
+	    }
+	 mpSwitch(0);
+	}
      for (mpView=0;mpView<mpPlayers;mpView++)
 	{mpSwitch(mpView);
 	 mpSetViewport(mpView,mpPlayers>1);
@@ -2492,7 +2523,7 @@ int runLevel(char *filename,int levelNm)
 #endif
 	 mpSetViewFog(mpView);
 	 mpShowBodies(mpView);
-	 drawWalls(viewTransform.current);
+	 drawWalls(mpView,viewTransform.current);
 	 popProfile();
 
 	 if (mpPlayers==1)
@@ -2584,7 +2615,8 @@ int runLevel(char *filename,int levelNm)
 	 mpViewDone(mpView);            /* the slave's cells are only counted once it has joined */
 
 	 if (mpView==0)
-	    {CFG_PROF("Post"); for (;mmcSave>CFG_TIC_UNIT-1;mmcSave-=CFG_TIC_UNIT)
+	    {wallsQueueJoin();          /* the slave reads the walls Post is about to move */
+	     CFG_PROF("Post"); for (;mmcSave>CFG_TIC_UNIT-1;mmcSave-=CFG_TIC_UNIT)
 		{advanceWallAnimations();
 		 stepWater();
 		}
@@ -2638,14 +2670,17 @@ int runLevel(char *filename,int levelNm)
      if (mpPlayers>1)
 	{/* LEGEND  B : the split-screen cell budget -- the 1448-command list less what this
 		     image spent outside the cells (things, guns, HUD, this overlay)
+		 q : spins waiting for the slave's traversal of views 1.. (0 = done in time;
+		     absent views are traversed by the master: Find Visible in the tree)
 		 f : each view's fog distance, 512..4096 (4096 = no fog)
 		 c : each view's cells in the last image / its share of B.  A view drawn
 		     without fog and under its share gives the rest to the others.
 		 Only the views in play are listed. */
-	 static const char *fmtF[MPMAX+1]={"","","B:%d f:%d %d","B:%d f:%d %d %d","B:%d f:%d %d %d %d"};
+	 static const char *fmtF[MPMAX+1]={"","","B:%d q:%d f:%d %d","B:%d q:%d f:%d %d %d",
+					   "B:%d q:%d f:%d %d %d %d"};
 	 static const char *fmtC[MPMAX+1]={"","","c:%d/%d %d/%d","c:%d/%d %d/%d %d/%d",
 					   "c:%d/%d %d/%d %d/%d %d/%d"};
-	 drawStringf(-158,-110,1,fmtF[mpPlayers],mpBudget,mpFog[0],mpFog[1],mpFog[2],mpFog[3]);
+	 drawStringf(-158,-110,1,fmtF[mpPlayers],mpBudget,travSpin,mpFog[0],mpFog[1],mpFog[2],mpFog[3]);
 	 if (mpRegisterLost)       /* a player's global had no copy: players would share it */
 	    drawStringf(60,-100,1,"MPLOST:%d",mpRegisterLost);
 	 drawStringf(-158,-100,1,fmtC[mpPlayers],mpCells[0],mpShare[0],

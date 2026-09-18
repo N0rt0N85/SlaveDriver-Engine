@@ -1996,11 +1996,98 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
     }
 }
 
-SectorDrawRecord sectorDraw[MAXNMSECTORS];
-SectorDrawRecord *updateList[MAXNMSECTORS];
+/* GCC14: the traversal's output -- the visible sectors, their clip boxes and draw order.  The
+   drawing reads the set of the view being drawn through these pointers; a traversal fills the
+   set `tr` points at (TravSet, below).  Solo and view 0 use the static arrays. */
+static SectorDrawRecord sectorDraw0[MAXNMSECTORS];
+static SectorDrawRecord *updateList0[MAXNMSECTORS];
+SectorDrawRecord *sectorDraw=sectorDraw0;
+SectorDrawRecord **updateList=updateList0;
 int updateListSize;
-SectorDrawRecord *drawList[MAXNMSECTORS];
+SectorDrawRecord *drawList[MAXNMSECTORS];       /* traversal scratch: one traversal at a time */
 int drawListSize;
+
+/* GCC14: split screen.  Views 1.. are traversed by the SLAVE, while the master draws view 0
+   and runs the game logic: its share of view 0 drawn, it walks the views queued at the top of
+   the image (wallsQueueView), each into its own set, allocated in low RAM the first time a
+   level runs with several players (wallsSplitAlloc).  Every view is thus traversed from the
+   cameras as the image began -- view 0's too (its traversal ran in the last image's tail).
+   The logic defers every geometry move to Post (processDelayedMoves), after the slave has
+   joined, so the walls the slave reads are frozen meanwhile.  Not frozen: the sprites and the
+   light list; the sprite leaves and the light positions are made on the master, per view,
+   when the view is drawn. */
+typedef struct
+{SectorDrawRecord *sd;
+ SectorDrawRecord **ul;
+ int ulSize;
+ MthXyz pos;                    /* the viewer, as the traversal saw it */
+ int sector;
+ short xmin,ymin,xmax,ymax;     /* its window */
+ MthMatrix view;
+} TravSet;
+static TravSet travSet[MPMAX]={{sectorDraw0,updateList0}};
+static TravSet *tr=travSet;              /* the set a traversal fills */
+static struct doorwayCache *trDC=doorwayCache;  /* its scratch.  The static array doubles as
+					   the slave's draw results (slaveResult): a traversal run
+					   while those wait for drawSlaveWalls uses splitDC. */
+static struct doorwayCache *splitDC;
+static int splitSets;                    /* views 1..splitSets have a set */
+static int travQueued;                   /* views 1..travQueued queued this image */
+static volatile int travDone;            /* the last one the slave finished (cache-through) */
+static int travKicked;                   /* the queue went to the slave with view 0's draw */
+int travSpin;                            /* spins at the queue's join, last image (overlay q:) */
+#define TRAVDONE (*(volatile int *)((int)&travDone|0x20000000))
+
+/* the viewer and window of a set, from the renderer's current ones */
+static void travSetViewer(TravSet *t,Sprite *c)
+{t->pos=c->pos;
+ t->sector=c->s;
+ t->xmin=viewXmin; t->ymin=viewYmin;
+ t->xmax=viewXmax; t->ymax=viewYmax;
+}
+
+/* sets for views 1..MPMAX-1, sized for this level.  Low RAM (area 0), freed with the level
+   (mem_init).  A set that does not fit leaves its view to the master's own traversal. */
+void wallsSplitAlloc(void)
+{int k;
+ if (splitSets==MPMAX-1)
+    return;
+ if (!splitDC)
+    splitDC=mem_nocheck_malloc(0,level_nmWalls*sizeof(struct doorwayCache));
+ if (!splitDC)
+    return;
+ for (k=splitSets+1;k<MPMAX;k++)
+    {travSet[k].sd=mem_nocheck_malloc(0,level_nmSectors*sizeof(SectorDrawRecord));
+     if (!travSet[k].sd)
+	break;
+     travSet[k].ul=mem_nocheck_malloc(0,level_nmSectors*sizeof(SectorDrawRecord *));
+     if (!travSet[k].ul)
+	break;
+     splitSets=k;
+    }
+}
+
+/* a new level: its memory is gone */
+void wallsSplitReset(void)
+{int k;
+ splitDC=NULL;
+ splitSets=0;
+ travQueued=0;
+ for (k=1;k<MPMAX;k++)
+    travSet[k].sd=NULL,travSet[k].ul=NULL;
+}
+
+/* View k (1..) will be drawn from this matrix and this camera: queue its traversal.  Views
+   must be queued in order, before drawWalls(0) kicks the slave. */
+void wallsQueueView(int k,MthMatrix *view,Sprite *c)
+{if (k==1)
+    travQueued=0;               /* a new image's queue */
+ if (k>splitSets || k!=travQueued+1)
+    return;
+ travSet[k].view=*view;
+ travSetViewer(travSet+k,c);
+ travQueued=k;
+}
 
 void drawSector(int sectorNm,MthMatrix *view,int slave)
 {sSectorType *sec;
@@ -2129,6 +2216,24 @@ void drawSector(int sectorNm,MthMatrix *view,int slave)
     }
 
 }
+
+/* --- GCC14: TRAVERSAL code.  From here to TRAVERSAL END it fills the set `tr` points at, with
+   the viewer and window saved in it: in split screen the master draws another view meanwhile,
+   with its own. */
+#define sectorDraw     (tr->sd)
+#define updateList     (tr->ul)
+#define updateListSize (tr->ulSize)
+#define doorwayCache   trDC
+#define viewPos        (tr->pos)
+#define viewSector     (tr->sector)
+#undef XMIN
+#undef YMIN
+#undef XMAX
+#undef YMAX
+#define XMIN           (tr->xmin)
+#define YMIN           (tr->ymin)
+#define XMAX           (tr->xmax)
+#define YMAX           (tr->ymax)
 
 void findDoorways(int sectorNm,MthMatrix *view)
 {sSectorType *sec;
@@ -2381,6 +2486,22 @@ void findDoorways(int sectorNm,MthMatrix *view)
 }
 
 
+#undef sectorDraw
+#undef updateList
+#undef updateListSize
+#undef doorwayCache
+#undef viewPos
+#undef viewSector
+#undef XMIN
+#undef YMIN
+#undef XMAX
+#undef YMAX
+#define XMIN        viewXmin
+#define YMIN        viewYmin
+#define XMAX        viewXmax
+#define YMAX        viewYmax
+/* --- TRAVERSAL END */
+
 #define IPRA (Uint16 volatile *)0xfffffee2
 #define IPRB (Uint16 volatile *)0xfffffe60
 #define TIER (Uint8 volatile *)0xfffffe10
@@ -2559,7 +2680,8 @@ void drawSlaveWalls(void)
 }
 
 void wallRenderSlaveMain(void)
-{set_imask(0xf);
+{int job;
+ set_imask(0xf);
  *IPRA=0x0000;
  *IPRB=0x0000;
  *TIER=0x01;
@@ -2572,11 +2694,24 @@ void wallRenderSlaveMain(void)
 	may still hold the previous job (slaveDraw purges on entry too; harmless). */
      *CACHECNTRL=0x10;
      *CACHECNTRL=0x01;
-     if (slaveJob)
+     job=slaveJob;
+     if (job==1)
 	wallsTraverse(&pipeMatrix,1);
      else
 	slaveDraw();
      *(Uint16 volatile *)0x21800000=0xffff;
+     if (job==2)
+	{/* split screen: its share of view 0 is signalled; now the views queued behind it.
+	    Each one's end is published through the cache-through alias, the master spins on
+	    it (wallsQueueJoin); the FRT signal stays the draw's alone. */
+	 int k,n=travQueued;
+	 trDC=splitDC;
+	 for (k=1;k<=n;k++)
+	    {tr=travSet+k;
+	     wallsTraverse(&travSet[k].view,2);
+	     TRAVDONE=k;
+	    }
+	}
     }
 }
 
@@ -2596,6 +2731,24 @@ void startSlave(void *slaveMain)
  while ((*SMPC_SF & 0x01)==0x01) ;
 }
 
+
+/* --- GCC14: TRAVERSAL code.  From here to TRAVERSAL END it fills the set `tr` points at, with
+   the viewer and window saved in it: in split screen the master draws another view meanwhile,
+   with its own. */
+#define sectorDraw     (tr->sd)
+#define updateList     (tr->ul)
+#define updateListSize (tr->ulSize)
+#define doorwayCache   trDC
+#define viewPos        (tr->pos)
+#define viewSector     (tr->sector)
+#undef XMIN
+#undef YMIN
+#undef XMAX
+#undef YMAX
+#define XMIN           (tr->xmin)
+#define YMIN           (tr->ymin)
+#define XMAX           (tr->xmax)
+#define YMAX           (tr->ymax)
 
 void buildTree(void)
 {int update,s,w,adjoin;
@@ -2757,9 +2910,7 @@ void wallsTraverse(MthMatrix *view,int onSlave)
  int leafToDraw;
  SectorDrawRecord *sdr;
 
- for (i=0;i<nmLights;i++)
-    MTH_CoordTrans(view,&(lightSource[i]->pos),tLightPos+i);
-
+ /* the light positions are made by drawWalls, on the master (see TravSet) */
  if (!onSlave) pushProfile("Find Visible");
 
  for (i=0;i<level_nmSectors;i++)
@@ -2916,10 +3067,27 @@ void wallsTraverse(MthMatrix *view,int onSlave)
  for (i=0;i<updateListSize;i++)
     updateList[i]=drawList[updateListSize-i-1];
 
- CFG_SPRITE_LEAVES();
+ if (onSlave!=2)                /* 2: split screen, during the logic -- see TravSet */
+    CFG_SPRITE_LEAVES();
  if (!onSlave) popProfile();
 }
 
+
+#undef sectorDraw
+#undef updateList
+#undef updateListSize
+#undef doorwayCache
+#undef viewPos
+#undef viewSector
+#undef XMIN
+#undef YMIN
+#undef XMAX
+#undef YMAX
+#define XMIN        viewXmin
+#define YMIN        viewYmin
+#define XMAX        viewXmax
+#define YMAX        viewYmax
+/* --- TRAVERSAL END */
 
 /* Starts NEXT frame's traversal on the slave.  Call at the end of the game loop, with the
    view matrix as the next frame will rebuild it. */
@@ -2932,7 +3100,9 @@ void wallsPipeKick(MthMatrix *view)
     return;                     /* already in flight: never relaunch without a join */
  for (k=0;k<(int)sizeof(MthMatrix);k++)
     d[k]=s[k];
- setViewer(camera);           /* view 0 of the next frame: the caller loaded player 0 */
+ tr=travSet;                  /* view 0 of the next frame: the caller loaded player 0 */
+ trDC=doorwayCache;
+ travSetViewer(tr,camera);
  pipeDone=0;
  slaveJob=1;
  pipeInFlight=1;
@@ -2949,6 +3119,22 @@ void wallsPipeDiscard(void)
  wallsPipeJoin();
  pipeDone=0;
 #endif
+ wallsQueueJoin();
+ travQueued=0;
+}
+
+/* Waits for the views queued behind view 0 (split screen).  Call before anything moves the
+   geometry (Post), and before the level goes. */
+void wallsQueueJoin(void)
+{int i=0;
+ if (!travQueued || !travKicked)
+    return;
+ while (TRAVDONE<travQueued)
+    i++;
+ travSpin=i;
+ travKicked=0;
+ *CACHECNTRL=0x10;              /* the slave wrote the sets through normal addresses */
+ *CACHECNTRL=0x01;
 }
 
 /* Joins the traversal started in the tail.  Call BEFORE drawWalls -- and before freeing the
@@ -2983,12 +3169,27 @@ void wallsPipeJoin(void)
 /* --- GCC14: DRAW half ----------------------------------------------------------------
    Everything that emits VDP1 commands or touches the tile cache stays here, on the
    master, its only writer. */
-void drawWalls(MthMatrix *view)
-{int i;
+void drawWalls(int k,MthMatrix *view)
+{int i,queued;
  XyInt parms[2];
  int lastWallCmd;
  checkStack();
+ /* split screen: view k>0 was traversed by the slave during view 0 -- drawn from the matrix
+    and the viewer it was traversed with.  Otherwise the master traverses it here. */
+ queued=(k>0 && k<=travQueued);
+ if (queued)
+    {wallsQueueJoin();
+     view=&travSet[k].view;
+     tr=travSet+k;
+    }
+ else
+    {tr=(k>0 && k<=splitSets)? travSet+k: travSet;
+     if (k>0 || !pipeDone)
+	travSetViewer(tr,camera);
+    }
  setViewer(camera);
+ viewPos=tr->pos;
+ viewSector=tr->sector;
 
  plaxBBxmin=160;
  plaxBBymin=120;
@@ -3011,16 +3212,33 @@ void drawWalls(MthMatrix *view)
  autoTarget=NULL;
  bestAutoAimRating=INT_MAX;
 
+ if (queued)
+    CFG_SPRITE_LEAVES();        /* the sprites as they are now, on the master (TravSet) */
+ else
+    {trDC=doorwayCache;
 #if WALLPIPE>=2
- if (!pipeDone)     /* the slave did not do it in the tail: do it here */
+     if (k>0 || !pipeDone)  /* the slave did not do it in the tail: do it here */
 #endif
-    wallsTraverse(view,0);
- pipeDone=0;
+	wallsTraverse(view,0);
+    }
+ if (k==0)
+    pipeDone=0;
+ /* draw from the set just made */
+ sectorDraw=tr->sd;
+ updateList=tr->ul;
+ updateListSize=tr->ulSize;
+ for (i=0;i<nmLights;i++)
+    MTH_CoordTrans(view,&(lightSource[i]->pos),tLightPos+i);
 
  if (slaveSize>updateListSize-1)
     slaveSize=updateListSize-1;
  slaveDrawStart=slaveSize;
- /* start slave */
+ /* start slave: its share, then -- view 0 in split screen -- the views queued */
+ slaveJob=(k==0 && travQueued)? 2: 0;
+ if (slaveJob==2)
+    {TRAVDONE=0;
+     travKicked=1;
+    }
  *(Uint16 volatile *)0x21000000=0xffff; CFG_PROF("Master Draw");
  for (i=updateListSize-1;i>slaveDrawStart;i--)
     {parms[0].x=updateList[i]->xmin+viewCx;parms[0].y=updateList[i]->ymin+viewCy;
@@ -3552,6 +3770,11 @@ static short doomDrawRank[MAXNMSECTORS];             /* updateList index + 1, 0 
 static short doomRanked[MAXNMSECTORS];
 static int doomNmRanked;
 
+/* reads the set the traversal just filled (tr): on the slave in the tail, on the master for
+   a split-screen view (drawWalls) */
+#define sectorDraw     (tr->sd)
+#define updateList     (tr->ul)
+#define updateListSize (tr->ulSize)
 void doom_spriteLeaves(void)
 {int i,s,t,n,w;
  Sprite *o;
@@ -3598,4 +3821,7 @@ void doom_spriteLeaves(void)
 	}
     }
 }
+#undef sectorDraw
+#undef updateList
+#undef updateListSize
 #endif
