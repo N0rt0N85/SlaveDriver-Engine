@@ -46,6 +46,9 @@ void initWallRenderer(void);
 void removeLight(Sprite *s);
 void addLight(Sprite *s,int r,int g,int b);
 void changeLightColor(Sprite *s,int r,int g,int b);
+void addLightEx(Sprite *s,int r,int g,int b,int radius,int peak);    /* proportionnel : k 0..16, rayon en u, intensite 0..31 */
+void changeLightEx(Sprite *s,int r,int g,int b,int radius,int peak); /* dans le modele de la lumiere ; radius <= 0 le garde */
+int  hasLight(Sprite *s);                       /* la liste ne supporte pas le doublon */
 
 void initWater(void);
 void stepWater(void);

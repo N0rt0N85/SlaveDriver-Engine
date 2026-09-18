@@ -24,6 +24,7 @@
 #include "walls.h"
 #include "gamestat.h"
 #include "doom.h"
+#include "doom_lights.h"
 #include "doom_actions.h"
 
 DOOM_ACTIONS_PROTOTYPES
@@ -172,6 +173,36 @@ static void doomDecreaseAmmo(int amount)
  doomPlayer.ammo[ammo]-=amount;
  if (doomPlayer.ammo[ammo]<0)
     doomPlayer.ammo[ammo]=0;
+}
+
+/* --- eclair de bouche du joueur ---------------------------------------------------------------
+   La lumiere se pose sur `camera`, le sprite du joueur, donc elle eclaire exactement les murs que
+   le backface culling garde : buildLightList calcule contre la position de la source le meme
+   produit scalaire que drawWalls contre camera->pos.  Doom n'a pas cela -- son A_Light1/2 est un
+   decalage de couleur d'ECRAN (doomFlashTic), qui n'eclaire aucun mur ; c'est donc un AJOUT, le
+   symetrique de celui des monstres, reglable a part (LIGHT_MUZZLE_PLAYER) : c'est le seul que
+   le joueur voit a chaque tir.  Un tic plein, un tic a moitie,
+   et la meme garde contre le doublon : une chaingun tire tous les 4 tics, un plasma tous les 3,
+   donc un tir peut tomber sur un eclair encore a moitie -- on le rallume au lieu d'en poser un
+   second. */
+void doom_muzzleFlash(void)
+{assert(camera);
+ if (!doomPlayer.muzzleTics)
+    addLightEx(camera,GP_LIGHT_MUZZLE_PLAYER);
+ else
+    changeLightEx(camera,GP_LIGHT_MUZZLE_PLAYER);
+ doomPlayer.muzzleTics=GP_LIGHT_MUZZLE_TICS;
+}
+
+/* Appele par doom_playerTic AVANT les psprites : un eclair pose au tic N vit N en plein, N+1 a
+   moitie, et s'eteint au debut de N+2. */
+void doom_muzzleTic(void)
+{if (!doomPlayer.muzzleTics || !camera)
+    return;
+ if (!--doomPlayer.muzzleTics)
+    removeLight(camera);
+ else
+    doom_lightFade(camera,GP_LIGHT_MUZZLE_PLAYER,doomPlayer.muzzleTics,GP_LIGHT_MUZZLE_TICS);
 }
 
 /* --- hitscan and autoaim (SPEC_PLAYER section 2.5) ------------------------------------------ */
@@ -365,6 +396,7 @@ void A_FirePistol(DoomPlayer *p,int ps)
  doom_playerSound(sfx_pistol);
  doomDecreaseAmmo(1);
  doom_setPsprite(DOOM_PS_FLASH,doomWeaponInfo[(int)p->readyWeapon].flashstate);
+ doom_muzzleFlash();
  doom_aimSlope(&doomBulletPitch);
  doom_gunShot(!p->refire,0,2048);
 }
@@ -377,6 +409,7 @@ void A_FireShotgun(DoomPlayer *p,int ps)
  doom_playerSound(sfx_shotgn);
  doomDecreaseAmmo(1);
  doom_setPsprite(DOOM_PS_FLASH,doomWeaponInfo[(int)p->readyWeapon].flashstate);
+ doom_muzzleFlash();
  doom_aimSlope(&doomBulletPitch);
  for (i=0;i<7;i++)
     doom_gunShot(0,0,2048);
@@ -393,6 +426,7 @@ void A_FireCGun(DoomPlayer *p,int ps)
  doomDecreaseAmmo(1);
  doom_setPsprite(DOOM_PS_FLASH,doomWeaponInfo[(int)p->readyWeapon].flashstate+
 		 p->pspState[ps]-doomWeaponInfo[wp_chaingun].atkstate);
+ doom_muzzleFlash();
  doom_aimSlope(&doomBulletPitch);
  doom_gunShot(!p->refire,0,2048);
 }
@@ -403,8 +437,24 @@ void A_FireMissile(DoomPlayer *p,int ps)
  assert(p);
  (void)ps;
  doomDecreaseAmmo(1);
+ doom_muzzleFlash();
  doom_aimSlope(&pitch);
  doom_spawnPlayerMissile(MT_ROCKET,normalizeAngle(playerAngle.yaw+F(90)),pitch);
+}
+
+/* A_FirePlasma (p_pspr.c:721-731) : une bille par tir, image d'eclair tiree entre les deux
+   (P_Random()&1), pas de son propre -- c'est le seesound du missile.  Le verbe etait vide (le
+   fusil a plasma est hors du shareware) ; la lumiere du flux n'a de site atteignable que si le
+   tir existe. */
+void A_FirePlasma(DoomPlayer *p,int ps)
+{Fixed32 pitch;
+ assert(p);
+ (void)ps;
+ doomDecreaseAmmo(1);
+ doom_setPsprite(DOOM_PS_FLASH,doomWeaponInfo[(int)p->readyWeapon].flashstate+(P_Random()&1));
+ doom_muzzleFlash();
+ doom_aimSlope(&pitch);
+ doom_spawnPlayerMissile(MT_PLASMA,normalizeAngle(playerAngle.yaw+F(90)),pitch);
 }
 
 /* A_Light0/1/2 :795-810: extralight, applied by the flash of the tic (DOOM_PLAYER.C) */

@@ -117,6 +117,8 @@ void doom_playerInit(void)
  doomPlayer.backpack=0;
  doomPlayer.refire=0;
  doomPlayer.attackDown=0;
+ doomPlayer.muzzleTics=0;              /* lightInit() a deja vide la liste du moteur */
+ doom_missileLightsReset();
  doomPlayer.damageCount=0;
  doomPlayer.bonusCount=0;
  for (i=0;i<DOOM_NUMPSPRITES;i++)
@@ -351,6 +353,7 @@ void doom_playerTic(void)
  doomPlayer.fire=!(doomPlayer.input & IMASK(ACTION_FIRE)) ||
     (doomPlayer.pushed & IMASK(ACTION_FIRE));
  doomPlayer.pushed=0;
+ doom_muzzleTic();                             /* avant les psprites : l'eclair vit deux tics */
  if (currentState.health<=0)
     {doomDeathTic();
      doom_psprTic();                            /* P_DeathThink calls P_MovePsprites: A_Lower */

@@ -475,15 +475,38 @@ void stepWater(void)
 }
 
 #define LIGHT
-#define BETTERLIGHT 0
+/* --- lumieres dynamiques ----------------------------------------------------------------------
+   Deux modeles cohabitent, un par lumiere (lMode) :
+   - SOUSTRACTIF (addLight) : celui de Lobotomy, garde a l'identique pour AI.C / AI2.C.  Chaque
+     canal recoit (LIGHTRADIUS^2 - d^2)>>CFG_LIGHTSHIFT MOINS sa valeur, 0 = plein, 31 = absent.
+     La valeur ne dit pas une teinte mais une PORTEE (un canal a 12 ne s'allume qu'a moins de
+     143 u sur 181), et son pic de 31 depasse la marge d'une piece pleine -- 16 est le neutre du
+     gouraud, 31 le plafond -- donc au centre presque toute source virait au blanc, sur un
+     plateau ecrete au bord dur.
+   - PROPORTIONNEL (addLightEx) : le portage Doom.  Par source : k de 0 a 16 par canal (la
+     teinte), un RAYON, une INTENSITE de 0 a 31 (l'apport au centre).  s = (R^2 - d^2)/R^2 sur
+     0..256, adouci en s^2 quand CFG_LIGHTSMOOTH (un bord doux au lieu d'un disque), apport =
+     s * k * intensite >> 12.  Teinte, diametre et intensite se reglent separement -- pour Doom,
+     dans params/doom.cfg (cles LIGHT_*).  Cout par sommet eclaire : cinq
+     multiplications de plus que le soustractif (normalisation, adoucissement, trois canaux) --
+     le SH-2 multiplie en materiel, c'est ~0,5 us, et rien du tout sans lumiere vivante.
+   L'attenuation N.L d'origine (BETTERLIGHT) est retiree : elle ne compilait plus en ce qu'elle
+   voulait dire (un `else` pendouillant mangeait le canal rouge) et coutait une division par
+   sommet.  Le seul morceau utile -- ne pas eclairer une face qui tourne le dos a la source --
+   est dans buildLightList. */
 #define MAXNMLIGHTSOURCES 15
 #define LIGHTRADIUS CFG_LIGHTRADIUS
 
 static Sprite *lightSource[MAXNMLIGHTSOURCES];
 static int nmLights,delayNmLights;
 static MthXyz tLightPos[MAXNMLIGHTSOURCES];
-static int lColor[MAXNMLIGHTSOURCES][3];
+static int lColor[MAXNMLIGHTSOURCES][3];   /* proportionnel : k * intensite, plie a la pose */
 static int delayColor[MAXNMLIGHTSOURCES][3];
+/* Rayon, rayon^2 et (1<<24)/rayon^2, figes a la pose ou au changement de rayon : la division
+   se fait une fois par lumiere, jamais par sommet. */
+static int lRad[MAXNMLIGHTSOURCES],lRad2[MAXNMLIGHTSOURCES],lInv[MAXNMLIGHTSOURCES];
+static int delayRad[MAXNMLIGHTSOURCES];
+static char lMode[MAXNMLIGHTSOURCES];      /* 0 soustractif, 1 proportionnel */
 static char lightColorChanged=0,lightsDeleted=0;
 static char delayDeleteLight[MAXNMLIGHTSOURCES];
 static void lightInit(void)
@@ -498,38 +521,87 @@ static void lightInit(void)
  lightsDeleted=0;
 }
 
-void addLight(Sprite *s,int r,int g,int b)
-{if (delayNmLights>=MAXNMLIGHTSOURCES)
+static void lightSetRadius(int i,int radius)
+{lRad[i]=radius;
+ lRad2[i]=radius*radius;
+ lInv[i]=(1<<24)/lRad2[i];
+}
+
+static void lightPut(Sprite *s,int r,int g,int b,int radius,int mode)
+{int i=delayNmLights;
+ if (i>=MAXNMLIGHTSOURCES)
     return;
- assert(delayNmLights<MAXNMLIGHTSOURCES);
- lColor[delayNmLights][0]=r;
- lColor[delayNmLights][1]=g;
- lColor[delayNmLights][2]=b;
- delayColor[delayNmLights][0]=r;
- delayColor[delayNmLights][1]=g;
- delayColor[delayNmLights][2]=b;
- lightSource[delayNmLights]=s;
+ lColor[i][0]=delayColor[i][0]=r;
+ lColor[i][1]=delayColor[i][1]=g;
+ lColor[i][2]=delayColor[i][2]=b;
+ lightSetRadius(i,radius);
+ delayRad[i]=radius;
+ lMode[i]=mode;
+ lightSource[i]=s;
  delayNmLights++;
 }
 
-void changeLightColor(Sprite *s,int r,int g,int b)
+void addLight(Sprite *s,int r,int g,int b)
+{lightPut(s,r,g,b,LIGHTRADIUS,0);
+}
+
+/* k de 0 a 16 par canal, rayon en unites monde, intensite de 0 a 31 (l'apport au centre). */
+void addLightEx(Sprite *s,int r,int g,int b,int radius,int peak)
+{assert(radius>=16 && radius<=1024);
+ assert(peak>=0 && peak<=31);
+ assert(r>=0 && r<=16 && g>=0 && g<=16 && b>=0 && b<=16);
+ lightPut(s,r*peak,g*peak,b*peak,radius,1);
+}
+
+/* La lumiere VIVANTE de ce sprite, -1 si aucune.  Seul [0, delayNmLights) est vivant : la
+   compaction d'updateLights ne vide pas la queue du tableau, et les anciennes recherches sur
+   les quinze slots pouvaient y trouver l'adresse d'un sprite recycle -- removeLight marquait
+   alors un slot MORT, et la prochaine lumiere posee a cet index disparaissait aussitot. */
+static int lightFind(Sprite *s)
 {int i;
- for (i=0;i<MAXNMLIGHTSOURCES && lightSource[i]!=s;i++) ;
- if (i==MAXNMLIGHTSOURCES)
+ for (i=0;i<delayNmLights;i++)
+    if (lightSource[i]==s && !delayDeleteLight[i])
+       return i;
+ return -1;
+}
+
+/* Valeurs dans le modele de la lumiere : proportionnel, k de 0 a 16 et `peak` l'intensite ;
+   soustractif, les valeurs d'origine et `peak` ignore.  radius <= 0 garde le rayon. */
+void changeLightEx(Sprite *s,int r,int g,int b,int radius,int peak)
+{int i=lightFind(s);
+ int m;
+ if (i<0)
     return;
- delayColor[i][0]=r;
- delayColor[i][1]=g;
- delayColor[i][2]=b;
+ assert(!lMode[i] || (peak>=0 && peak<=31));
+ m=lMode[i]? peak: 1;
+ delayColor[i][0]=r*m;
+ delayColor[i][1]=g*m;
+ delayColor[i][2]=b*m;
+ if (radius>0)
+    {assert(radius>=16 && radius<=1024);
+     delayRad[i]=radius;
+    }
  lightColorChanged=1;
 }
 
+/* Le modele SOUSTRACTIF de Lobotomy (AI.C, AI2.C) ; une lumiere Doom passe par changeLightEx. */
+void changeLightColor(Sprite *s,int r,int g,int b)
+{changeLightEx(s,r,g,b,0,0);
+}
+
 void removeLight(Sprite *s)
-{int i;
- for (i=0;i<MAXNMLIGHTSOURCES && lightSource[i]!=s;i++) ;
- if (i==MAXNMLIGHTSOURCES)
+{int i=lightFind(s);
+ if (i<0)
     return;
  lightsDeleted=1;
  delayDeleteLight[i]=1;
+}
+
+/* Ce sprite porte-t-il deja une lumiere ?  La liste ne supporte pas le doublon : removeLight
+   n'enleve que la PREMIERE occurrence, donc un second addLight sur le meme sprite fuit un slot
+   sur les quinze. */
+int hasLight(Sprite *s)
+{return lightFind(s)>=0;
 }
 
 
@@ -539,10 +611,12 @@ void updateLights(void)
 
  if (lightColorChanged)
     {lightColorChanged=0;
-     for (i=0;i<MAXNMLIGHTSOURCES;i++)
+     for (i=0;i<nmLights;i++)
 	{lColor[i][0]=delayColor[i][0];
 	 lColor[i][1]=delayColor[i][1];
 	 lColor[i][2]=delayColor[i][2];
+	 if (delayRad[i]!=lRad[i])
+	    lightSetRadius(i,delayRad[i]);
 	}
     }
  if (lightsDeleted)
@@ -556,6 +630,11 @@ void updateLights(void)
 		 delayColor[i][0]=lColor[i][0];
 		 delayColor[i][1]=lColor[i][1];
 		 delayColor[i][2]=lColor[i][2];
+		 lRad[i]=lRad[j];
+		 lRad2[i]=lRad2[j];
+		 lInv[i]=lInv[j];
+		 delayRad[i]=lRad[i];
+		 lMode[i]=lMode[j];
 		}
 	     i++;
 	    }
@@ -568,12 +647,44 @@ void updateLights(void)
     }
 }
 
+/* Apport de la lumiere i au point pos (espace vue), ajoute a *r,*g,*b.  Le seul calcul de
+   lumiere : le maitre (getLight), l'esclave (sgetLight) et les things (drawSprites) l'appellent.
+   La boite coupe avant les multiplications -- et avant tout debordement, un sommet lointain du
+   mur donnant des ecarts de plusieurs milliers d'unites. */
+static inline void lightApply(int i,MthXyz *pos,int *r,int *g,int *b)
+{int dx=f(pos->x-tLightPos[i].x);
+ int dy=f(pos->y-tLightPos[i].y);
+ int dz=f(pos->z-tLightPos[i].z);
+ int rad=lRad[i];
+ int u;
+ if (dx>rad || dx<-rad || dy>rad || dy<-rad || dz>rad || dz<-rad)
+    return;
+ u=lRad2[i]-(dx*dx+dy*dy+dz*dz);
+ if (u<=0)
+    return;
+ if (lMode[i])
+    {int sv=(u*lInv[i])>>16;          /* 0..256 : 256 sur la source, 0 au bord */
+#if CFG_LIGHTSMOOTH
+     sv=(sv*sv)>>8;                   /* bord doux : la parabole gardait 75 % a mi-rayon */
+#endif
+     *r+=(sv*lColor[i][0])>>12;       /* lColor = k * intensite <= 496 : apport <= intensite */
+     *g+=(sv*lColor[i][1])>>12;
+     *b+=(sv*lColor[i][2])>>12;
+    }
+ else
+    {u>>=CFG_LIGHTSHIFT;
+     if (u-lColor[i][0]>0)
+	*r+=u-lColor[i][0];
+     if (u-lColor[i][1]>0)
+	*g+=u-lColor[i][1];
+     if (u-lColor[i][2]>0)
+	*b+=u-lColor[i][2];
+    }
+}
+
 
 int nmWallLights;
 static char wallLightP[MAXNMLIGHTSOURCES];
-#if BETTERLIGHT
-static int wallLightDist[MAXNMLIGHTSOURCES];
-#endif
 static void buildLightList(sWallType *wall)
 {int l;
  Fixed32 dist;
@@ -585,19 +696,16 @@ static void buildLightList(sWallType *wall)
      dist=(f(lightSource[l]->pos.x-wallP.x))*wall->normal[0]+
 	  (f(lightSource[l]->pos.y-wallP.y))*wall->normal[1]+
 	  (f(lightSource[l]->pos.z-wallP.z))*wall->normal[2];
-     if (
-#if BETTERLIGHT
-	 dist<=0
-#else
-	 dist<-F(LIGHTRADIUS)
-#endif
-	 || dist>F(LIGHTRADIUS))
+     /* La source doit etre du cote VISIBLE du plan.  `dist` est exactement le produit scalaire
+	que le backface culling calcule avec camera->pos (meme sommet v[0], meme normale, plus bas
+	dans drawWalls), donc le meme signe dit la meme chose : <= 0, la lumiere est derriere la
+	face qu'on voit.  L'ancien test acceptait jusqu'a un rayon DERRIERE le plan -- une boule de
+	feu eclairait a travers la geometrie -- et il retenait des murs que la boucle par sommet
+	parcourait ensuite pour rien, en leur otant au passage leur fusion de LOD. */
+     if (dist<=0 || dist>F(lRad[l]))
 	wallLightP[l]=0;
      else
 	{wallLightP[l]=1;
-#if BETTERLIGHT
-	 wallLightDist[l]=MTH_Mul(dist>>11,dist);
-#endif
 	 nmWallLights++;
 	}
     }
@@ -605,9 +713,6 @@ static void buildLightList(sWallType *wall)
 
 static int snmWallLights;
 static char swallLightP[MAXNMLIGHTSOURCES];
-#if BETTERLIGHT
-static int swallLightDist[MAXNMLIGHTSOURCES];
-#endif
 static void sbuildLightList(sWallType *wall)
 {int l;
  Fixed32 dist;
@@ -619,19 +724,11 @@ static void sbuildLightList(sWallType *wall)
      dist=(f(lightSource[l]->pos.x-wallP.x))*wall->normal[0]+
 	  (f(lightSource[l]->pos.y-wallP.y))*wall->normal[1]+
 	  (f(lightSource[l]->pos.z-wallP.z))*wall->normal[2];
-     if (
-#if BETTERLIGHT
-	 dist<=0
-#else
-	 dist<-F(LIGHTRADIUS)
-#endif
-	 || dist>F(LIGHTRADIUS))
+     /* Meme face visible que buildLightList, voir le commentaire la-bas. */
+     if (dist<=0 || dist>F(lRad[l]))
 	swallLightP[l]=0;
      else
 	{swallLightP[l]=1;
-#if BETTERLIGHT
-	 swallLightDist[l]=MTH_Mul(dist>>11,dist);
-#endif
 	 snmWallLights++;
 	}
     }
@@ -648,7 +745,7 @@ static int wavyIndex=0;
 
 unsigned short getLight(char vlight,
 			MthXyz *pos)
-{int r,g,b,i,light;
+{int r,g,b,i;
  if (wavyIndex)
     {vlight+=((*(((char *)waterBright)+wavyIndex))-20)>>1;
      if (vlight>31) vlight=31;
@@ -661,28 +758,8 @@ unsigned short getLight(char vlight,
     return greyTable[(int)vlight];
  r=g=b=vlight;
  for (i=0;i<nmLights;i++)
-    {int dist;
-     if (!wallLightP[i])
-	continue;
-     dist=(f(pos->x-tLightPos[i].x)*f(pos->x-tLightPos[i].x)+
-	   f(pos->y-tLightPos[i].y)*f(pos->y-tLightPos[i].y)+
-	   f(pos->z-tLightPos[i].z)*f(pos->z-tLightPos[i].z));
-     light=LIGHTRADIUS*LIGHTRADIUS-dist;
-     if (light<=0) continue;
-#if BETTERLIGHT
-     if (dist>10)
-	light=(light*(wallLightDist[i]/dist))>>16;
-     else
-#else
-	light=light>>CFG_LIGHTSHIFT;
-#endif
-     if (light-lColor[i][0]>0)
-	r+=light-lColor[i][0];
-     if (light-lColor[i][1]>0)
-	g+=light-lColor[i][1];
-     if (light-lColor[i][2]>0)
-	b+=light-lColor[i][2];
-    }
+    if (wallLightP[i])
+       lightApply(i,pos,&r,&g,&b);
  if (r>31) r=31;
  if (g>31) g=31;
  if (b>31) b=31;
@@ -692,7 +769,7 @@ unsigned short getLight(char vlight,
 static int sWavyIndex=0;
 unsigned short sgetLight(char vlight,
 			 MthXyz *pos)
-{int r,g,b,i,light,dist;
+{int r,g,b,i;
  if (sWavyIndex)
     {vlight+=((*(((char *)waterBright)+sWavyIndex))-20)>>1;
      if (vlight>31) vlight=31;
@@ -705,27 +782,8 @@ unsigned short sgetLight(char vlight,
     return greyTable[(int)vlight];
  r=g=b=vlight;
  for (i=0;i<nmLights;i++)
-    {if (!swallLightP[i])
-	continue;
-     dist=(f(pos->x-tLightPos[i].x)*f(pos->x-tLightPos[i].x)+
-	   f(pos->y-tLightPos[i].y)*f(pos->y-tLightPos[i].y)+
-	   f(pos->z-tLightPos[i].z)*f(pos->z-tLightPos[i].z));
-     light=LIGHTRADIUS*LIGHTRADIUS-dist;
-     if (light<=0) continue;
-#if BETTERLIGHT
-     if (dist>10)
-	light=(light*(swallLightDist[i]/dist))>>16;
-     else
-#else
-	light=light>>CFG_LIGHTSHIFT;
-#endif
-     if (light-lColor[i][0]>0)
-	r+=light-lColor[i][0];
-     if (light-lColor[i][1]>0)
-	g+=light-lColor[i][1];
-     if (light-lColor[i][2]>0)
-	b+=light-lColor[i][2];
-    }
+    if (swallLightP[i])
+       lightApply(i,pos,&r,&g,&b);
  if (r>31) r=31;
  if (g>31) g=31;
  if (b>31) b=31;
@@ -3329,6 +3387,28 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	 n'est pas ordonnee en luminance.  Le banc assombri est le seul chemin, et c'est celui
 	 que Lobotomy avait prevu -- la ligne qui le choisissait est deux lignes plus haut, en
 	 commentaire, par la distance brute. */
+      /* L'INVERSE de la brume.  Une lumiere dynamique retranche de spriteFog AVANT le choix du
+	 banc : l'assombrissement devient plus faible, ou nul.  Meme calcul que les murs
+	 (lightApply), le canal le plus fort menant, pour qu'une chose et le mur derriere elle
+	 restent dans la meme plage.  Les deux positions sont deja en espace vue -- tLightPos est
+	 transforme une fois par image, tformed est le sprite -- et la boite de lightApply coupe
+	 avant les multiplications.  Sans lumiere vivante, rien du tout.
+	 Deux limites assumees : la distance est prise aux PIEDS, comme la projection (l'ecart avec
+	 le centre vaut au plus un rayon de sprite), et le banc 0 est la palette telle quelle --
+	 une chose deja proche ne peut pas s'eclaircir au-dela. */
+      if (nmLights)
+	 {int li,lr,lg,lb,best=0;
+	  for (li=0;li<nmLights;li++)
+	     {lr=lg=lb=0;
+	      lightApply(li,&tformed,&lr,&lg,&lb);
+	      if (lr>best) best=lr;
+	      if (lg>best) best=lg;
+	      if (lb>best) best=lb;
+	     }
+	  spriteFog-=best;
+	  if (spriteFog<0)
+	     spriteFog=0;
+	 }
       spriteBank=(spriteFog*(NMOBJECTPALLETES-1))/SPRITEFOGMAX;
       if (spriteBank>NMOBJECTPALLETES-1)
 	 spriteBank=NMOBJECTPALLETES-1;

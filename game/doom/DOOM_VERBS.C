@@ -12,12 +12,14 @@
 #include "util.h"
 #include "level.h"
 #include "sprite.h"
+#include "walls.h"
 #include "object.h"
 #include "ai.h"
 #include "sruins.h"
 #include "hitscan.h"
 #include "gamestat.h"
 #include "doom.h"
+#include "doom_lights.h"
 #include "doom_actions.h"
 
 DOOM_ACTIONS_PROTOTYPES
@@ -46,7 +48,6 @@ STUB_P(A_OpenShotgun2)
 STUB_P(A_LoadShotgun2)
 STUB_P(A_CloseShotgun2)
 STUB_P(A_Saw)
-STUB_P(A_FirePlasma)
 STUB_P(A_BFGsound)
 STUB_P(A_FireBFG)
 STUB_M(A_BFGSpray)
@@ -605,5 +606,6 @@ void A_Fall(DoomActor *this)
 /* A_Explode (p_enemy.c:1604-1607) */
 void A_Explode(DoomActor *this)
 {assert(this);
+ doom_explosionLight(this);                     /* un AJOUT : Doom n'eclaire rien (DOOM_LIGHTS.H) */
  doom_radiusAttack(this,this->target,128);
 }
