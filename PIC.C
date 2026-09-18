@@ -35,7 +35,9 @@
 #define MAXNMPICS 1000
 #endif
 
-static int frameCount; CFG_PIC_DECL
+/* GCC14: the use clock (PIC.H), and its value when the image being built and the image the VDP1
+   is drawing started */
+static int picClock,picThis,picPrev;
 
 #define MAXNMVDP2PICS 50
 struct _vdp2PicData
@@ -102,9 +104,18 @@ Pic pics[MAXNMPICS];
 static int nmPics;
 static unsigned short *palletes;
 
-#if MIPMAP
-char mippedSlot[MAXNMPICS];
+/* GCC14: the wall tiles' rule (PIC.H) */
+#ifndef GP_PIC_LOD_PX
+#define GP_PIC_LOD_PX 0
 #endif
+#define PICSPARE 4              /* slots the ranking leaves to newcomers */
+static const int picLodPx=GP_PIC_LOD_PX;
+int picLodNow,picLastSmall,picLastFull;
+static int picSmall,picFull;
+static unsigned char picSize[WALLPICS],picKeep[WALLPICS/8];
+static unsigned short picMean[WALLPICS];   /* 0 = not taken yet */
+static Pic *picPending[48];     /* slots a wall took from the image on screen: pic_flush fills them */
+static int picNmPending;
 
 
 #define MAXNMANIMSETS 15
@@ -166,6 +177,34 @@ void setDrawModeBit(int class,int bit,int onOff)
     classType[class].drawWord&=~bit;
 }
 
+/* GCC14: an image closes: rank its wall tiles by their largest cell, a tile already in a slot
+   counting a quarter more so that it only leaves for a clearly bigger one.  The first
+   slots-PICSPARE keep a slot through the next image; the bar is the size a newcomer must reach. */
+static void wallRank(void)
+{unsigned short hist[256];
+ int t,s,n,keep;
+ memset(hist,0,sizeof(hist));
+ for (t=0;t<WALLPICS;t++)
+    if ((s=picSize[t]))
+       {if (pics[t].charNm!=-1)
+	   s+=s>>2;
+	if (s>255)
+	   s=255;
+	picSize[t]=s;
+	hist[s]++;
+       }
+ keep=classType[TILE16BPP].nmSlots-PICSPARE;
+ for (s=255,n=0;s>0 && n+hist[s]<=keep;s--)
+    n+=hist[s];
+ picLodNow=(s+1>picLodPx)? s+1: picLodPx;
+ for (t=0;t<WALLPICS;t++)
+    if (picSize[t]>=picLodNow)
+       picKeep[t>>3]|=1<<(t&7);
+    else
+       picKeep[t>>3]&=~(1<<(t&7));
+ memset(picSize,0,sizeof(picSize));
+}
+
 void pic_nextFrame(int *swaps,int *used)
 {
  /* Measurement discs are NDEBUG builds: without this, the only two counters that say
@@ -182,11 +221,17 @@ void pic_nextFrame(int *swaps,int *used)
        {used[i]=0;
 	for (j=0;j<classType[i].nmSlots;j++)
 	   if (classType[i].slots[j] &&
-	       classType[i].slots[j]->lastUse==frameCount)
+	       classType[i].slots[j]->lastUse>=picThis)
 	      used[i]++;
        }
 #endif
- frameCount++;
+ if (picLodPx)
+    wallRank();
+ picLastSmall=picSmall;
+ picLastFull=picFull;
+ picSmall=picFull=0;
+ picPrev=picThis;
+ picThis=picClock+1;
 }
 
 int getPicClass(int p)
@@ -204,7 +249,13 @@ int initPicSystem(int _picNmBase,int *classSizes)
 {int i;
  enum Class c;
  nmPics=0;
- frameCount=0;
+ picNmPending=0;
+ picClock=0;
+ picThis=picPrev=1;
+ memset(picSize,0,sizeof(picSize));
+ memset(picKeep,0,sizeof(picKeep));
+ memset(picMean,0,sizeof(picMean));
+ picLodNow=picLodPx;
  palletes=NULL;
  nmVDP2Pics=0;
  rleBuffer=(unsigned char *)0x6001000; /*mem_malloc(1,4096);*/
@@ -234,6 +285,7 @@ int initPicSystem(int _picNmBase,int *classSizes)
 
 void resetPics(void)
 {int c,i;
+ picNmPending=0;                /* its pics are unmapped below */
  for (i=0;i<MAXNMPICS;i++)
     if (!(pics[i].flags & PICFLAG_LOCKED))
        pics[i].charNm=-1;
@@ -245,17 +297,45 @@ void resetPics(void)
     }
 }
 
-#if MIPMAP
-unsigned short mipbuff[1024*4];
-#endif
+/* GCC14: what map() hands the DMA.  dmaMemCpy returns before the transfer ends, so the tile must
+   not sit in map()'s frame: the next calls' frames overwrote its last row while the DMA was still
+   reading it.  Static, and every writer of it or of rleBuffer first waits for the DMA. */
+static unsigned short picBuff[1024*4];
 
-static void map(Pic *p)
-{int oldest,oldTime,index;
+static unsigned char *unRle(Pic *p)
+{register int outSize;
+ register int i;
+ register unsigned char *inPos;
+ int nmPixels;
+ while (dmaActive())
+    ;
+ outSize=0;
+ inPos=p->data;
+ if (p->class==TILESMALL8BPP)
+    nmPixels=32*32;
+ else
+    nmPixels=64*64;
+ while (outSize<nmPixels)
+    {/* decode blank space */
+     i=*(inPos++);
+     for (;i;i--)
+	rleBuffer[outSize++]=0;
+     /* decode not blank space */
+     i=*(inPos++);
+     for (;i;i--)
+	rleBuffer[outSize++]=*(inPos++);
+    }
+ assert(outSize==nmPixels);
+ return rleBuffer;
+}
+
+static void upload(Pic *p);
+
+/* GCC14: safe (a wall): never a slot this image uses -- 0 then -- and one the image on screen
+   uses is filled at pic_flush */
+static int map(Pic *p,int safe)
+{int oldest,oldTime,index,defer=0;
  Pic **array,**s;
- unsigned char *srcData;
-#if COMPRESS16BPP
- unsigned short pbuff[1024*4];
-#endif
  checkStack();
  validPtr(p);
  assert(p->class!=TILEVDP);
@@ -263,7 +343,7 @@ static void map(Pic *p)
  assert(p->class>=0 && p->class<=NMCLASSES);
  /* find the oldest slot in the apropriate array */
  oldest=-1;
- oldTime=CFG_PIC_NONE;
+ oldTime=0x7fffffff;
  array=classType[(int)p->class].slots;
 
 #ifndef NDEBUG
@@ -271,8 +351,8 @@ static void map(Pic *p)
     assert(*s!=p);
 #endif
  for (s=array;*s;s++)
-    if (!((*s)->flags & PICFLAG_LOCKED) && CFG_PIC_AGE(*s)<oldTime)
-       {oldTime=CFG_PIC_AGE(*s);
+    if (!((*s)->flags & PICFLAG_LOCKED) && (*s)->lastUse<oldTime)
+       {oldTime=(*s)->lastUse;
 	oldest=s-array;
        }
  if (s-array<classType[(int)p->class].nmSlots)
@@ -281,6 +361,9 @@ static void map(Pic *p)
     }
  else
     {/* otherwise we have to knock one out */
+     if (safe && oldTime>=picThis)
+	return 0;
+     defer=safe && oldTime>=picPrev;
      assert(oldest>=0);
      index=oldest;
      classType[(int)p->class].slots[oldest]->charNm=-1;
@@ -291,32 +374,21 @@ static void map(Pic *p)
 
  classType[(int)p->class].slots[index]=p;
  p->charNm=index+classType[(int)p->class].picNmBase;
+ if (defer)
+    picPending[picNmPending++]=p;
+ else
+    upload(p);
+ return 1;
+}
 
+/* GCC14: the tile's texels into its slot */
+static void upload(Pic *p)
+{unsigned char *srcData;
+#if COMPRESS16BPP && MIPMAP
+ unsigned short pbuff[1024*4];   /* a mip pic's full-size tile, halved into picBuff */
+#endif
  if (p->flags & PICFLAG_RLE)
-    {register int outSize;
-     register int i;
-     register unsigned char *inPos;
-     int nmPixels;
-     outSize=0;
-     inPos=p->data;
-     if (p->class==TILESMALL8BPP)
-	nmPixels=32*32;
-     else
-	nmPixels=64*64;
-     while (outSize<nmPixels)
-	{/* decode blank space */
-	 i=*(inPos++);
-	 for (;i;i--)
-	    rleBuffer[outSize++]=0;
-	 /* decode not blank space */
-	 i=*(inPos++);
-	 for (;i;i--)
-	    rleBuffer[outSize++]=*(inPos++);
-	}
-
-     assert(outSize==nmPixels);
-     srcData=rleBuffer;
-    }
+    srcData=unRle(p);
  else
     srcData=p->data;
 #ifdef JAPAN
@@ -351,9 +423,16 @@ static void map(Pic *p)
 #if COMPRESS16BPP
  if (p->pallete)
     {register int i;
+     unsigned short *out=picBuff;
+#if MIPMAP
+     if (p->flags & PICFLAG_MIP)
+	out=pbuff;
+#endif
+     while (dmaActive())
+	;
      for (i=0;i<classType[(int)p->class].dataSize>>1;i++)
-	pbuff[i]=((unsigned short *)p->pallete)[(int)srcData[i]];
-     srcData=(unsigned char *)pbuff;
+	out[i]=((unsigned short *)p->pallete)[(int)srcData[i]];
+     srcData=(unsigned char *)out;
     }
 #endif
 
@@ -364,6 +443,8 @@ static void map(Pic *p)
      int x,y;
      int p,src;
      unsigned short *ssrc=(unsigned short *)srcData;
+     while (dmaActive())
+	;
      for (y=0,p=0,src=0;
 	  y<32;
 	  y++,p+=32,src+=64)
@@ -380,12 +461,12 @@ static void map(Pic *p)
    ((((temp1&0x7c00)+(temp2&0x7c00)+(temp3&0x7c00)+(temp4&0x7c00))>>2)&0x7c00)|
 	    0x8000;
 
-	    mipbuff[p]=avg;
-	    mipbuff[p+32]=avg;
-	    mipbuff[p+32*64]=avg;
-	    mipbuff[p+32*64+32]=avg;
+	    picBuff[p]=avg;
+	    picBuff[p+32]=avg;
+	    picBuff[p+32*64]=avg;
+	    picBuff[p+32*64+32]=avg;
 	   }
-     srcData=(char *)mipbuff;
+     srcData=(char *)picBuff;
     }
 #endif
 
@@ -400,6 +481,19 @@ static void map(Pic *p)
 
 /*  qmemcpy(pos,srcData,classType[(int)p->class].dataSize); */
  }
+}
+
+/* GCC14: the uploads map() deferred, once the VDP1 has finished the image on screen
+   (SPR_WaitDrawEnd) and before the next one is shown */
+void pic_flush(void)
+{int i;
+ if (!picNmPending)
+    return;
+ for (i=0;i<picNmPending;i++)
+    upload(picPending[i]);
+ picNmPending=0;
+ while (dmaActive())
+    ;
 }
 
 
@@ -417,7 +511,7 @@ int addPic(enum Class class,void *data,void *pallete,int flags)
  pics[p].charNm=-1;
  pics[p].flags=flags;
  if (flags & PICFLAG_LOCKED)
-    map(pics+p);
+    map(pics+p,0);
  return p;
 }
 
@@ -446,10 +540,62 @@ int mapPic(int picNm)
  assert((p->flags & PICFLAG_LOCKED) || p->data);
  assert(p->class != TILEVDP);
  if (p->charNm==-1)
-    map(p);
- CFG_PIC_SEQ(p) p->lastUse=frameCount;
+    map(p,0);
+ p->lastUse=++picClock;
  assert(p->charNm>=0);
  return p->charNm;
+}
+
+/* GCC14: the wall tiles' rule, PIC.H */
+int mapWallPic(int picNm,int size)
+{Pic *p;
+ if (!picLodPx || (unsigned int)picNm>=WALLPICS)
+    return mapPic(picNm);
+ if (size>255)
+    size=255;
+ if (size>picSize[picNm])
+    picSize[picNm]=size;
+ if (size<picLodNow && !(picKeep[picNm>>3] & (1<<(picNm&7))))
+    {picSmall++;
+     return -1;
+    }
+ p=pics+picNm;
+ if (p->flags & PICFLAG_ANIM)
+    p=pics+level_chunk[animTileChunk[(p->flags>>4)-1]].tile;
+ if (p->charNm==-1 && !map(p,1))
+    {int k=(pics[picNm].flags>>4)-1,c;
+     p=NULL;
+     if (k>=0)          /* an animation shows a frame it still holds rather than none */
+	for (c=animTileStart[k];c<animTileEnd[k] && !p;c++)
+	   if (pics[level_chunk[c].tile].charNm!=-1)
+	      p=pics+level_chunk[c].tile;
+     if (!p)
+	{picFull++;
+	 return -1;
+	}
+    }
+ p->lastUse=++picClock;
+ return p->charNm;
+}
+
+/* GCC14: a wall tile's mean colour, for its cells painted flat: 64 texels on an 8x8 grid, taken
+   once per level */
+int picMeanColour(int picNm)
+{Pic *p=pics+picNm;
+ unsigned char *src;
+ int i,t,c,r=0,g=0,b=0;
+ assert((unsigned int)picNm<WALLPICS);
+ if (picMean[picNm])
+    return picMean[picNm];
+ src=(p->flags & PICFLAG_RLE)? unRle(p): p->data;
+ for (i=0;i<64;i++)
+    {t=((i>>3)*8+4)*64+(i&7)*8+4;
+     c=p->pallete? ((unsigned short *)p->pallete)[src[t]]: ((unsigned short *)src)[t];
+     r+=c&0x1f;
+     g+=(c>>5)&0x1f;
+     b+=(c>>10)&0x1f;
+    }
+ return picMean[picNm]=0x8000|(r>>6)|((g>>6)<<5)|((b>>6)<<10);
 }
 
 static int vxmin,vymin,vxmax,vymax,vx,vy;

@@ -2757,15 +2757,25 @@ int runLevel(char *filename,int levelNm)
 #ifdef STATUSTEXT
       /* LEGEND  tile: wall-class tiles used in THIS frame, against the
 		       slots allocated (params/doom.cfg: PIC_SLOTS=32,31,1,0,0)
-		  sw:  evictions in the frame.  As soon as it is not 0, a tile was
-		       replaced while an emitted command still pointed at it:
-		       exactly the wrong texture on screen, with the right one still
-		       visible elsewhere in the same frame. */
+		  sw:  slots given to another tile in the frame, ~2.5 ms of master
+		       each on hardware (palette expansion + DMA, PIC.C upload).  Under
+		       PIC_LOD_PX a wall never takes a slot this image uses, and one the
+		       image on screen uses gets its texels once the VDP1 is done with
+		       it (Tile Flush in the tree): sw no longer means a wrong texture.
+		  tex: the size on screen, in pixels (larger side of the box), a
+		       wall cell needs to bring its tile into a slot this image --
+		       PIC_LOD_PX, or the size of the last tile that fits when more
+		       compete (PIC.H)
+		  flat: cells painted flat in their tile's mean colour: too small /
+		       every slot taken by this image.  Solo only: split screen has
+		       its B: line there. */
       /* fog : distance in units at which a fully lit sector reaches black.  4096 is
 	 the original setting, beyond any line of sight -- L+R+Z cycles it.
 	 sky : 0-16 scale applied to the sky palette, READ in PLAX.C -- 16 = intact. */
       drawStringf(-158,-90,1,"tile:%d sw:%d fog:%d sky:%d",used[0],nmSwaps[0],
 		  fogDist,getPlaxFade());
+      if (mpPlayers==1)
+	 drawStringf(-158,-110,1,"tex:%dpx flat:%d/%d",picLodNow,picLastSmall,picLastFull);
 #endif
 #ifndef NDEBUG
 #ifdef STATUSTEXT
@@ -2782,6 +2792,7 @@ int runLevel(char *filename,int levelNm)
      if (hitPyramid || hitTeleport)
 	{EZ_closeCommand();
 	 SPR_WaitDrawEnd();
+	 pic_flush();
 	 SCL_DisplayFrame();
 	 crashDisarm();
 	 return hitTeleport?hitTeleport:3;
@@ -2790,6 +2801,9 @@ int runLevel(char *filename,int levelNm)
      EZ_closeCommand();
      SPR_WaitDrawEnd();
      lastDraw=htimer-lastCalc;
+     /* GCC14: the wall tiles this image took from the last one go in now the VDP1 is done with it
+	(PIC.H) -- before the display, and before the gap's kick */
+     CFG_PROF("Tile Flush"); pic_flush(); CFG_PROF_END();
      mpBalance();
 
 #if WALLPIPE

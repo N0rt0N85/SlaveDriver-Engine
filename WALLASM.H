@@ -185,8 +185,20 @@ static int vdp1Range(XyInt *q)
    losing a little texture on one edge.
    Known limits: (1) U cannot be windowed -- no stride register, a U sub-rectangle shears
    (HW_VDP1.md:160): a horizontal overflow is slid along U by vdp1Range, which squeezes the
-   pattern; (2) the gouraud table is not re-interpolated on the cut quad. */
-static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
+   pattern; (2) the gouraud table is not re-interpolated on the cut quad.
+   charNm < 0: the tile cache refused the cell (PIC.H mapWallPic), a polygon in `colour` takes its
+   place, same outline and gouraud. */
+static __inline__ void cellOut(short charNm,short colour,int t0,int t1,XyInt *poly,
+			       struct gourTable *g)
+{if (charNm<0)
+    EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|DRAW_GOURAU,colour,poly,g);
+ else if (t0>0 || t1<VCLIPONE)
+    EZ_specialDistSpr2V(charNm,t0,t1,poly,g);
+ else
+    EZ_specialDistSpr2(charNm,poly,g);
+}
+
+static __inline__ void EZ_distSprVClip(short charNm,short colour,XyInt *poly,
 				       struct gourTable *g)
 {int i,a,over=0,wide=0,t0,t1;
  XyInt src[4];
@@ -209,7 +221,7 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
     }
  if (!(over|wide))
     {VDP1WALK(poly);
-     EZ_specialDistSpr2(charNm,poly,g);
+     cellOut(charNm,colour,0,VCLIPONE,poly,g);
      return;
     }
  /* Replaces the old cx/cy maxima: counting the cells brought into range says the same (do we
@@ -219,7 +231,7 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
     {if (!vdp1Range(poly))
 	return;
      VDP1WALK(poly);
-     EZ_specialDistSpr2(charNm,poly,g);
+     cellOut(charNm,colour,0,VCLIPONE,poly,g);
      return;
     }
 #if VDP1DIAG
@@ -255,7 +267,7 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
 	     if (!vdp1Range(poly))
 		return;
 	     VDP1WALK(poly);
-	     EZ_specialDistSpr2(charNm,poly,g);
+	     cellOut(charNm,colour,0,VCLIPONE,poly,g);
 	     return;
 	    }
 	 continue;
@@ -283,5 +295,5 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
  if (wide && !vdp1Range(poly))
     return;
  VDP1WALK(poly);
- EZ_specialDistSpr2V(charNm,t0,t1,poly,g);
+ cellOut(charNm,colour,t0,t1,poly,g);
 }

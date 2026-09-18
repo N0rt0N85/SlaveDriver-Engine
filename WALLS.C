@@ -1307,6 +1307,24 @@ static int fuseWallPoly(MthXyz *coords,SectorDrawRecord *s,XyInt *q)
 #define LODCOL_RECT ((lodEnable>1)? RGB(0,0,24): RGB(0,0,0))
 #define LODCOL_MESH ((lodEnable>1)? RGB(24,0,0): RGB(0,0,0))
 
+/* GCC14: a textured wall cell, through the wall tiles' rule (PIC.H): its tile, or a flat quad in
+   the tile's mean colour when the cache refuses it.  Its size is the larger side of its box. */
+static void __attribute__((noinline)) wallCell(int pic,XyInt *poly,struct gourTable *g)
+{int i,x0,x1,y0,y1;
+ x0=x1=poly[0].x;
+ y0=y1=poly[0].y;
+ for (i=1;i<4;i++)
+    {if (poly[i].x<x0) x0=poly[i].x;
+     if (poly[i].x>x1) x1=poly[i].x;
+     if (poly[i].y<y0) y0=poly[i].y;
+     if (poly[i].y>y1) y1=poly[i].y;
+    }
+ x1-=x0;
+ y1-=y0;
+ i=mapWallPic(pic,x1>y1? x1: y1);
+ EZ_distSprVClip(i,i<0? picMeanColour(pic): 0,poly,g);
+}
+
 void drawRectWall(sWallType *theWall,MthXyz *coords,
 		  SectorDrawRecord *s)
 {MthXyz vWidth,vHeight;
@@ -1473,7 +1491,7 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 			gtable.entry[(int)*ppattern]=pts[dh+1][dw].light;
 			poly[(int)*ppattern].x=pts[dh+1][dw].x;
 			poly[(int)*ppattern].y=pts[dh+1][dw].y;
-			EZ_distSprVClip(mapPic(level_texture[t+1]),poly,&gtable);
+			wallCell(level_texture[t+1],poly,&gtable);
 			nmPolys++;
 		       }
 		 continue;
@@ -1517,11 +1535,11 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 		    DRAW_GOURAU,
 		    0,mapPic(level_texture[tex]),poly,&gtable);
 #endif
-	 EZ_distSprVClip(mapPic(level_texture[tex]
+	 wallCell(level_texture[tex]
 #if MIPMAP
-				   +tileBias
+		  +tileBias
 #endif
-				   ),poly,&gtable);
+		  ,poly,&gtable);
 	 nmPolys++;
 	 tex++;
 	}
@@ -1595,7 +1613,7 @@ void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 		UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|DRAW_GOURAU,
 		0,mapPic(level_face[f].tile),poly,&gtable);
 #endif
-     EZ_distSprVClip(mapPic(level_face[f].tile),poly,&gtable);
+     wallCell(level_face[f].tile,poly,&gtable);
      nmPolys++;
     }
 }
@@ -2678,8 +2696,8 @@ void drawSlaveWalls(void)
 	 assert(0);
 	}
      assert(getPicClass(slaveResult[i].tile)==TILE16BPP);
-     EZ_distSprVClip(mapPic(slaveResult[i].tile),	/* GCC14: was EZ_specialDistSpr */
-		     slaveResult[i].poly,&slaveResult[i].gtable);
+     wallCell(slaveResult[i].tile,	/* GCC14: was EZ_specialDistSpr */
+	      slaveResult[i].poly,&slaveResult[i].gtable);
 
 #if 0
      EZ_distSpr(DIR_NOREV,

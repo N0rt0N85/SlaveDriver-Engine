@@ -17,6 +17,7 @@ int addPic(enum Class bpp,void *data,void *pal,int lock);
 int mapPic(int picNm);
 
 void pic_nextFrame(int *swaps,int *used);
+void pic_flush(void);   /* GCC14: after SPR_WaitDrawEnd, before the image is shown (wall rule below) */
 
 void loadTiles(int fd);
 int loadWeaponTiles(int fd);
@@ -42,22 +43,26 @@ extern int nmObjectFogBanks;                    /* banks 0..n-1 carry the things
 void buildObjectFogBanks(int n);                /* rebuild 1..n-1 from bank 0 */
 void buildRemappedBank(int bank,const unsigned char *remap);   /* bank = bank 0 through remap[] */
 
-/* Which slot a miss evicts (PIC.C map, expanded there only).  PowerSlave: the least recently
-   used by FRAME.  A Doom view can need more wall tiles than there are slots; the victim is then a
-   tile this very frame already drew with, and every cell drawn with it shows the new texture.
-   Doom ranks the current frame's tiles by the ORDER of their last use: the painter goes far to
-   near (WALLS.C:2422), so the earliest is the farthest -- the smallest wrong patch.  Tiles of
-   older frames still go first (negative age).  The clock wraps after ~2^31 mapPic calls. */
-#ifdef GP_GAME_DOOM
-#define CFG_PIC_DECL        static int doomPicSeq[MAXNMPICS],doomPicClock;
-#define CFG_PIC_NONE        0x7fffffff
-#define CFG_PIC_AGE(q)      ((q)->lastUse<frameCount? (q)->lastUse-frameCount: doomPicSeq[(q)-pics])
-#define CFG_PIC_SEQ(p)      doomPicSeq[(p)-pics]=++doomPicClock&0x7fffffff;
-#else
-#define CFG_PIC_DECL
-#define CFG_PIC_NONE        frameCount+1
-#define CFG_PIC_AGE(q)      (q)->lastUse
-#define CFG_PIC_SEQ(p)
-#endif
+/* GCC14: which slot a miss takes (PIC.C map).  lastUse is a clock, one tick per use: the least
+   recently used goes first, within an image too -- the painter goes far to near, so an image's
+   earliest tile is its farthest.
+   The wall tiles' rule, on when gameparams PIC_LOD_PX > 0 (0 = PowerSlave's cache as shipped).  A
+   wall cell asks for its tile with its size on screen, the larger side of its box in pixels, and
+   is painted flat in picMeanColour(), under its own gouraud, when mapWallPic answers -1:
+   - a wall never takes a slot the image being built uses, and when it takes one the image on
+     screen uses, the texels only go in at pic_flush, once the VDP1 has finished that image.  The
+     VDP1 draws the last image while the master builds the next: a far tile loaded early in the
+     next one used to land in a slot the near walls, drawn last, still read;
+   - a cell smaller than picLodNow pixels does not bring its tile in;
+   - picLodNow is PIC_LOD_PX, raised when more tiles compete than there are slots less PICSPARE:
+     each image ranks its tiles by their largest cell, the first ones keep a slot through the next
+     image, and a newcomer must beat the last one kept.  The biggest on screen are the nearest.
+   Wall tiles are indexed by a byte (level_texture, sFaceType.tile): the rule covers the pics
+   below WALLPICS; the mip pics go through mapPic. */
+#define WALLPICS 256
+int mapWallPic(int picNm,int size);
+int picMeanColour(int picNm);
+extern int picLodNow,picLastSmall,picLastFull;  /* the image just closed: the bar, and the cells
+						   painted flat under it / for want of a slot */
 
 #endif
