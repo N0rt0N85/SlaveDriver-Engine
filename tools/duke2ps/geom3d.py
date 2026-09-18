@@ -110,13 +110,21 @@ CAP_CELLS = 256   # borne de decoupe. MESURE retail : le plus gros mur PARALLELO
 #               entre eux (tools/ordre.py) -- CORRIGE un defaut, elle n'ajoute aucun risque
 #   bandes    : les faces d'un mur sont rangees dans l'ordre ou weldFaceStrip sait les souder
 #               (tools/bandes.py) -- PERMUTATION pure, aucun sommet ne bouge
-OPTIMS = ("avalement", "ordre", "bandes")
-OPTIM_ACTIFS = set(OPTIMS)
+#   sommets   : deux murs dont un coin tombe au meme endroit partagent ce sommet
+#               (Emitter.partager_coins) -- aucune geometrie ne bouge, le bloc niveau maigrit
+#   grossiers : les carres pleins d'un plat se peignent par blocs de GROS_BLOC x GROS_BLOC, une
+#               face par bloc, tuile etiree (Emitter._gros_carres) -- DEGRADANTE : hors du defaut,
+#               pour la carte que son cout de sols empeche de tourner (E1M8 de Doom)
+OPTIMS = ("avalement", "ordre", "bandes", "sommets", "grossiers")
+OPTIM_DEFAUT = ("avalement", "ordre", "bandes", "sommets")
+OPTIM_ACTIFS = set(OPTIM_DEFAUT)
+# Plus gros bloc de `grossiers`, en carres de TILESIZE (4 = 256 u, puis 2 = 128 u sur le reste).
+GROS_BLOC = 4
 
 
 def lire_optims(s, connues, defaut=None):
-    """`defaut`, `all`, `none`, ou une liste de noms pris dans `connues`. Un nom inconnu est une
-    ERREUR : une faute de frappe qui couperait silencieusement une regle serait pire que pas
+    """`defaut`, `all`, `none`, ou une liste de noms pris dans `connues` (qui peut commencer par
+    `defaut` : `defaut,grossiers`). Un nom inconnu est une ERREUR : une faute de frappe qui couperait silencieusement une regle serait pire que pas
     d'option du tout.
 
     `defaut` != `all` : une optimisation dont un defaut a ete CONSTATE mais pas encore explique
@@ -129,11 +137,16 @@ def lire_optims(s, connues, defaut=None):
     if s in ("none", "aucune"):
         return set()
     noms = {x.strip() for x in s.split(",") if x.strip()}
+    # `defaut,grossiers` : le defaut PLUS une optimisation qui n'y est pas
+    base = set()
+    if noms & {"defaut", "default"}:
+        base = set(connues if defaut is None else defaut)
+        noms -= {"defaut", "default"}
     inconnus = noms - set(connues)
     if inconnus:
         raise SystemExit("--optim : %s inconnu(s) ; connus : %s"
                          % (", ".join(sorted(inconnus)), ", ".join(connues)))
-    return noms
+    return base | noms
 
 
 # ------------------------------------------------------------------------------------------
@@ -228,6 +241,21 @@ def split_convex(poly, axis, c, src_edges=None):
         return out
 
     return clean(lo), clean(hi)
+
+
+def hors_du_rect(cell, x0, z0, x1, z1):
+    """Morceaux du polygone convexe `cell` [(x, z)] HORS du rectangle [x0, x1] x [z0, z1], chacun
+    convexe (quatre coupes successives par split_convex, sur des droites de la grille)."""
+    reste = [(p[0], p[1], None) for p in cell]
+    out = []
+    for axis, c, dehors_en_bas in ((0, x0, True), (0, x1, False), (1, z0, True), (1, z1, False)):
+        if len(reste) < 3:
+            break
+        bas, haut = split_convex(reste, axis, c)
+        dehors, reste = (bas, haut) if dehors_en_bas else (haut, bas)
+        if len(dehors) >= 3 and abs(area2(dehors)) > 1e-6:
+            out.append([(p[0], p[1]) for p in dehors])
+    return out
 
 
 def clip_convex(subject, clipper):
@@ -372,6 +400,10 @@ class Emitter:
         # Rangement des faces en bandes soudables (tools/bandes.py). Meme regle que ci-dessus :
         # les deux convertisseurs le coupent quand l'auteur refuse l'optimisation.
         self.bandes = True
+        # Gros carres (_gros_carres) : 0 = coupe ; b >= 2 = blocs de b x b carres pleins, puis b/2...
+        # Jamais par defaut : c'est une degradation, que les deux convertisseurs ouvrent par
+        # `--optim ...,grossiers`.
+        self.gros_carres = 0
         self.vertices = []      # {x,y,z,light,pad}
         self.faces = []         # {v[4] LOCAUX au mur, tile, pad}
         self.texture = []       # unsigned char, 2 par cellule : [motif, tuile]
@@ -443,6 +475,45 @@ class Emitter:
                 key = key + (round(cell[0], 2), round(u0, 2))
         return self.tile(key), pat
 
+    def partager_coins(self, exclus=()):
+        """Fait partager aux murs leurs sommets de COIN identiques (x, y, z, lumiere).
+
+        Chaque mur pousse ses quatre coins (push_vertices), comme le retail ; mais le moteur ne les
+        lit qu'un par un, par index -- `getVertex(w->v[i])` (WALLS.C:599, 2028-2038, 2159-2177,
+        2497-2512) -- et ne les ecrit qu'a travers les push blocks (SPRITE.C:820-826, 866-870).
+        Seules les GRILLES des murs a faces doivent etre contigues (normTransform sur
+        firstVertex..lastVertex, WALLS.C:1546, 1953 ; setSectorBrightness les eclaire, AICOMMON.C:64-67).
+        Donc : on fusionne les coins identiques, jamais un sommet de grille (il n'est pas candidat),
+        jamais un sommet de push block (`exclus` : deplacer un sommet partage deplacerait les murs
+        fixes qui le partagent). La lumiere entre dans la cle, par prudence : un coin de
+        parallelogramme n'est pas eclaire par elle (vertexLight), mais rien n'oblige a le parier.
+        MESURE 2026-09-18 (Doom) : 70 % des coins sont des doublons -- de -37 Ko (E1M8) a -94 Ko
+        (E1M6), autant de place pour des tuiles.
+        -> (remap ancien index -> nouveau, nombre de sommets retires)."""
+        V = self.vertices
+        grille = set()
+        for w in self.walls:
+            if w["firstVertex"] != 65535:
+                grille.update(range(w["firstVertex"], w["lastVertex"] + 1))
+        exclus = set(exclus)
+        premier = {}
+        cible = list(range(len(V)))
+        for w in self.walls:
+            for i in w["v"]:
+                if i in exclus or i in grille:
+                    continue
+                v = V[i]
+                cible[i] = premier.setdefault((v["x"], v["y"], v["z"], v["light"]), i)
+        garder = [i for i in range(len(V)) if cible[i] == i]
+        nouvel = {old: new for new, old in enumerate(garder)}
+        remap = [nouvel[cible[i]] for i in range(len(V))]
+        self.vertices = [V[i] for i in garder]
+        for w in self.walls:
+            w["v"] = [remap[i] for i in w["v"]]
+            if w["firstVertex"] != 65535:
+                w["firstVertex"], w["lastVertex"] = remap[w["firstVertex"]], remap[w["lastVertex"]]
+        return remap, len(V) - len(garder)
+
     def push_vertices(self, pts, light=0):
         """Ajoute un bloc CONTIGU de sommets et retourne (premier, dernier).
         Aucun partage entre murs : MESURE sur KILENTRY, les v[0..3] sont 0-3, 4-7, 8-11... donc
@@ -456,14 +527,26 @@ class Emitter:
 
     # -- murs ----------------------------------------------------------------------------
     def add_wall(self, quad, *, next_sector, picnum, invisible, blocked, parallax=False,
-                 light=0, cap_cells=CAP_CELLS, stats=None, tex=None):
+                 light=0, cap_cells=CAP_CELLS, stats=None, tex=None, normale=None):
         """Emet UN mur (quad = [v0,v1,v2,v3], v0/v1 en haut). Retourne la liste des index emis.
-        Un mur trop gros pour la reservation du slave est decoupe en longueur puis en hauteur."""
+        Un mur trop gros pour la reservation du slave est decoupe en longueur puis en hauteur.
+
+        `normale` = (nx, nz) : normale EXACTE de la droite qui porte le mur, DEJA orientee vers
+        l'interieur par l'appelant, quand les sommets arrondis a l'entier la trahissent (mur de
+        quelques unites : voir doom3d.MUR_COURT). Le plan passe alors par le centre du quad avec
+        cette normale. L'orienter d'apres le quad serait faux : c'est justement lui qui ment
+        (E1M6, mur (1074, 41)-(1075, 41) sur une diagonale : normale retournee)."""
         pl = plane_of(quad)
         if pl is None:
             if stats is not None:
                 stats["quads_degeneres"] += 1
             return []
+        if normale is not None and pl[0][1] == 0:
+            nx, nz = normale
+            cx = sum(p[0] for p in quad) / 4.0
+            cz = sum(p[2] for p in quad) / 4.0
+            pl = ([int(round(nx * 65536)), 0, int(round(nz * 65536))],
+                  int(round(-(cx * nx + cz * nz) * 65536)))
         cu, cv = cell_size(tex)
         tl, th = tile_counts(quad, cu, cv)
         # La DECISION de couper se prend sur l'orientation canonique : tileHeight se mesure sur
@@ -474,7 +557,8 @@ class Emitter:
         if ctl * cth > cap_cells or (ctl + 1) * (cth + 1) > MAXVPERWALL:
             return self._split_wall(quad, ctl, cth, next_sector=next_sector, picnum=picnum,
                                     invisible=invisible, blocked=blocked, parallax=parallax,
-                                    light=light, cap_cells=cap_cells, stats=stats, tex=tex)
+                                    light=light, cap_cells=cap_cells, stats=stats, tex=tex,
+                                    normale=normale)
         normal, d = pl
         flags = 0
         if invisible or parallax:
@@ -665,25 +749,13 @@ class Emitter:
                     pts.append((x, height_at(x, z), z, light))
                 return index[k]
 
-            if pleins:
-                g = (int(math.floor(cxm / TILESIZE)), int(math.floor(czm / TILESIZE)))
-                if g in pleins:
-                    if g not in faits:
-                        faits.add(g)
-                        x0c, z0c = g[0] * TILESIZE, g[1] * TILESIZE
-                        sq = [(x0c, z0c), (x0c + TILESIZE, z0c), (x0c + TILESIZE, z0c + TILESIZE),
-                              (x0c, z0c + TILESIZE)]
-                        faces.append(([idx(x, z) for (x, z) in oriente_face_doom(sq)], t))
-                        if stats is not None and abs(area2(cell)) < 2 * TILESIZE * TILESIZE - 1:
-                            stats["plats_carres_debordants"] += 1
-                    continue
-            if tex is not None and tex.get("doom_flat"):
+            def poser_doom(poly):
                 # Flat Doom : sommets colineaires retires (sinon un carre plein part en un quad
                 # plus un triangle, chacun portant la tuile ENTIERE), puis chaque face orientee
                 # NO, NE, SE, SO -- voir oriente_face_doom.
-                cp = sans_colineaires(list(cell))
+                cp = sans_colineaires(list(poly))
                 if len(cp) < 3:
-                    continue
+                    return
                 morceaux = [cp] if len(cp) <= 4 else [
                     [cp[0]] + cp[a:a + 3] if a + 3 <= len(cp) else [cp[0]] + cp[a:]
                     for a in range(1, len(cp) - 1, 2)]
@@ -692,6 +764,45 @@ class Emitter:
                     if len(m) < 3:
                         continue
                     faces.append(([idx(x, z) for (x, z) in oriente_face_doom(m)], t))
+
+            if pleins:
+                g = (int(math.floor(cxm / TILESIZE)), int(math.floor(czm / TILESIZE)))
+                if g in pleins:
+                    x0c, z0c = g[0] * TILESIZE, g[1] * TILESIZE
+                    x1c, z1c = x0c + TILESIZE, z0c + TILESIZE
+                    # AVALEMENT x CARRE PLEIN. Une cellule qui a avale l'echarde voisine
+                    # (_grid_cells) DEBORDE de son carre, et poser le carre seul perdait
+                    # l'echarde : bandes vides de 8 u le long des bords, MESURE 2026-09-18 sur
+                    # E1M2 -- 14 feuilles trouees, jusqu'a 3 744 u2 (coverage.py). Quand ce qui
+                    # deborde est une bande droite qui remplit un rectangle, le carre s'etend
+                    # dessus (la tuile s'etire du x1,25 au plus que l'avalement accepte deja) ;
+                    # sinon le debordement garde sa propre face.
+                    dehors = hors_du_rect(cell, x0c, z0c, x1c, z1c)
+                    rect = (x0c, z0c, x1c, z1c)
+                    if dehors and g not in faits and len(dehors) == 1:
+                        xs_ = [p[0] for p in cell]
+                        zs_ = [p[1] for p in cell]
+                        ext = (min(x0c, min(xs_)), min(z0c, min(zs_)),
+                               max(x1c, max(xs_)), max(z1c, max(zs_)))
+                        if abs((ext[2] - ext[0]) * (ext[3] - ext[1]) - TILESIZE * TILESIZE
+                               - abs(area2(dehors[0])) / 2.0) < 1.0:
+                            rect, dehors = ext, []
+                            if stats is not None:
+                                stats["plats_carres_etendus"] += 1
+                    if g not in faits:
+                        faits.add(g)
+                        sq = [(rect[0], rect[1]), (rect[2], rect[1]), (rect[2], rect[3]),
+                              (rect[0], rect[3])]
+                        faces.append(([idx(x, z) for (x, z) in oriente_face_doom(sq)], t))
+                        if stats is not None and abs(area2(cell)) < 2 * TILESIZE * TILESIZE - 1:
+                            stats["plats_carres_debordants"] += 1
+                    for m in dehors:
+                        poser_doom(m)
+                        if stats is not None:
+                            stats["plats_echardes_hors_carre"] += 1
+                    continue
+            if tex is not None and tex.get("doom_flat"):
+                poser_doom(cell)
                 continue
 
             loc = [idx(x, z) for (x, z) in cell]
@@ -705,6 +816,8 @@ class Emitter:
             if stats is not None:
                 stats["plats_vides"] += 1
             return []
+        if self.gros_carres >= 2:
+            pts, faces = self._gros_carres(pts, faces, stats)
         fvp, lvp = self.push_vertices(pts, light)
         w["firstVertex"], w["lastVertex"] = fvp, lvp
         self.push_faces(w, [dict(v=list(q), tile=tile, pad=0) for q, tile in faces], stats)
@@ -718,6 +831,67 @@ class Emitter:
             if len(faces) > CAP_CELLS:
                 stats["plats_hors_budget_slave"] += 1
         return [len(self.walls) - 1]
+
+    def _gros_carres(self, pts, faces, stats=None):
+        """Optimisation `grossiers` -- DEGRADANTE, jamais par defaut. Les CARRES PLEINS d'un plat
+        (faces de TILESIZE exactement, alignees sur la grille, meme tuile) se peignent par blocs de
+        b x b, b = self.gros_carres puis b/2 ... 2 sur ce qui reste : UNE face par bloc, la tuile
+        etiree dessus (texel de b u au lieu de 1 ; le motif d'un flat Doom se repete b fois moins,
+        ce qui se voit au bord d'un bloc). L'orientation de la texture est celle du carre d'origine
+        du bloc (coin pour coin), donc la convention de chaque convertisseur est gardee. Les
+        sommets devenus interieurs a un bloc sont retires. Aux bords d'un bloc, les carres voisins
+        restes seuls gardent leur sommet du milieu : jonction en T, comme entre deux secteurs.
+        MESURE 2026-09-18 (sonde sols_grossiers, E1M8, 8 816 faces de sol et plafond) : cellules
+        vues, mediane 2 616 -> 1 453 en 2x2, 1 274 en 4x4 puis 2x2. -> (pts, faces)"""
+        T = TILESIZE
+        pleins = defaultdict(dict)                 # tuile -> {(cx, cz): index de face}
+        for k, (q, t) in enumerate(faces):
+            if len(q) != 4:
+                continue
+            xz = [(pts[i][0], pts[i][2]) for i in q]
+            xs, zs = sorted({p[0] for p in xz}), sorted({p[1] for p in xz})
+            if len(set(xz)) != 4 or len(xs) != 2 or len(zs) != 2:
+                continue
+            if xs[1] - xs[0] != T or zs[1] - zs[0] != T or xs[0] % T or zs[0] % T:
+                continue
+            pleins[t][(int(xs[0]) // T, int(zs[0]) // T)] = k
+        remplace, retirees = {}, set()
+        for t, cells in pleins.items():
+            reste = dict(cells)
+            b = self.gros_carres
+            while b >= 2:
+                for (cx, cz) in sorted(reste):
+                    if cx % b or cz % b or (cx, cz) not in reste:
+                        continue
+                    blk = [(cx + i, cz + j) for i in range(b) for j in range(b)]
+                    if not all(c in reste for c in blk):
+                        continue
+                    k0 = reste[(cx, cz)]
+                    for c in blk:
+                        retirees.add(reste.pop(c))
+                    remplace[k0] = (cx * T, cz * T, b * T)
+                b //= 2
+        if not remplace:
+            return pts, faces
+        index = {(p[0], p[2]): i for i, p in enumerate(pts)}
+        out = []
+        for k, (q, t) in enumerate(faces):
+            if k in remplace:
+                x0, z0, cote = remplace[k]
+                ox, oz = min(pts[i][0] for i in q), min(pts[i][2] for i in q)
+                # chaque sommet du carre d'origine -> le meme coin du bloc
+                out.append(([index[(x0 + (cote if pts[i][0] > ox else 0),
+                                    z0 + (cote if pts[i][2] > oz else 0))] for i in q], t))
+            elif k not in retirees:
+                out.append((q, t))
+        utiles = sorted({i for q, _t in out for i in q})
+        nouvel = {old: new for new, old in enumerate(utiles)}
+        if stats is not None:
+            stats["gros_carres_blocs"] += len(remplace)
+            stats["gros_carres_faces_retirees"] += len(faces) - len(out)
+            stats["gros_carres_sommets_retires"] += len(pts) - len(utiles)
+        return ([pts[i] for i in utiles],
+                [([nouvel[i] for i in q], t) for q, t in out])
 
     def _grid_cells(self, poly_xz, stats=None, grille=False):
         """Decoupe le polygone convexe pour que chaque face tienne dans une tuile de 64 u.
@@ -979,6 +1153,7 @@ class Builder:
         if "avalement" not in OPTIM_ACTIFS:
             self.em.eps_avale = 0.0           # --optim : l'auteur refuse l'avalement des echardes
         self.em.bandes = "bandes" in OPTIM_ACTIFS
+        self.em.gros_carres = GROS_BLOC if "grossiers" in OPTIM_ACTIFS else 0
         self.stats = Counter()
         self.stats["cellules_max"] = 0
         # morceau -> secteur gen1 (meme indice : un morceau = un secteur)
@@ -1403,6 +1578,7 @@ def tile_sizes(grp_path):
 
 
 def main(argv=None):
+    global OPTIM_ACTIFS, GROS_BLOC
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--in-quant", dest="q", default=Q_DEFAULT)
     ap.add_argument("--in-convex", dest="c", default=C_DEFAULT)
@@ -1414,13 +1590,17 @@ def main(argv=None):
                     help="conserve pour la ligne de commande ; sans effet depuis E4.1b, ou une "
                          "texture ne coute plus qu'une seule tuile")
     ap.add_argument("--optim", default="defaut",
-                    help="optimisations de niveau : `defaut`, `all`, `none`, ou une liste parmi %s. "
-                         "`none` reproduit a l'octet pres la geometrie de la carte dessinee."
-                         % ", ".join(OPTIMS))
+                    help="optimisations de niveau : `defaut` (%s), `all`, `none`, ou une liste parmi "
+                         "%s. `none` reproduit a l'octet pres la geometrie de la carte dessinee."
+                         % (", ".join(OPTIM_DEFAUT), ", ".join(OPTIMS)))
+    ap.add_argument("--gros-bloc", type=int, default=None,
+                    help="avec `--optim ...,grossiers` : plus gros bloc en carres de %d u (defaut %d)"
+                         % (TILESIZE, GROS_BLOC))
     args = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
-    global OPTIM_ACTIFS
-    OPTIM_ACTIFS = lire_optims(args.optim, OPTIMS)
+    OPTIM_ACTIFS = lire_optims(args.optim, OPTIMS, OPTIM_DEFAUT)
+    if args.gros_bloc is not None:
+        GROS_BLOC = args.gros_bloc
 
     quant = json.load(open(args.q, encoding="utf-8"))
     convex = json.load(open(args.c, encoding="utf-8"))
@@ -1440,6 +1620,9 @@ def main(argv=None):
 
     b = Builder(quant, convex, args.cap_cells, plan)
     em = b.build()
+    if "sommets" in OPTIM_ACTIFS:
+        # Duke n'a pas de push block : aucun sommet n'est exclu du partage
+        _remap, b.stats["sommets_partages"] = em.partager_coins()
     print(f"  {len(em.sectors)} secteurs, {len(em.walls)} murs, {len(em.vertices)} sommets, "
           f"{len(em.faces)} faces, {len(em.texture)} octets de texture, "
           f"{len(em.vertexLight)} lumieres, {len(em.tiles)} tuiles distinctes")

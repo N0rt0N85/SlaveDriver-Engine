@@ -32,6 +32,17 @@ EPS = 1e-6
 # On ne sort pas de l'enveloppe que Lobotomy a validee.
 CAP_CANAL = 7
 
+# Cellules de grille au-dela desquelles un morceau est COUPE en deux. Un sol est UN mur a faces de
+# son secteur (un sol et un plafond par secteur, MESURE sur les 8 408 secteurs retail) : le slave lui
+# reserve une place par face avant tout rejet ecran (CAP_CELLS 256 du convertisseur, WALLS.C:1555) et
+# vCalc[700] borne ses sommets (WALLS.C:1207 -- au-dela, le moteur ecrit hors du tableau). Un sol trop
+# grand ne se coupe donc pas en deux sols : on coupe le MORCEAU. MESURE 2026-09-18 : le secteur 29
+# d'E1M8 (FLAT10 sous le ciel, la cour) tient en 8 feuilles du BSP de 609 a 883 cellules, jusqu'a
+# 2 753 x 1 880 u ; ailleurs dans l'episode le plus gros morceau fait 221 cellules (E1M2), E1M1 58.
+# Une cellule donne 1 a 1,3 face (les cellules du bord a 5 sommets partent en deux) : 192 laisse
+# la marge sous 256.
+CAP_PLAT = 192
+
 
 def area2(ring):
     s = 0.0
@@ -85,6 +96,45 @@ def split_grid(poly, g):
                     nxt.append(p)
             parts = nxt
     return parts
+
+
+def decouper_gros(parts, cap=CAP_PLAT, g=64):
+    """Coupe en deux, recursivement, tout morceau dont le sol ou le plafond depasserait `cap`
+    cellules (voir CAP_PLAT). `parts` = [(anneau etiquete, secteur Doom, feuilles d'origine)] ; les
+    moities gardent le secteur et les feuilles de leur parent. La coupe suit la ligne de grille la
+    plus proche du milieu du plus grand cote : les deux moities restent convexes, la corde tombe
+    entre deux rangees de cellules (aucune face n'est coupee de plus qu'avant) et adjacency.build
+    en fait un portail des deux cotes, comme toute corde du BSP. -> (parts, nombre de coupes)."""
+    out, coupes = [], 0
+    for ring, sec, members in parts:
+        todo = [ring]
+        while todo:
+            p = todo.pop()
+            if not p or len(p) < 3 or len(split_grid(p, g)) <= cap:
+                out.append((p, sec, members))
+                continue
+            xs = [q[0] for q in p]
+            ys = [q[1] for q in p]
+            axis = 0 if max(xs) - min(xs) >= max(ys) - min(ys) else 1
+            lo, hi = (min(xs), max(xs)) if axis == 0 else (min(ys), max(ys))
+            c = round((lo + hi) / 2.0 / g) * g
+            if not (lo + EPS < c < hi - EPS):
+                c = (lo + hi) / 2.0
+            moities = []
+            for keep in (True, False):
+                if axis == 0:
+                    s = A.clip_tagged(p, c, 0, 0, 1, keep_front=keep)
+                else:
+                    s = A.clip_tagged(p, 0, c, 1, 0, keep_front=keep)
+                s = clean(s)
+                if len(s) >= 3 and abs(area2(s)) > 1e-4:
+                    moities.append(s)
+            if len(moities) < 2:
+                out.append((p, sec, members))
+                continue
+            coupes += 1
+            todo.extend(moities)
+    return out, coupes
 
 
 def split_tjunctions(rings):
@@ -261,10 +311,12 @@ def troue(rings):
     return boucles > composantes
 
 
-def partition(M, leaf_rings, leaf_sector, keep, g=64, cap=CAP_CANAL):
+def partition(M, leaf_rings, leaf_sector, keep, g=64, cap=CAP_CANAL, membres=None):
     """-> [(anneau etiquete, secteur Doom, [feuilles d'origine])], ordre deterministe.
 
     `leaf_rings` = adjacency.leaf_polygons(M) ; `keep(ring)` ecarte les feuilles hors carte.
+    `membres` : feuilles BSP d'origine de chaque anneau quand les anneaux ne sont plus indexes par
+    feuille (adjacency.reattribuer_debords) ; par defaut l'anneau i est la feuille i.
 
     `g = None` : PAS de decoupe prealable sur la grille -- on recolle directement les feuilles du
     BSP. Chaque morceau que le BSP laisse coute un secteur, ses murs et une visite du renderer ; mais
@@ -284,7 +336,8 @@ def partition(M, leaf_rings, leaf_sector, keep, g=64, cap=CAP_CANAL):
         if not ring or len(ring) < 3 or not keep(ring):
             continue
         for p in (split_grid(clean(ring), g) if g else [clean(ring)]):
-            pieces.append(dict(ring=p, sector=leaf_sector[li], members={li}))
+            pieces.append(dict(ring=p, sector=leaf_sector[li],
+                               members=set(membres[li]) if membres is not None else {li}))
     if not pieces:
         return []
     orient = 1.0 if area2(pieces[0]["ring"]) > 0 else -1.0

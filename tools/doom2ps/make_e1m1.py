@@ -61,6 +61,12 @@ DEFAULT_IDS = wad2snd.DEFAULT_IDS
 DEFAULT_OUT_DIR = os.path.join(ROOT, "cd_doom")
 DEFAULT_RETAIL = os.path.join(ROOT, "cd", "KILENTRY.LEV")     # table K du ciel (identique sur les 24)
 BUILD_DIR = os.path.join(ROOT, "build", "doom2ps")
+# Optimisations d'une carte quand --optim n'est pas donne : le defaut de doom3d, et ce qu'une carte
+# demande en plus -- ecrit ICI pour que `make_e1m1.py --map E1M8` rende le meme .LEV qu'hier.
+# E1M8 : son cout est ses sols (8 816 faces de sol et plafond contre 1 560 cellules de mur, 0 face
+# de ciel), cellules vues en mediane 2 616, 20 fps a 896 et 15 a 1 321 (loi de cout) ; les gros
+# carres 4x4 puis 2x2 la mettent a 1 274 (sonde sols_grossiers). Degradation accordee le 18-09.
+OPTIM_CARTE = {"E1M8": "defaut,grossiers"}
 DOOM_GAME_C = os.path.join(ROOT, "game", "doom", "DOOM_GAME.C")
 RETAIL_COPIES = ["INITLOAD.DAT", "INTRO.PCS"]                 # DOOM_ABI §9, jamais commites
 TILE_GEOM = 0x32                                              # 64x64 | 16BPP | PALLETE
@@ -122,6 +128,7 @@ def build_objects(W, M, ids, G, *, skill, lift_contact):
     mobile = G.get("mobile")
     if mobile:
         doom3d.close_doors(M, specials, mobile.get("door_slit", sp.DOOR_SLIT))
+        doom3d.raise_floors(M, specials)          # la carte que doom3d --mobile a emise
     sizes = {nm: (t["width"], t["height"]) for nm, t in W.textures().items()}
     conv = doom3d.DoomConverter(M, sizes)
     fl = [s["floorLevel"] for s in G["sectors"]]
@@ -132,7 +139,8 @@ def build_objects(W, M, ids, G, *, skill, lift_contact):
         specs, sparams, notes = sp.special_objects(M, conv, ids, specials, mobile["pb_index"],
                                                    lift_contact=lift_contact,
                                                    switches=mobile.get("switches"),
-                                                   secret_walls=mobile.get("secret_walls"))
+                                                   secret_walls=mobile.get("secret_walls"),
+                                                   geom=G)
     objects, params = sp.concat_objects((things, tparams), (specs, sparams))
     return objects, params, dict(things=st, specials=specs, notes=notes)
 
@@ -288,6 +296,56 @@ def resident_tiles(tiles):
     return sum(align4(4096 if "pixels" in t else len(t["rle"])) for t in tiles)
 
 
+LOCAL_TEXT = 7 * 1024      # LOCAL.C:25 textData, verrouille au demarrage (mem_lock)
+# Octets que le jeu prend encore au pool APRES le chargement d'un niveau. Le seul candidat de la
+# partie Doom est la sauvegarde (BUP.C : bupSpace 16 Ko + bupWork 8 Ko) ; le reste des mem_malloc
+# tardifs appartient a PowerSlave (Ramses, AI2.C:332 ; carte, BIGMAP.C) ou a des modes qui refont
+# mem_init (films, carte). On garde ces 24 Ko et 8 de jeu : le budget de tuiles remplit le pool
+# jusqu'a CETTE marge, pas jusqu'au dernier octet.
+MARGE_POOL = 32 * 1024
+
+
+def verrou_initload(path=os.path.join(ROOT, "cd", "INITLOAD.DAT")):
+    """Ce que le demarrage VERROUILLE dans le pool avant tout niveau : le jeu d'images des menus
+    (dlg_init -> loadPicSet, mem_malloc(0, size) puis mem_lock, MENU.C:266-268) et le texte local
+    (loadLocalText, 7 Ko, LOCAL.C:25-26). `resident_pool` ne les retire pas ; le budget de tuiles,
+    qui remplit le pool, doit le faire. -> (octets, source)."""
+    try:
+        with open(path, "rb") as f:
+            size = struct.unpack(">i", f.read(4))[0]
+        return align4(size) + LOCAL_TEXT, "%s (jeu d'images %d o + texte %d)" % (
+            os.path.relpath(path, ROOT), size, LOCAL_TEXT)
+    except (OSError, struct.error):
+        return 4096 + LOCAL_TEXT, "INITLOAD.DAT absent, 4 Ko supposes + texte %d" % LOCAL_TEXT
+
+
+def budget_tuiles(G, W, ids, sinfo, sky, palette, remap, objects, params, sounds, present):
+    """Tuiles de geometrie que ce niveau peut porter : min(octet, memoire). Le niveau est assemble
+    une premiere fois avec des pixels factices -- sa taille ne depend pas des tuiles -- pour mesurer
+    tout ce qui partage le pool avec elles. Les index de tuile sont ramenes sous 256 dans une COPIE
+    (le texte du niveau les ecrit sur un octet) : seule la taille compte ici. -> (budget, detail)."""
+    n_geo = len(G["tiles"])
+    Gc = dict(G)
+    Gc["texture"] = [t % 256 if i & 1 else t for i, t in enumerate(G["texture"])]
+    Gc["faces"] = [dict(f, tile=f["tile"] % 256) for f in G["faces"]]
+    T0 = dict(tiles=["00" * 4096] * n_geo)
+    sprites = wad2sprites.build_sprites(W, ids, present, remap=remap, tile_base=n_geo)
+    switches = (G.get("mobile") or {}).get("switches") or []
+    model = assemble_doom(Gc, T0, sprites, sounds, objects, params, sky, palette, switches)
+    model.pop("_notes")
+    data = lev_write.write_lev(model, strict=False)
+    _back, lay = lev_io.model_from_bytes(data, "budget")
+    fixe = (align4(lay["level"]["size"]) + align4(lay["tiles"]["palette_size"])
+            + sum(align4(len(t["rle"])) for t in sprites.tiles) + align4(lay["sequences"]["size"])
+            + sinfo["weapon_tiles_bytes"] + align4(sinfo["wseq_bytes"]))
+    pool, psrc = resident_pool()
+    verrou, vsrc = verrou_initload()
+    b_ram = (pool - verrou - MARGE_POOL - fixe) // 4096
+    b_u8 = 255 - sinfo["tileBase"]
+    return min(b_ram, b_u8), dict(pool=pool, psrc=psrc, verrou=verrou, vsrc=vsrc, fixe=fixe,
+                                  niveau=lay["level"]["size"], ram=b_ram, u8=b_u8)
+
+
 def resident_pool():
     """Pool reel du chargeur (UTIL.C:352-359) : LWRAM 1 Mo + (0x06100000 - _end de MAIN.map)."""
     mp = os.path.join(ROOT, "build", "doom", "MAIN.map")
@@ -344,6 +402,8 @@ def main(argv=None):
                     help="DIAGNOSTIC (doom3d --diag-fusion) : damier sur les feuilles fusionnees")
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
+    if a.optim is None:
+        a.optim = OPTIM_CARTE.get(a.map.upper())
 
     os.makedirs(a.out_dir, exist_ok=True)
     os.makedirs(a.build_dir, exist_ok=True)
@@ -362,20 +422,56 @@ def main(argv=None):
     doom3d.OPTIM_ACTIFS = doom3d.lire_optim(a.optim)   # AVANT de fondre : run_geometry le refera
     doom3d.dissoudre_penombres(M)          # MEME carte que run_geometry (doom3d.main les fond aussi)
 
-    log("== 2. geometrie %s (doom3d.py %s)" % (a.map, "--static-doors" if a.static_doors else "--mobile"))
+    log("== 2. geometrie %s (doom3d.py %s, --optim %s)" % (
+        a.map, "--static-doors" if a.static_doors else "--mobile", a.optim or "defaut"))
     G = run_geometry(a.wad, a.map, geom_path, a.static_doors, a.partition, a.optim, a.diag_fusion,
                      a.cap_canal)
     n_geo = len(G["tiles"])
+
+    # Tout ce qui partage le pool avec les tuiles ne depend PAS d'elles : on le fait avant, pour
+    # savoir combien de tuiles il reste de place (budget_tuiles). Les sprites seuls sont refaits
+    # apres, leurs chunks etant decales du nombre FINAL de tuiles de geometrie.
+    fams = wad2static.E1M1_FAMILIES if a.e1m1_weapons else wad2static.WEAPON_FAMILIES
+    _sdata, sinfo0 = wad2static.build_static(W, ids, loading=a.loading, families=fams)
+    playpal = W.playpal(0)
+    palette, remap = rle8.object_palette(playpal)
+    present = wad2snd.present_mobj_types(W, ids, a.map, a.skill)
+    spawn = wad2snd.spawnable_mobj_types(ids, present)
+    sounds, snd_names = wad2snd.sound_model(W, ids, spawn)
+    objects, params, oinfo = build_objects(W, M, ids, G, skill=a.skill, lift_contact=a.lift_contact)
+    sky, (skw, skh) = sky_block(W, a.retail)
+
+    log("== 2b. budget de tuiles (octet et memoire)")
+    budget, bd = budget_tuiles(G, W, ids, sinfo0, sky, palette, remap, objects, params, sounds,
+                               present)
+    log("  %d tuiles produites ; budget %d = min(octet %d = 255 - tileBase %d ; memoire %d = (pool %d"
+        " - verrou du demarrage %d - marge %d - residents hors tuiles %d dont niveau %d) / 4096)"
+        % (n_geo, budget, bd["u8"], sinfo0["tileBase"], bd["ram"], bd["pool"], bd["verrou"],
+           MARGE_POOL, bd["fixe"], bd["niveau"]))
+    if n_geo > budget:
+        if "tuiles" in doom3d.OPTIM_ACTIFS:
+            info = doomtiles.reduire(G, W, budget, trace=log)
+            if info["garde"] < n_geo:
+                for nm, k in sorted(info["par_texture"].items(), key=lambda kv: -kv[1])[:10]:
+                    log("    %-9s %3d variantes fondues" % (nm, k))
+                log("    fusions les plus cheres (cout, texture, (hauteur, calage[, largeur, colonne]) "
+                    "-> representant) : %s" % info["pires"][:4])
+                tmp = geom_path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(G, f, ensure_ascii=False, indent=1)
+                os.replace(tmp, geom_path)
+                n_geo = len(G["tiles"])
+            if not info["atteint"]:
+                fails.append("tuiles : %d > budget %d (plancher %d : une par texture + figees)"
+                             % (n_geo, budget, info["plancher"]))
+        else:
+            fails.append("tuiles : %d > budget %d, et --optim refuse `tuiles`" % (n_geo, budget))
 
     log("== 3. tuiles de geometrie (doomtiles.py)")
     T = run_tiles(a.wad, geom_path, tiles_path)
     assert len(T["tiles"]) == n_geo
 
     log("== 4. sprites, sons, objets")
-    playpal = W.playpal(0)
-    palette, remap = rle8.object_palette(playpal)
-    present = wad2snd.present_mobj_types(W, ids, a.map, a.skill)
-    spawn = wad2snd.spawnable_mobj_types(ids, present)
     sprites = wad2sprites.build_sprites(W, ids, present, remap=remap, tile_base=n_geo)
     B = sprites.budget
     log("  sprites : %d familles, %d sequences (+1), %d frames, %d chunks, %d tuiles 0x6A, RLE %d o"
@@ -386,10 +482,8 @@ def main(argv=None):
     log("  formule seq() : %d (MT, etat, vue), %d defauts" % (tested, len(problems)))
     if problems:
         fails.append("sequences atteignables (%d)" % len(problems))
-    sounds, snd_names = wad2snd.sound_model(W, ids, spawn)
     log("  sons dynamiques : %d (%s), %d o de PCM" % (len(sounds["sounds"]), " ".join(snd_names),
                                                       sum(len(s["pcm"]) for s in sounds["sounds"])))
-    objects, params, oinfo = build_objects(W, M, ids, G, skill=a.skill, lift_contact=a.lift_contact)
     st = oinfo["things"]
     from collections import Counter
     c = Counter(o["type"] for o in oinfo["specials"])
@@ -403,7 +497,6 @@ def main(argv=None):
         fails.append("params : %d attendus vs %d" % (sp.expected_param_bytes(objects), len(params)))
 
     log("== 5. assemblage -> %s" % os.path.relpath(lev_path, ROOT))
-    sky, (skw, skh) = sky_block(W, a.retail)
     switches = (G.get("mobile") or {}).get("switches") or []
     model = assemble_doom(G, T, sprites, sounds, objects, params, sky, palette, switches)
     notes = model.pop("_notes")
@@ -435,7 +528,6 @@ def main(argv=None):
                                                             probs or "aucun"))
 
     log("== 6. STATIC.DAT, doom_art.h, copies retail")
-    fams = wad2static.E1M1_FAMILIES if a.e1m1_weapons else wad2static.WEAPON_FAMILIES
     sinfo = wad2static.write_static(static_path, W, ids, loading=a.loading, weapons=fams)
     tile_base = sinfo["tileBase"]
     log("  STATIC.DAT : %d o = blocs %s ; tuiles d'armes n = tileBase = %d (RLE %d o) ; wseq %d"
@@ -473,12 +565,15 @@ def main(argv=None):
     til_res = resident_tiles(model["tiles"])
     resident = align4(lvl_size) + align4(pal_sz) + til_res + align4(seq_sz)
     static_res = sinfo["weapon_tiles_bytes"] + align4(sinfo["wseq_bytes"])
+    verrou, vsrc = verrou_initload()
+    libre = pool - verrou - resident - static_res
     log("  residents (en memoire, alignes 4) : niveau %d + palettes %d + tuiles %d (fichier %d) + sequences %d "
-        "= %d ; + STATIC (tuiles d'armes + wseq) %d = %d ; pool %d (%s) -> %s, marge %d"
+        "= %d ; + STATIC (tuiles d'armes + wseq) %d = %d ; pool %d (%s) - verrou du demarrage %d (%s) -> %s, "
+        "libre %d (marge visee %d)"
         % (lvl_size, pal_sz, til_res, til_sz, seq_sz, resident, static_res, resident + static_res, pool, psrc,
-           "OK" if resident + static_res <= pool else "DEPASSEMENT", pool - resident - static_res))
-    if resident + static_res > pool:
-        fails.append("memoire residente %d > pool %d" % (resident + static_res, pool))
+           verrou, vsrc, "OK" if libre >= 0 else "DEPASSEMENT", libre, MARGE_POOL))
+    if libre < 0:
+        fails.append("memoire residente %d + verrou %d > pool %d" % (resident + static_res, verrou, pool))
 
     if a.no_verify:
         log("\n%s" % ("OK (sans verificateurs)" if not fails else "ECHEC : " + " | ".join(fails)))

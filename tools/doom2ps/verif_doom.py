@@ -15,7 +15,7 @@ residente contre le pool reel (LWRAM 1 Mo + 0x06100000 - _end de build/doom/MAIN
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 import json
 import math
 import os
@@ -233,8 +233,7 @@ def main(argv=None):
     import things2objects as t2o
     p = L["objectParams"]
     put("joueur OT_PLAYER en tete", bool(obj) and obj[0]["type"] == 13, str(obj[:1]))
-    nmobj = sum(1 for o in obj if o["type"] not in (48, 49, 61, 91, 176, 177, 178, 179, 180)
-                and not (168 <= o["type"] <= 171)) - 1
+    nmobj = sum(1 for o in obj if o["type"] not in sp.OT_SPECIAL_TYPES) - 1
     put("firstParam cumules == nmObjectParams", sp.expected_param_bytes(obj) == len(p)
         and all(obj[i + 1]["firstParam"] > obj[i]["firstParam"] for i in range(len(obj) - 1)),
         f"{len(obj)} objets (1 joueur + {nmobj} mobjs + {len(obj) - 1 - nmobj} speciaux), "
@@ -284,17 +283,37 @@ def main(argv=None):
     #     `setDoorBlockBits` (AI.C:4294-4309), et le joueur l'ouvre en pressant. On le traverse.
     PLAYER_FLAGS = 0x1100
     STEPHEIGHT = 24
+    #     Un sol MOBILE (ascenseur, sol qui descend : push block a floorSector) se traverse aussi :
+    #     son interrupteur ou son declencheur l'amene au niveau. MESURE 2026-09-18 : E1M8 demarre
+    #     dans une salle fermee par un sol a +64 u (secteur Doom 10) que l'interrupteur de la ligne
+    #     141, DANS la salle, abaisse -- 1 secteur sur 200 atteignable sans cette regle.
+    owner = {}
+    for si, s_ in enumerate(S):
+        for wi in range(s_["firstWall"], s_["lastWall"] + 1):
+            owner[wi] = si
+    mobiles = set()
+    for b in L["pushBlocks"]:
+        if b["floorSector"] >= 0:
+            mobiles |= {owner[L["PBWall"][k]] for k in range(b["startWall"], b["endWall"] + 1)
+                        if L["PBWall"][k] in owner}
     adj = [[] for _ in S]
     for si, s_ in enumerate(S):
         for wi in range(s_["firstWall"], s_["lastWall"] + 1):
             w = W[wi]
             if w["nextSector"] == -1:
                 break
-            if (w["flags"] & PLAYER_FLAGS) & 0x1f00 and not (w["flags"] & 0x20):
-                continue
             n = w["nextSector"]
-            if 0 <= n < len(S) and S[n]["floorLevel"] - s_["floorLevel"] <= STEPHEIGHT:
+            mobile = si in mobiles or n in mobiles
+            if (w["flags"] & PLAYER_FLAGS) & 0x1f00 and not (w["flags"] & 0x20) and not mobile:
+                continue
+            if 0 <= n < len(S) and (S[n]["floorLevel"] - s_["floorLevel"] <= STEPHEIGHT or mobile):
                 adj[si].append(n)
+    # Un TELEPORTEUR (OT_DOOM_TELEPORT) : entrer dans sa feuille, c'est arriver a sa destination.
+    teles = [struct.unpack(">8h", bytes(p[o["firstParam"]:o["firstParam"] + 16]))
+             for o in obj if o["type"] == sp.OT_DOOM_TELEPORT]
+    for t_ in teles:
+        if 0 <= t_[0] < len(S) and 0 <= t_[1] < len(S):
+            adj[t_[0]].append(t_[1])
     seen = {sect}
     stack = [sect]
     while stack:
@@ -357,6 +376,74 @@ def main(argv=None):
         put("aucun mur fantome", True, f"non teste ({e})")
         M = None
     if M is not None:
+        # L'angle du depart est celui du thing 1, sans correction : c'est la convention des sprites
+        # et constructPlayer en retire lui-meme 90 degres pour la camera (AI.C:51). Le +90 d'avant
+        # faisait arriver le joueur tourne de 90 degres a gauche (console, 2026-09-18).
+        st1 = next((t for t in M["things"] if t.type == 1), None)
+        ang_doom = int(round((st1.angle % 360) * 4096.0 / 360.0)) % 4096 if st1 else None
+        put("angle du depart == angle Doom du thing 1 (constructPlayer retire 90)",
+            ang == ang_doom, f"{ang} vs {ang_doom}")
+        # 11b. LES CLES. Une porte a cle (26-28, 32-34) ne s'ouvre qu'avec sa carte ou son crane
+        #      (OT_DOOM_DOOR, 2026-09-18 ; avant, toutes s'ouvraient sans cle). On rejoue la
+        #      recherche du 11 en fermant les feuilles d'une porte a cle tant que sa cle n'est pas
+        #      ramassee, jusqu'au point fixe : une cle hors d'atteinte bloquerait la partie.
+        try:
+            ids_k = json.load(open(a.ids, encoding="utf-8"))
+            dsec_k = json.load(open(a.geom, encoding="utf-8"))["doom_sector"]
+        except Exception:
+            ids_k = dsec_k = None
+        if ids_k is not None and dsec_k is not None:
+            e2m = {int(k): int(v) for k, v in ids_k["ed_to_mt"].items()}
+            cle_ot = {}
+            for ed, cle in ((5, 1), (40, 1), (6, 2), (39, 2), (13, 3), (38, 3)):
+                if ed in e2m and ids_k["mt_to_ot"][e2m[ed]] >= 0:
+                    cle_ot[ids_k["mt_to_ot"][e2m[ed]]] = cle
+            # Une cle se ramasse d'un secteur ou l'on se tient : P_TouchSpecialThing (et
+            # doom_item_func) touche a rayon cle + joueur (20 + 16) en x et en z, si la cle est de
+            # -8 a +56 u au-dessus des pieds. MESURE E1M7 : la cle bleue est sur un rebord de 32 u
+            # (secteur Doom 76) qu'on ne gravit pas -- on la prend d'en bas, du secteur 77.
+            def dedans(si, x, z):
+                s_ = S[si]
+                for wi in range(s_["firstWall"], s_["lastWall"] + 1):
+                    w = W[wi]
+                    if w["normal"][1] != 0:
+                        continue
+                    v0 = V[w["v"][0]]
+                    if (x - v0["x"]) * w["normal"][0] + (z - v0["z"]) * w["normal"][2] < 0:
+                        return False
+                return True
+            cles_ou = defaultdict(set)
+            for o in obj:
+                if o["type"] in cle_ot:
+                    s_k, x_k, y_k, z_k = struct.unpack(
+                        ">4h", bytes(p[o["firstParam"]:o["firstParam"] + 8]))
+                    for si, s_ in enumerate(S):
+                        if not (y_k - 56 <= s_["floorLevel"] <= y_k + 8):
+                            continue
+                        if any(dedans(si, x_k + dx, z_k + dz) for dx in (-35, 0, 35)
+                               for dz in (-35, 0, 35)):
+                            cles_ou[cle_ot[o["type"]]].add(si)
+            spk = sp.specials_of(M)
+            porte_cle = {d["sector"]: d["key"] for d in spk.doors if d.get("key")}
+            ferme = {s_: porte_cle[ds_] for s_, ds_ in enumerate(dsec_k) if ds_ in porte_cle}
+            tenues = set()
+            while True:
+                vus_k, pile = {sect}, [sect]
+                while pile:
+                    for n in adj[pile.pop()]:
+                        if n not in vus_k and (n not in ferme or ferme[n] in tenues):
+                            vus_k.add(n)
+                            pile.append(n)
+                neuves = {c for c, ss in cles_ou.items() if ss & vus_k} - tenues
+                if not neuves:
+                    break
+                tenues |= neuves
+            manque = sorted({ferme[s_] for s_ in seen - vus_k if s_ in ferme})
+            put("cles : chaque porte a cle atteignable l'est avec une cle ramassable avant",
+                vus_k == seen,
+                f"{len(set(ferme.values()))} couleurs de porte, cles au sol {sorted(cles_ou)}, "
+                f"{len(vus_k)}/{len(seen)} secteurs avec les cles"
+                + (f", couleurs hors d'atteinte {manque}" if manque else ""))
         DV, LD, SG = M["vertices"], M["linedefs"], M["segs"]
 
         murs_carte = [(DV[x.v1][0], DV[x.v1][1], DV[x.v2][0], DV[x.v2][1]) for x in LD]
@@ -449,9 +536,21 @@ def main(argv=None):
         put("echelle verticale des murs", True, f"non teste ({e})")
         det = None
     if det is not None:
-        base = min((tex[i] for i in range(1, len(tex), 2)), default=0)
+        # Les index du fichier sont LOCAUX au niveau (le chargeur ajoute tileBase, LEVEL.C) : la
+        # tuile 0 est la premiere de tiles.json. L'ancien `min(index des cellules)` ne valait 0 que
+        # tant qu'une cellule de mur montrait la tuile 0 -- faux des qu'elle est un flat (E1M5
+        # apres le budget de tuiles : 805 murs sur 948 compares a la tuile voisine).
+        base = 0
         pbwalls = set(L["PBWall"])
         faux, vus = [], 0
+        # Niveau passe au budget de tuiles (doomtiles.reduire) : une tuile gardee represente les
+        # variantes fondues avec elle. Une cellule dont la hauteur est celle d'une de ces variantes
+        # est un compromis ACCEPTE (compte a part) ; hors de toutes, c'est un defaut.
+        try:
+            rep = _json.load(open(a.geom, encoding="utf-8")).get("tuiles_representees")
+        except Exception:
+            rep = None
+        fondus = 0
         for si, s_ in enumerate(S):
             for wi in range(s_["firstWall"], s_["lastWall"] + 1):
                 w = W[wi]
@@ -467,10 +566,15 @@ def main(argv=None):
                 cv = det[loc].get("cv") or 0
                 vus += 1
                 if not cv or max(cell / cv, cv / cell) > 1.02:
+                    if rep and any(len(k) > 5 and isinstance(k[5], (int, float)) and k[5]
+                                   and max(cell / k[5], k[5] / cell) <= 1.02 for k in rep[loc]):
+                        fondus += 1
+                        continue
                     faux.append((si, wi, round(cell, 1), cv))
         put("echelle verticale des murs", not faux,
             f"{len(faux)}/{vus} murs hors de 2 %, ex. {faux[:3]}" if faux
-            else f"{vus} murs, cellule posee == cellule echantillonnee")
+            else f"{vus} murs, cellule posee == cellule echantillonnee"
+                 + (f" ou celle d'une variante fondue au budget ({fondus})" if fondus else ""))
 
     # 14. ORIENTATION DES FLATS. Le VDP1 pose le coin (0,0) de la tuile sur poly[0] et le moteur
     #     ne permute rien (WALLS.C:1223-1231) ; Doom veut la ligne 0 au NORD et la colonne 0 a
@@ -518,27 +622,149 @@ def main(argv=None):
                        and (b["floorSector"] == -1 or 0 <= b["floorSector"] < len(S))
                        and b["dx"] == b["dy"] == b["dz"] == 0)]
         put("plages des push blocks", not bad, str(bad[:3]))
+        # Une porte FERMEE bloque le joueur : son ouverture reste sous 56 u (setDoorBlockBits,
+        # AI.C:4294-4309 : SHORTOPENING des qu'elle est plus basse que CFG_DOOR_FIT). Fermee a la
+        # fente (1 u) le plus souvent ; une porte que le WAD laisse entrouverte garde son jour
+        # (E1M5 secteur 121 : 8 u), comme dans Doom au depart.
         dws = [wi for wi in PBW if W[wi]["flags"] & 0x20]
-        bad = [wi for wi in dws if V[W[wi]["v"][1]]["y"] - V[W[wi]["v"][2]]["y"] != sp.DOOR_SLIT
-               or not (W[wi]["flags"] & 0x1000)]
-        put("chaque DOORWALL ferme = fente 1 u + SHORTOPENING", not bad,
-            f"{len(dws)} DOORWALL" + (f", fautifs {bad[:3]}" if bad else ""))
+        hs = {wi: V[W[wi]["v"][1]]["y"] - V[W[wi]["v"][2]]["y"] for wi in dws}
+        bad = [wi for wi in dws if not (sp.DOOR_SLIT <= hs[wi] < 56) or not (W[wi]["flags"] & 0x1000)]
+        entrouvertes = sum(1 for wi in dws if hs[wi] != sp.DOOR_SLIT)
+        put("chaque DOORWALL ferme (fente 1 u, ou jour du WAD < 56) + SHORTOPENING", not bad,
+            f"{len(dws)} DOORWALL" + (f", dont {entrouvertes} entrouverts par le WAD" if entrouvertes else "")
+            + (f", fautifs {bad[:3]}" if bad else ""))
         # objets contre PB : chaque porte / ascenseur pointe un pb existant, un pb par objet
-        doors = [struct.unpack(">3h", bytes(p[o["firstParam"]:o["firstParam"] + 6]))
-                 for o in obj if o["type"] == 48]
+        # portes Doom : pb, canal, doorHeight, genre de l'appui, cle, genre du tag (doom_specials)
+        doors = [struct.unpack(">6h", bytes(p[o["firstParam"]:o["firstParam"] + 12]))
+                 for o in obj if o["type"] == sp.OT_DOOM_DOOR]
         lifts = [(o["type"], struct.unpack(">4h", bytes(p[o["firstParam"]:o["firstParam"] + 8])))
                  for o in obj if o["type"] in (49, 61)]
-        pbs = [d[0] for d in doors] + [l_[1][0] for l_ in lifts]
-        put("un push block par porte / ascenseur", sorted(pbs) == list(range(len(PB))),
-            f"{len(doors)} portes, {len(lifts)} ascenseurs/sols, {len(PB)} push blocks")
-        put("floorSector : -1 porte, feuille ascenseur",
+        # sols : pb, course (> 0 monte, < 0 descend), canal, vitesse, face donneuse, degats
+        sols_o = [struct.unpack(">6h", bytes(p[o["firstParam"]:o["firstParam"] + 12]))
+                  for o in obj if o["type"] == sp.OT_DOOM_FLOOR]
+        raises = [r for r in sols_o if r[1] > 0]
+        pbs = [d[0] for d in doors] + [l_[1][0] for l_ in lifts] + [r[0] for r in sols_o]
+        put("un push block par porte / ascenseur / sol", sorted(pbs) == list(range(len(PB))),
+            f"{len(doors)} portes, {len(lifts)} ascenseurs, {len(raises)} sols qui montent, "
+            f"{len(sols_o) - len(raises)} sols qui descendent, {len(PB)} push blocks")
+        # Une porte Doom a un appui, un tag, ou les deux ; un canal si et seulement si un tag
+        # (E1M2 secteur 97 : manuelle ET interrupteur, le canal perdu -- vu sur console 09-18).
+        bad = [d for d in doors if not (0 <= d[3] <= 4 and 0 <= d[4] <= 3 and 0 <= d[5] <= 4)
+               or not (d[3] or d[5]) or ((d[1] != -1) != (d[5] != 0)) or (d[4] and not d[3])]
+        put("portes : genre d'appui / cle / genre de tag coherents, canal <=> tag", not bad,
+            f"{sum(1 for d in doors if d[3] and d[5])} portes manuelles ET a tag, "
+            f"{sum(1 for d in doors if d[4])} a cle" + (f", fautives {bad[:3]}" if bad else ""))
+        put("floorSector : -1 porte, feuille ascenseur / sol qui monte",
             all(PB[d[0]]["floorSector"] == -1 for d in doors)
-            and all(PB[l_[1][0]]["floorSector"] >= 0 for l_ in lifts))
+            and all(PB[l_[1][0]]["floorSector"] >= 0 for l_ in lifts)
+            and all(PB[r[0]]["floorSector"] >= 0 for r in sols_o))
+        # BLOCKSSIGHT (doom3d.post_flags) : les portails d'un sol FERME au chargement (sol = plafond,
+        # le tag 666 d'E1M8) ne laissent passer ni le rendu ni la vue ; DOOM_GAME.C les rouvre en
+        # vidant le drapeau sur les murs du push block quand le sol part. Donc : aucun portail
+        # BLOCKSSIGHT hors d'un push block de sol, et aucun portail d'entree dans les feuilles d'un
+        # tel sol sans le drapeau (le rendu traverserait par lui).
+        own_ = {}
+        for si, s_ in enumerate(S):
+            for wi in range(s_["firstWall"], s_["lastWall"] + 1):
+                own_[wi] = si
+        murs_sol, fermes = set(), set()
+        for (pb_, *_r) in sols_o:
+            ws_ = {PBW[k] for k in range(PB[pb_]["startWall"], PB[pb_]["endWall"] + 1)}
+            murs_sol |= ws_
+            if any((W[wi]["flags"] & 0x08) and W[wi]["nextSector"] >= 0 for wi in ws_):
+                fermes |= {own_[wi] for wi in ws_ if W[wi]["normal"][1] > 0}
+        aveugles = [wi for wi, w in enumerate(W) if (w["flags"] & 0x08) and w["nextSector"] >= 0]
+        bad = [wi for wi in aveugles if wi not in murs_sol]
+        bad += [wi for wi, w in enumerate(W) if w["nextSector"] in fermes and own_[wi] not in fermes
+                and not (w["flags"] & 0x08)]
+        if aveugles or fermes:
+            put("portails BLOCKSSIGHT : ceux d'un sol ferme au chargement, tous rouvrables",
+                not bad, f"{len(aveugles)} portails, {len(fermes)} feuilles fermees"
+                + (f", fautifs {bad[:4]}" if bad else ""))
+        # Un sol qui monte est EMIS en haut et CHARGE en bas (doom3d.raise_floors) : ses faces de
+        # sol sont a floorLevel + course, floorLevel etant l'etat du WAD ou les things se posent.
+        if raises:
+            owner_ = {}
+            for si, s_ in enumerate(S):
+                for wi in range(s_["firstWall"], s_["lastWall"] + 1):
+                    owner_[wi] = si
+            bad = []
+            for (pb_, course, ch, vit, donor, dg) in raises:
+                b = PB[pb_]
+                for k in range(b["startWall"], b["endWall"] + 1):
+                    wi = PBW[k]
+                    if W[wi]["normal"][1] <= 0:
+                        continue
+                    ys = {V[i]["y"] for i in W[wi]["v"]}
+                    si = owner_[wi]
+                    if ys != {S[si]["floorLevel"] + course}:
+                        bad.append((pb_, si, sorted(ys), S[si]["floorLevel"], course))
+                if not (0 < vit <= 64) or not (-1 <= donor < len(F)) or not (-1 <= dg < 256):
+                    bad.append((pb_, "params", vit, donor, dg))
+            put("sols qui montent : emis a floorLevel + course, params dans les bornes", not bad,
+                f"{len(raises)} sols, courses {sorted(r[1] for r in raises)}"
+                + (f", fautifs {bad[:3]}" if bad else ""))
+        # ETAT CHARGE : aucun mur plein visible dans l'OUVERTURE REELLE d'un portail -- entre le
+        # plus haut des deux sols et le plus bas des deux plafonds, a l'etat ou le niveau demarre
+        # (sommets d'un sol qui monte : emis `course` plus haut). Une paroi de cage posee contre un
+        # voisin qui bouge lui aussi y dressait un mur de toute la course (E1M3 48/49, 120 u) ;
+        # contre un voisin fixe elle s'arrete a son sol, donc au bord de l'ouverture.
+        dy = {}
+        for (pb_, course, *_r) in raises:
+            b = PB[pb_]
+            for k in range(b["startVertex"], b["endVertex"] + 1):
+                for vi in range(PBV[k]["vStart"], PBV[k]["vStart"] + PBV[k]["vNm"]):
+                    dy[vi] = -course
+        plafond = {}
+        for si, s_ in enumerate(S):
+            for wi in range(s_["firstWall"], s_["lastWall"] + 1):
+                if W[wi]["normal"][1] < 0:
+                    plafond[si] = V[W[wi]["v"][0]]["y"]
+                    break
+        bad, vus_ = [], 0
+        for si, s_ in enumerate(S):
+            ws = [wi for wi in range(s_["firstWall"], s_["lastWall"] + 1) if W[wi]["normal"][1] == 0]
+            pleins_ = [wi for wi in ws if W[wi]["nextSector"] == -1 and not (W[wi]["flags"] & 0x02)]
+            for pw in ws:
+                n = W[pw]["nextSector"]
+                if n < 0 or si not in plafond or n not in plafond:
+                    continue
+                lo = max(S[si]["floorLevel"], S[n]["floorLevel"])
+                hi = min(plafond[si], plafond[n])
+                if hi - lo <= 1:
+                    continue
+                vus_ += 1
+                P_, Q_ = V[W[pw]["v"][0]], V[W[pw]["v"][1]]
+                ex, ez = Q_["x"] - P_["x"], Q_["z"] - P_["z"]
+                L2 = float(ex * ex + ez * ez) or 1.0
+                for fw in pleins_:
+                    # sur la MEME arete : les murs d'une arete en partagent les sommets entiers, donc
+                    # les deux bouts a moins de 0,5 u de la droite du portail, et au moins 2 u de
+                    # recouvrement le long de lui. A 1 u, un mur d'une unite perpendiculaire au bout
+                    # du portail, ou le bout de 3,6 u d'une autre arete presque alignee (pad en
+                    # etoile d'E1M5, a 0,7 u), passaient pour des murs dans l'ouverture.
+                    ts, sur = [], True
+                    for vi in W[fw]["v"][:2]:
+                        X = V[vi]
+                        ts.append(((X["x"] - P_["x"]) * ex + (X["z"] - P_["z"]) * ez) / L2)
+                        if abs((X["x"] - P_["x"]) * ez - (X["z"] - P_["z"]) * ex) / math.sqrt(L2) > 0.5:
+                            sur = False
+                    if not sur or (min(max(ts), 1.0) - max(min(ts), 0.0)) * math.sqrt(L2) < 2.0:
+                        continue
+                    ys_ = [V[vi]["y"] + dy.get(vi, 0) for vi in W[fw]["v"]]
+                    ov = min(hi, max(ys_)) - max(lo, min(ys_))
+                    if ov > 1:
+                        bad.append((si, n, fw, round(ov)))
+        put("etat charge : aucun mur plein dans l'ouverture d'un portail", not bad,
+            f"{vus_} portails ouverts" + (f", {len(bad)} murs dedans, ex. {bad[:3]}" if bad else ""))
         if M is not None:
             spx = sp.specials_of(M)
-            # fermee a sol + fente, door_func monte de doorHeight : fente + doorHeight = regle Doom
-            want_d = sorted(d["upper"] - d["lower"] - sp.DOOR_SLIT for d in spx.doors)
-            want_l = sorted((l_["lower"], l_["upper"]) for l_ in spx.lifts + spx.floors)
+            # fermee a sol + fente (ou entrouverte par le WAD, M n'est pas referme ici), door_func
+            # monte de doorHeight : depart + doorHeight = regle Doom
+            want_d = sorted(d["upper"] - max(M["sectors"][d["sector"]].ceilh, d["lower"] + sp.DOOR_SLIT)
+                            for d in spx.doors)
+            want_l = sorted((l_["lower"], l_["upper"]) for l_ in spx.lifts)
+            want_f = sorted(f_["lower"] - f_["upper"] for f_ in spx.floors)
             put("fente + doorHeight == regle Doom (min plafond voisin - 4 - sol)",
                 sorted(d[2] for d in doors) == want_d, f"{sorted(d[2] for d in doors)} vs {want_d}")
             sec = [struct.unpack(">h", bytes(p[o["firstParam"]:o["firstParam"] + 2]))[0]
@@ -547,17 +773,79 @@ def main(argv=None):
             put("OT_DOOM_SECRETWALL : murs DOORWALL des portes ML_SECRET",
                 (len(sec) > 0) == (nsl > 0) and all(0 <= w < len(W) and (W[w]["flags"] & 0x20) for w in sec),
                 f"{len(sec)} murs pour {nsl} ligne(s) de porte ML_SECRET : {sec}")
-            put("course ascenseur / sol == regle Doom (36 : plus haut sol voisin + 8)",
+            put("course ascenseur == regle Doom (plus bas sol voisin)",
                 sorted((l_[1][1], l_[1][2]) for l_ in lifts) == want_l,
                 f"{sorted((l_[1][1], l_[1][2]) for l_ in lifts)} vs {want_l}")
+            if spx.floors or len(sols_o) != len(raises):
+                have_f = sorted(r[1] for r in sols_o if r[1] < 0)
+                put("course des sols qui descendent == regle Doom (36 : plus haut sol voisin + 8 ; "
+                    "tag 666 d'A_BossDeath)", have_f == want_f, f"{have_f} vs {want_f}")
+            if spx.raises or raises:
+                want_r = sorted(r["upper"] - r["lower"] for r in spx.raises)
+                put("course des sols qui montent == regle Doom (p_floor.c / p_plats.c, fente sous "
+                    "le plafond)", sorted(r[1] for r in raises) == want_r,
+                    f"{sorted(r[1] for r in raises)} vs {want_r}")
     else:
         put("push blocks", True, "aucun (geometrie statique)")
+
+    # 15b. TELEPORTEURS (OT_DOOM_TELEPORT, DOOM_GAME.C). Rejoue EV_Teleport contre le WAD : la
+    #      feuille qui declenche est du cote ARRIERE d'une ligne de teleporteur (on part en la
+    #      franchissant depuis l'avant), l'arrivee est DANS sa feuille (pointInSectorP, murs
+    #      verticaux) et cette feuille est dans un secteur du tag ; une feuille ne porte qu'UN objet
+    #      de secteur (level_sector[s].object : teleporteur ou sector-switch).
+    teles_o = [struct.unpack(">8h", bytes(p[o["firstParam"]:o["firstParam"] + 16]))
+               for o in obj if o["type"] == sp.OT_DOOM_TELEPORT]
+    if M is not None:
+        lignes_t = [(li, ld) for li, ld in enumerate(M["linedefs"]) if ld.special in sp.TELEPORT]
+        if lignes_t or teles_o:
+            try:
+                import json as _json2
+                dsec = _json2.load(open(a.geom, encoding="utf-8"))["doom_sector"]
+            except Exception:
+                dsec = None
+            SDm, Sm = M["sidedefs"], M["sectors"]
+            arrieres = {SDm[ld.left].sector: ld.tag for li, ld in lignes_t if ld.left >= 0}
+            ssw_ = {struct.unpack(">h", bytes(p[o["firstParam"]:o["firstParam"] + 2]))[0]
+                    for o in obj if o["type"] == sp.OT_SECTORSWITCH}
+            bad = []
+            for (s0, s1, x, z, ang, fx, fz, fl) in teles_o:
+                if not (0 <= s0 < len(S) and 0 <= s1 < len(S)) or dsec is None:
+                    bad.append((s0, s1, "bornes"))
+                    continue
+                tag = arrieres.get(dsec[s0])
+                if tag is None:
+                    bad.append((s0, "pas du cote arriere d'une ligne de teleporteur"))
+                    continue
+                if Sm[dsec[s1]].tag != tag:
+                    bad.append((s1, "arrivee hors du tag %d" % tag))
+                tm = [t_ for t_ in M["things"] if t_.type == 14 and (t_.x, t_.y) == (x, z)]
+                if not tm or ang != int(round((tm[0].angle % 360) * 4096.0 / 360.0)) % 4096:
+                    bad.append((s1, "angle d'arrivee %d != angle Doom du MT_TELEPORTMAN" % ang))
+                sd = S[s1]
+                for wi in range(sd["firstWall"], sd["lastWall"] + 1):
+                    w = W[wi]
+                    if w["normal"][1] != 0:
+                        continue
+                    v0 = V[w["v"][0]]
+                    if ((x - v0["x"]) * w["normal"][0] + (z - v0["z"]) * w["normal"][2]) < -(1 << 16) // 4:
+                        bad.append((s1, (x, z), "arrivee hors de sa feuille", wi))
+                        break
+                if s0 in ssw_:
+                    bad.append((s0, "feuille avec un sector-switch ET un teleporteur"))
+            couverts = {dsec[t_[0]] for t_ in teles_o} if dsec else set()
+            manquants = sorted(set(arrieres) - couverts)
+            put("teleporteurs : cote arriere -> arrivee dans le tag, dans sa feuille",
+                not bad and not manquants,
+                f"{len(teles_o)} feuilles pour {len(lignes_t)} lignes, arrivees "
+                f"{sorted({(t_[2], t_[3]) for t_ in teles_o})}"
+                + (f", secteurs arriere sans objet {manquants}" if manquants else "")
+                + (f", fautifs {bad[:3]}" if bad else ""))
 
     # 16. INTERRUPTEURS : rejoue constructSwitch (AI2.C:582-632) -- sequenceMap[type] >= 0,
     #     4 sequences, tuile OFF (chunk de la 1re frame) presente EXACTEMENT une fois dans les murs
     #     de sectorNm (le moteur asserte `tilePos`, et la premiere occurrence est celle animee).
     sws = [(o["type"], struct.unpack(">5h", bytes(p[o["firstParam"]:o["firstParam"] + 10])))
-           for o in obj if 168 <= o["type"] <= 171]
+           for o in obj if o["type"] in sp.OT_SWITCH_TYPES]
     if sws:
         r3 = lev.Reader(a.lev)
         lev.parse_sky(r3)
@@ -596,6 +884,38 @@ def main(argv=None):
                 bad.append((t, "tuile OFF", off, "occurrences", cnt))
         put("interrupteurs : sequence et tuile OFF unique dans la feuille", not bad,
             f"{len(sws)} interrupteurs, canaux {[s_[1][1] for s_ in sws]}" if not bad else str(bad))
+
+    # 16b. CANAUX : tout canal qu'un interrupteur ou un declencheur W fait sonner a un objet qui
+    #      l'ecoute, et tout objet a canal a quelqu'un pour le faire sonner (A_BossDeath sonne les
+    #      tags de doom_specials.BOSS_TAGS). E1M2 : l'interrupteur du canal 7 ne commandait rien,
+    #      la porte 97 manuelle avait garde le canal -1 (console, 2026-09-18).
+    def _sh(o, k):
+        return struct.unpack(">%dh" % k, bytes(p[o["firstParam"]:o["firstParam"] + 2 * k]))
+    emis = defaultdict(int)
+    for o in obj:
+        if o["type"] == sp.OT_SECTORSWITCH:
+            emis[_sh(o, 2)[1]] += 1
+        elif o["type"] in sp.OT_SWITCH_TYPES:
+            emis[_sh(o, 5)[1]] += 1
+    ecoute = defaultdict(int)
+    for o in obj:
+        if o["type"] == sp.OT_DOOM_DOOR:
+            d_ = _sh(o, 6)
+            if d_[5]:
+                ecoute[d_[1]] += 1
+        elif o["type"] == 49:
+            ecoute[_sh(o, 4)[3]] += 1
+        elif o["type"] == sp.OT_DOOM_FLOOR:
+            ecoute[_sh(o, 6)[2]] += 1
+        elif o["type"] in (sp.OT_DOOM_EXIT, sp.OT_DOOM_SECRETEXIT):
+            ecoute[_sh(o, 1)[0]] += 1
+    boss = {t_ for t_, _g in sp.BOSS_TAGS.get((a.map or "").upper(), ())}
+    sourds = sorted(c for c in emis if c not in ecoute)
+    muets = sorted(c for c in ecoute if c not in emis and c not in boss and c != sp.CHANNEL_NONE)
+    put("canaux : chaque canal emis a un recepteur, chaque recepteur un emetteur (ou A_BossDeath)",
+        not sourds and not muets,
+        f"{len(emis)} canaux emis, {len(ecoute)} ecoutes" + (f", boss {sorted(boss)}" if boss else "")
+        + (f", sans recepteur {sourds}" if sourds else "") + (f", sans emetteur {muets}" if muets else ""))
     dmg = [struct.unpack(">2h", bytes(p[o["firstParam"]:o["firstParam"] + 4]))
            for o in obj if o["type"] == 179]
     if dmg:
@@ -779,6 +1099,11 @@ def tail_checks(a, L, S, W, V, F, tex, obj, p, M):
             f"{n_anim} famille(s) animee(s)" + (f", defauts {anim_bad[:3]}" if anim_bad else ""))
         put("sequenceMap[163..171] : -2 sauf les OT_SW poses",
             all(sq["sequenceMap"][i] == -2 for i in range(163, 172) if not (168 <= i <= 171)))
+        import doom_specials as sp
+        poses = {o["type"] for o in obj if o["type"] in sp.OT_SWITCH_TYPES}
+        put("sequenceMap[204..226] : -2 sauf les interrupteurs 5..27 poses (DOOM_GAME.C)",
+            all((sq["sequenceMap"][i] >= 0) == (i in poses) for i in range(204, 227)),
+            f"{sum(1 for i in range(204, 227) if i in poses)} type(s) au-dela de OT_SW4")
         fam = sum(1 for i in range(138) if sq["sequenceMap"][i] != -2)
         print(f"       {fam} familles de sprites cartographiees, {len(sq['sequence']) - 1} sequences, "
               f"{len(sq['frames']) - 1} frames, {len(sq['chunks'])} chunks")
@@ -862,11 +1187,16 @@ def tail_checks(a, L, S, W, V, F, tex, obj, p, M):
             high = 0x06100000 - int(m.group(1), 16)
             src = "MAIN.map _end=0x%08x" % int(m.group(1), 16)
     pool = 1024 * 1024 + high
+    # le demarrage VERROUILLE dans ce pool le jeu d'images des menus et le texte local (MENU.C:266-268,
+    # LOCAL.C:25-26 ; make_e1m1.verrou_initload)
+    import make_e1m1
+    verrou, _vsrc = make_e1m1.verrou_initload()
     st_res = (static["weapon_tiles_bytes"] + static["wseq_bytes"]) if static else 0
     res = ((lvl + 3) & ~3) + ((psz + 3) & ~3) + tsz + ((ssz + 3) & ~3) + st_res
-    put("memoire residente <= pool (LWRAM 1 Mo + haut de HWRAM)", res <= pool,
+    put("memoire residente <= pool (LWRAM 1 Mo + haut de HWRAM - verrou du demarrage)",
+        res + verrou <= pool,
         f"niveau {lvl} + palettes {psz} + tuiles {tsz} + sequences {ssz} + STATIC {st_res} = {res} ; "
-        f"pool {pool} ({src}) ; marge {pool - res}")
+        f"pool {pool} ({src}) - verrou {verrou} ; marge {pool - verrou - res}")
 
 
 def wadmod_of(a):

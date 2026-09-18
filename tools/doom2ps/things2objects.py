@@ -7,8 +7,11 @@ Règles (DOOM_ABI §1, OBJECT.C:165-206) :
     le départ joueur (DoomEd 1) est pris AVANT ce filtre, comme dans Doom ; 2-4/11 (starts coop / DM)
     ignorés ;
   - type .LEV = `mt_to_ot[ed_to_mt[doomed]]` de build/doom/doom_ids.json (info2tables.py), joueur 13 ;
-  - joueur : 5 shorts `sector, x, y, z, angle` (suckSpriteParams OBJECT.C:183-194), angle +90°
-    (constructPlayer retire F(90), AI.C:51) ;
+  - joueur : 5 shorts `sector, x, y, z, angle` (suckSpriteParams OBJECT.C:183-194), angle Doom tel
+    quel : c'est la convention des sprites (direction (cos, sin), AI.C:528-529) et constructPlayer
+    en retire F(90) pour passer a celle de la camera (regard (-sin yaw, cos yaw), SRUINS.C:389 ;
+    DOOM_WEAPON.C fait yaw + 90 dans l'autre sens). L'ancien +90 faisait arriver le joueur tourne
+    de 90 degres a gauche (vu sur console, 2026-09-18) ;
   - mobj : 6 shorts `sector, x, y, z, angle, flags` ; `y = floorLevel` du secteur .LEV (le moteur
     relève le sprite de son rayon, SPRITE.C:60-66), `z = y_doom` (repère X = x_doom, Z = y_doom, 1:1),
     `angle = round(deg * 4096 / 360)` (short * 5760 = 360/4096°, OBJECT.C:194), `flags` = bits THINGS
@@ -97,7 +100,7 @@ def things_to_objects(M, conv, ids, *, skill=3, floor_levels=None):
     s, fl = sector_of(player)
     objects.append(dict(type=sp.OT_PLAYER, firstParam=0, ed=1, sector=s, x=player.x,
                         y=fl, z=player.y, angle_doom=player.angle, kind="player"))
-    params += sp.pack_params(s, player.x, fl, player.y, lev_angle(player.angle + 90))
+    params += sp.pack_params(s, player.x, fl, player.y, lev_angle(player.angle))
 
     for t in M["things"]:
         if t.type in START_TYPES:
@@ -136,10 +139,7 @@ def object_positions(objects, params):
     p = bytes(params)
     for i, o in enumerate(objects):
         t = o["type"]
-        if t == sp.OT_PLAYER or o.get("kind") == "mobj" or (
-                t not in (sp.OT_NORMALDOOR, sp.OT_NORMALELEVATOR, sp.OT_STUCKDOWNELEVATOR,
-                          sp.OT_SECTORSWITCH, sp.OT_DOOM_EXIT, sp.OT_DOOM_SECRETEXIT,
-                          sp.OT_DOOM_DAMAGE, sp.OT_DOOM_SECRETWALL) and not (sp.OT_SW1 <= t <= sp.OT_SW4)):
+        if t == sp.OT_PLAYER or o.get("kind") == "mobj" or t not in sp.OT_SPECIAL_TYPES:
             fp = o["firstParam"]
             s, x, y, z = struct.unpack(">4h", p[fp:fp + 8])
             out.append((i, t, s, x, y, z))
@@ -192,8 +192,9 @@ def main(argv=None):
     mobile = (G or {}).get("mobile")
     specials = sp.specials_of(M)
     if mobile:
-        # même géométrie que doom3d --mobile : portes fermées (fente) avant tout calcul de secteur
+        # même géométrie que doom3d --mobile : portes fermées (fente), sols qui montent en haut
         doom3d.close_doors(M, specials, mobile.get("door_slit", sp.DOOR_SLIT))
+        doom3d.raise_floors(M, specials)
     sizes = {nm: (t["width"], t["height"]) for nm, t in W.textures().items()}
     conv = doom3d.DoomConverter(M, sizes)
     fl = [s["floorLevel"] for s in G["sectors"]] if G else None
@@ -209,7 +210,7 @@ def main(argv=None):
     if mobile:
         so, sprm, notes = sp.special_objects(M, conv, ids, specials, mobile["pb_index"],
                                              lift_contact=a.lift_contact,
-                                             switches=mobile.get("switches"))
+                                             switches=mobile.get("switches"), geom=G)
         objects, params = sp.concat_objects((objects, params), (so, sprm))
         from collections import Counter
         c = Counter(o["type"] for o in so)

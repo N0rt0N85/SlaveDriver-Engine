@@ -28,6 +28,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
+sys.path.append(os.path.join(ROOT, "tools"))           # tuiles.py (reduire), sans rien masquer
 import wad as wadmod                                   # noqa: E402
 
 CELL = 64
@@ -154,6 +155,82 @@ class TileMaker:
             return bytes([self.sub0]) * (CELL * CELL)
         return bytes(self.fix(v) for v in d)
 
+    def tile_of_key(self, key, picnames, sizes):
+        """-> (64x64 indices, detail) pour une cle de tuile de doom3d. La taille de cellule doit
+        etre EXACTEMENT celle que doom3d a mise dans le mur (E4.1b)."""
+        from doom3d import CELL_MIN_U, CELL_MAX_U, CELL_MIN_V, CELL_MAX_V
+        if "sw" in key:                       # marqueur d'interrupteur (doom3d.finalize_mobile)
+            key = tuple(key[:list(key).index("sw")])
+        pic = key[0]
+        kind, name = picnames[pic]
+        if kind == "flat":
+            return (self.tile_from_flat(name),
+                    dict(pic=pic, kind=kind, name=name, w=64, h=64, cu=64, cv=64))
+        w, h = sizes.get(name, (64, 128))
+        cu = max(CELL_MIN_U, min(CELL_MAX_U, int(w)))
+        if len(key) >= 7:                     # cle E4.1c : (pic,cx,cy,ncx,ncy,cv,voff)
+            cv, voff = key[5], int(key[6])
+        else:
+            cv = max(CELL_MIN_V, min(CELL_MAX_V, int(h)))
+            voff = 0
+        uoff = 0
+        if len(key) >= 9:                     # + fenetre (cu, u0) : mur plus etroit que la texture
+            cu, uoff = key[7], key[8]
+        return (self.tile_from_wall(name, cu, cv, voff, uoff),
+                dict(pic=pic, kind=kind, name=name, w=w, h=h, cu=cu, cv=cv, voff=voff, uoff=uoff))
+
+
+def reduire(G, wad, budget, trace=print):
+    """Ramene les tuiles de la geometrie G (sortie doom3d, modifiee EN PLACE) a `budget` avec
+    tools/tuiles.py : fusion a l'interieur d'une texture, les plus semblables a l'image d'abord,
+    ponderees par l'aire. Figees : tuiles d'interrupteur (cle 'sw', OFF et ON) et images des flats
+    animes. Reecrit texture, faces, interrupteurs, animations et la liste des tuiles. -> info."""
+    import numpy as np
+    import tuiles
+    tm = TileMaker(wad)
+    sizes = {nm: (t["width"], t["height"]) for nm, t in wad.textures().items()}
+    pal = np.array([tm.pal[i] for i in range(256)], dtype=np.float32)
+    keys = G["tiles"]
+    N = len(keys)
+    images = np.empty((N, CELL // tuiles.VIGNETTE, CELL // tuiles.VIGNETTE, 3), dtype=np.float32)
+    for i, k in enumerate(keys):
+        px, _ = tm.tile_of_key(k, G["picnames"], sizes)
+        images[i] = tuiles.vignette(pal[np.frombuffer(px, dtype=np.uint8)].reshape(CELL, CELL, 3))
+    poids = tuiles.aires(G["walls"], G["vertices"], G["faces"], G["texture"], N)
+    groupes = [tuple(G["picnames"][k[0]]) for k in keys]
+    mobile = G.get("mobile") or {}
+    figees = {i for i, k in enumerate(keys) if "sw" in k}
+    figees |= {s[c] for s in mobile.get("switches") or [] for c in ("tile_off", "tile_on")}
+    figees |= {t for fam in G.get("anims") or [] for t in fam}
+    repr_, info = tuiles.reduire(images, poids, groupes, figees, budget, trace=trace)
+    if info["garde"] == N:
+        return info
+    garder, remap = tuiles.compacter(repr_)
+    for i in range(1, len(G["texture"]), 2):
+        G["texture"][i] = remap[G["texture"][i]]
+    for f in G["faces"]:
+        f["tile"] = remap[f["tile"]]
+    for s in mobile.get("switches") or []:
+        s["tile_off"], s["tile_on"] = remap[s["tile_off"]], remap[s["tile_on"]]
+    G["anims"] = [[remap[t] for t in fam] for fam in G.get("anims") or []]
+    G["tiles"] = [keys[i] for i in garder]
+    # ce que chaque tuile gardee remplace : verif_doom (echelle verticale) distingue ainsi une
+    # cellule qui montre la tuile d'une voisine PAR BUDGET d'une cellule fausse
+    rep = [[] for _ in garder]
+    for i in range(N):
+        rep[remap[i]].append(keys[i])
+    G["tuiles_representees"] = rep
+    G["reduction_tuiles"] = dict(avant=N, apres=len(garder), budget=int(budget),
+                                 ecart_rms=round(info["ecart_rms"], 2))
+    info["par_texture"] = {}
+    for i in range(N):
+        if repr_[i] != i:
+            nm = G["picnames"][keys[i][0]][1]
+            info["par_texture"][nm] = info["par_texture"].get(nm, 0) + 1
+    info["pires"] = [(round(c), g[1], keys[t][5:] if len(keys[t]) > 5 else (),
+                      keys[r][5:] if len(keys[r]) > 5 else ()) for c, g, t, r in info["pires"]]
+    return info
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -169,36 +246,16 @@ def main(argv=None):
     tm = TileMaker(W)
     sizes = {nm: (t["width"], t["height"]) for nm, t in W.textures().items()}
 
-    # la taille de cellule doit etre EXACTEMENT celle que doom3d a mise dans le mur (E4.1b)
-    from doom3d import CELL_MIN_U, CELL_MAX_U, CELL_MIN_V, CELL_MAX_V
-
     tiles = []
     detail = []
     manquantes = []
     for key in G["tiles"]:
-        pic = key[0]
-        kind, name = G["picnames"][pic]
-        if kind == "flat":
-            if name not in tm.flats:
-                manquantes.append(("flat", name))
-            tiles.append(tm.tile_from_flat(name))
-            detail.append(dict(pic=pic, kind=kind, name=name, w=64, h=64, cu=64, cv=64))
-        else:
-            w, h = sizes.get(name, (64, 128))
-            if name not in sizes:
-                manquantes.append(("tex", name))
-            cu = max(CELL_MIN_U, min(CELL_MAX_U, int(w)))
-            if len(key) >= 7:                     # cle E4.1c : (pic,cx,cy,ncx,ncy,cv,voff)
-                cv, voff = key[5], int(key[6])
-            else:
-                cv = max(CELL_MIN_V, min(CELL_MAX_V, int(h)))
-                voff = 0
-            uoff = 0
-            if len(key) >= 9:                     # + fenetre (cu, u0) : mur plus etroit que la texture
-                cu, uoff = key[7], key[8]
-            tiles.append(tm.tile_from_wall(name, cu, cv, voff, uoff))
-            detail.append(dict(pic=pic, kind=kind, name=name, w=w, h=h,
-                               cu=cu, cv=cv, voff=voff, uoff=uoff))
+        kind, name = G["picnames"][key[0]]
+        if (kind == "flat" and name not in tm.flats) or (kind != "flat" and name not in sizes):
+            manquantes.append((kind, name))
+        px, d = tm.tile_of_key(key, G["picnames"], sizes)
+        tiles.append(px)
+        detail.append(d)
 
     exact = sum(1 for d in detail if abs(d["cu"] - d["w"]) < 1)
     out = dict(format="doom2ps/e4-tiles v1",

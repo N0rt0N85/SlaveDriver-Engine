@@ -106,7 +106,162 @@ def clip_tagged(poly, nx, ny, ndx, ndy, keep_front):
 
 
 def leaf_polygons(M, margin=16):
-    """Polygones convexes etiquetes des feuilles du BSP, en flottants."""
+    """Polygones convexes etiquetes des feuilles du BSP, en flottants. Les lignes de noeud qui
+    laissent un TROU entre deux feuilles sont recalees sur leur linedef (ligne_de_noeud), et
+    seulement elles : recaler partout deplace des frontieres qui n'en avaient pas besoin (E1M1 :
+    3 noeuds, une aretes de 1,4 u dont le plan infini sortait un monstre de son secteur)."""
+    polys = _feuilles(M, margin, set())
+    recaler = _noeuds_troues(M, polys)
+    return _feuilles(M, margin, recaler) if recaler else polys
+
+
+def _aire(p):
+    n = len(p)
+    return abs(sum(p[i][0] * p[(i + 1) % n][1] - p[(i + 1) % n][0] * p[i][1] for i in range(n))) / 2.0
+
+
+SEUIL_DEBORD = 8.0     # u2 ; voir reattribuer_debords
+
+
+def reattribuer_debords(M, rings, secteurs, tol=1.0, seuil=SEUIL_DEBORD):
+    """Rend a son VRAI secteur ce qu'une feuille du BSP deborde.
+
+    La region d'une feuille est fermee par les lignes de noeud ET par ses segs. Quand elle n'a pas
+    assez de segs pour se fermer, la region de noeud deborde : Doom ne la dessine jamais (il ne
+    trace que des segs, les sols se remplissent entre eux), mais notre polygone, lui, la couvre.
+    MESURE 2026-09-18 : sur E1M6, la feuille 227 du secteur 104 (une bande de 16 u sous un linteau,
+    plafond 48) n'a qu'un seg et s'etend 128 u dans la salle du secteur 20 (plafond 224) -- une dalle
+    de plafond flottante et trois portails pleine hauteur ; sur E1M7, la feuille 207 passe derriere le
+    mur a une face 895 de son propre secteur.
+    Test EXACT d'un debord : un linedef de SON secteur coupe le polygone, et la corde tient dans
+    l'etendue du linedef (a `tol` pres) -- une feuille saine ne traverse jamais un linedef de son
+    secteur, ses segs sont sur son BORD. La partie du mauvais cote passe au secteur d'en face, ou
+    disparait si le linedef n'a qu'une face (c'est le vide).
+    `seuil` : sous 8 u2 le debord est un eclat d'arrondi que l'appariement a 1,5 u (seg_near) rattrape
+    deja -- MESURE sur l'episode : 2 a 6 u2 pour les eclats (E1M1 : 3 et 6, sans aucun defaut), 11,6
+    a 1 280 u2 pour les debords qui en font un (E1M5, E1M6, E1M7). E1M1 n'est donc pas touche.
+    -> (anneaux, secteurs, membres, n coupes) ; `membres` = feuilles BSP d'origine de chaque anneau."""
+    V, SD = M["vertices"], M["sidedefs"]
+    bords = defaultdict(list)
+    for ld in M["linedefs"]:
+        r = SD[ld.right].sector if ld.right >= 0 else None
+        g = SD[ld.left].sector if ld.left >= 0 else None
+        if r == g:
+            continue
+        (ax, ay), (bx, by) = V[ld.v1], V[ld.v2]
+        if (ax, ay) == (bx, by):
+            continue
+        for s in (r, g):
+            if s is not None:
+                bords[s].append((ax, ay, bx, by, r, g))
+    out_r, out_s, out_m = [], [], []
+    n = 0
+    todo = [(ring, secteurs[si], [si]) for si, ring in enumerate(rings)]
+    todo.reverse()
+    while todo:
+        ring, sec, mem = todo.pop()
+        coupe = None
+        if ring and len(ring) >= 3:
+            for (ax, ay, bx, by, r, g) in bords.get(sec, ()):
+                avant = clip_tagged(ring, ax, ay, bx - ax, by - ay, keep_front=True)
+                if len(avant) < 3 or _aire(avant) <= 1.0:
+                    continue
+                arriere = clip_tagged(ring, ax, ay, bx - ax, by - ay, keep_front=False)
+                if len(arriere) < 3 or _aire(arriere) <= 1.0:
+                    continue
+                ex, ey = bx - ax, by - ay
+                L2 = float(ex * ex + ey * ey)
+                L = math.sqrt(L2)
+                corde = [((x - ax) * ex + (y - ay) * ey) / L2 for x, y, _ in avant
+                         if abs((x - ax) * ey - (y - ay) * ex) / L <= 1e-6]
+                if not corde or min(corde) < -tol / L or max(corde) > 1 + tol / L:
+                    continue
+                garde, autre = (avant, arriere) if r == sec else (arriere, avant)
+                if _aire(autre) < seuil:
+                    continue
+                coupe = (garde, autre, g if r == sec else r)
+                break
+        if coupe is None:
+            out_r.append(ring)
+            out_s.append(sec)
+            out_m.append(mem)
+            continue
+        n += 1
+        todo.append((coupe[0], sec, mem))
+        if coupe[2] is not None:
+            todo.append((coupe[1], coupe[2], mem))
+    return out_r, out_s, out_m, n
+
+
+def _dans_la_carte(M, x, y):
+    """Parite des croisements d'un rayon +x avec les linedefs a UNE face : ce sont eux, et eux
+    seuls, qui separent le monde du vide (meme test que doom3d._dans_la_carte)."""
+    V = M["vertices"]
+    c = False
+    for ld in M["linedefs"]:
+        if ld.left >= 0 and ld.right >= 0:
+            continue
+        (ax, ay), (bx, by) = V[ld.v1], V[ld.v2]
+        if (ay > y) != (by > y) and x < ax + (y - ay) / float(by - ay) * (bx - ax):
+            c = not c
+    return c
+
+
+def _noeuds_troues(M, polys, tol=1.0):
+    """Les noeuds dont une arete de feuille n'a PERSONNE en face : la portion de l'arete qu'aucune
+    arete de meme etiquette et de sens oppose (la feuille voisine) ne recouvre depasse `tol` u, et
+    le point juste au-dela est DANS la carte (derriere un mur a une face, le vide n'est pas un trou).
+    C'est la signature du coin que laissent entre elles deux droites voisines, le noeud et le
+    linedef -- quelle que soit sa largeur : sur E1M2 il fait moins d'une unite (noeud tire d'un seg
+    arrondi du linedef 917, secteur 141), assez pour que les deux cotes ne s'apparient plus."""
+    nodes = M["nodes"]
+    cle = {line_key(nd.x, nd.y, nd.dx, nd.dy): k for k, nd in enumerate(nodes)}
+    par_tag = defaultdict(list)
+    for pi, p in enumerate(polys):
+        if not p or len(p) < 3:
+            continue
+        n = len(p)
+        o = 1.0 if sum(p[i][0] * p[(i + 1) % n][1] - p[(i + 1) % n][0] * p[i][1]
+                       for i in range(n)) > 0 else -1.0
+        for i in range(n):
+            ax, ay, tag = p[i]
+            if tag not in cle:
+                continue
+            bx, by = p[(i + 1) % n][0], p[(i + 1) % n][1]
+            t0, t1 = param(tag, ax, ay), param(tag, bx, by)
+            par_tag[tag].append((min(t0, t1), max(t0, t1), t1 > t0, pi, o, (ax, ay, bx, by)))
+    out = set()
+    for tag, lst in par_tag.items():
+        k = cle[tag]
+        echelle = math.hypot(tag[0], tag[1]) or 1.0
+        for (a, b, sens, pi, o, (ax, ay, bx, by)) in lst:
+            if k in out or (b - a) / echelle <= tol:
+                continue
+            en_face = sorted((a2, b2) for (a2, b2, s2, pj, _o, _s) in lst if pj != pi and s2 != sens)
+            trous, pos = [], a
+            for a2, b2 in en_face:
+                if b2 <= pos:
+                    continue
+                if a2 > pos:
+                    trous.append((pos, min(a2, b)))
+                pos = max(pos, b2)
+                if pos >= b:
+                    break
+            if pos < b:
+                trous.append((pos, b))
+            for u, v in trous:
+                if (v - u) / echelle <= tol:
+                    continue
+                x, y = point_at(tag, (u + v) / 2.0)
+                ex, ey = bx - ax, by - ay
+                L = math.hypot(ex, ey) or 1.0
+                if _dans_la_carte(M, x + o * ey / L * 0.5, y - o * ex / L * 0.5):
+                    out.add(k)
+                    break
+    return out
+
+
+def _feuilles(M, margin, recaler):
     xs = [v[0] for v in M["vertices"]]
     ys = [v[1] for v in M["vertices"]]
     x0, x1 = min(xs) - margin, max(xs) + margin
@@ -126,8 +281,10 @@ def leaf_polygons(M, margin=16):
             polys[idx & 0x7FFF] = poly
             continue
         nd = nodes[idx]
+        nx_, ny_, ndx_, ndy_ = (ligne_de_noeud(M, nd) if idx in recaler
+                                else (nd.x, nd.y, nd.dx, nd.dy))
         for k, child in enumerate(nd.children):
-            sub = clip_tagged(poly, nd.x, nd.y, nd.dx, nd.dy, keep_front=(k == 0))
+            sub = clip_tagged(poly, nx_, ny_, ndx_, ndy_, keep_front=(k == 0))
             if len(sub) >= 3:
                 stack.append((child, sub))
 
@@ -162,6 +319,49 @@ def leaf_polygons(M, margin=16):
                 break
         polys[si] = p
     return polys
+
+
+def ligne_de_noeud(M, nd, tol=1.5):
+    """La droite par laquelle couper au noeud `nd` : celle du LINEDEF dont le noeud est tire quand
+    il ne s'en ecarte que d'un arrondi, sinon celle du noeud.
+
+    Le nodebuilder tire sa partition d'un SEG, et un seg ne de la coupe d'un linedef a ses sommets
+    arrondis a l'entier (5 % des segs d'E1M1, voir leaf_polygons). Or on coupe les feuilles par la
+    droite du LINEDEF (meme raison) : quand la partition vient d'un seg arrondi, la feuille qui porte
+    le seg est bornee par le linedef et celle d'en face par le noeud, et les deux droites s'ecartent
+    AU-DELA du linedef. MESURE 2026-09-18, E1M8 : le noeud 39 suit le seg (-143, 2624)-(-351, 1952)
+    du linedef 284, qui finit en (-352, 1952) ; 1 u d'ecart a son bout, 3 u a 1 200 u plus loin, un
+    coin de 1 200 u2 de la cour qu'aucune feuille ne couvrait -- deux murs pleins invisibles de part
+    et d'autre, et le joueur mure au depart (1 secteur sur 200 atteignable). Recaler le noeud sur son
+    linedef donne la MEME droite aux deux cotes, partout. On garde l'orientation du noeud (quel cote
+    est l'avant) ; un noeud qui ne tombe sur aucun linedef a `tol` pres reste tel quel."""
+    p0 = (nd.x, nd.y)
+    p1 = (nd.x + nd.dx, nd.y + nd.dy)
+    V = M["vertices"]
+    for ld in M["linedefs"]:
+        (ax, ay), (bx, by) = V[ld.v1], V[ld.v2]
+        ex, ey = bx - ax, by - ay
+        L2 = float(ex * ex + ey * ey)
+        if L2 <= 0:
+            continue
+        L = math.sqrt(L2)
+        ok = True
+        for x, y in (p0, p1):
+            if abs((x - ax) * ey - (y - ay) * ex) / L > tol:
+                ok = False
+                break
+            t = ((x - ax) * ex + (y - ay) * ey) / L2
+            if t < -tol / L or t > 1 + tol / L:
+                ok = False
+                break
+        if not ok:
+            continue
+        if line_key(ax, ay, ex, ey) == line_key(nd.x, nd.y, nd.dx, nd.dy):
+            return nd.x, nd.y, nd.dx, nd.dy
+        if ex * nd.dx + ey * nd.dy < 0:
+            ax, ay, ex, ey = bx, by, -ex, -ey
+        return ax, ay, ex, ey
+    return nd.x, nd.y, nd.dx, nd.dy
 
 
 def build(M, margin=16, tol=1e-4, polys=None):

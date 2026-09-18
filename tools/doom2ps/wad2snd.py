@@ -89,6 +89,11 @@ VARIANTS = {"posit1": ["posit1", "posit2", "posit3"], "posit2": ["posit1", "posi
             "bgsit2": ["bgsit1", "bgsit2"], "podth1": ["podth1", "podth2", "podth3"],
             "podth2": ["podth1", "podth2", "podth3"], "podth3": ["podth1", "podth2", "podth3"],
             "bgdth1": ["bgdth1", "bgdth2"], "bgdth2": ["bgdth1", "bgdth2"]}
+# Les sons des armes du JOUEUR hors du bloc statique : la tronconneuse (P_BringUpWeapon sawup,
+# A_WeaponReady sawidl, A_Saw sawful / sawhit). Sur TOUTES les cartes, pas seulement celles ou elle
+# est posee : l'arsenal passe d'une carte a l'autre (doom_playerFinishLevel). Un lump absent du
+# WAD est ignore par dynamic_sounds.
+PLAYER_SOUNDS = ["sawup", "sawidl", "sawful", "sawhit"]
 MOBJ_SOUND_FIELDS = ("seesound", "attacksound", "painsound", "deathsound", "activesound")
 MOBJ_STATE_FIELDS = ("spawnstate", "seestate", "painstate", "meleestate", "missilestate",
                      "deathstate", "xdeathstate", "raisestate")
@@ -189,6 +194,8 @@ def sound_names_for(ids, mobj_types):
         for s in reachable_states(ids, mt):
             for n in ACTION_SOUNDS.get(states[s]["action"], ()):
                 wanted.add(n)
+    if 0 in mobj_types:                                # le joueur : les sons de SON arsenal
+        wanted.update(PLAYER_SOUNDS)
     for n in list(wanted):
         wanted.update(VARIANTS.get(n, ()))
     wanted -= set(STATIC_SOUNDS)

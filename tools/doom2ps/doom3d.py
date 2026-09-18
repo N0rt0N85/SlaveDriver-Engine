@@ -43,9 +43,9 @@ import gridparts                                       # noqa: E402
 import ordre                                           # noqa: E402
 import cout                                            # noqa: E402
 import doom_specials as sp                             # noqa: E402
-from geom3d import (Emitter, TILESIZE, CAP_CELLS, plane_of, area2,     # noqa: E402
+from geom3d import (Emitter, TILESIZE, CAP_CELLS, plane_of, area2, quad_point,     # noqa: E402
                     CELL_MIN_U, CELL_MAX_U, CELL_MIN_V, CELL_MAX_V, SECTOR_LIGHT,
-                    CELL_HARD_MAX, lire_optims)
+                    CELL_HARD_MAX, lire_optims, GROS_BLOC as geom3d_GROS_BLOC)
 
 SKYFLAT = "F_SKY1"
 EPS = 1e-6
@@ -81,6 +81,14 @@ PLAYER_FIT_HEIGHT = 56.0
 # Les portails d'un ascenseur sont recalcules en marche par doom_pbBlockBits (DOOM_GAME.C).
 PLAYER_STEP_HEIGHT = 24.0
 
+# Mur plus court que ca : son PLAN vient de la droite exacte qui le porte (l'etiquette d'adjacency),
+# pas de ses sommets. Les sommets sont arrondis a l'entier, et sur un mur d'une unite l'arrondi
+# choisit la direction : MESURE 2026-09-18, E1M2, le mur (-137, 759)-(-137, 760) d'un bord en
+# diagonale sortait VERTICAL, et le prolongement de son plan coupait le secteur 43 a 39 u d'un
+# imp -- pointInSectorP (SPRITE.C:940-960, qui teste TOUS les plans du secteur) le jugeait dehors.
+# A 8 u l'arrondi tourne encore le plan de 7 degres ; au-dela, le plan des sommets est le bon.
+MUR_COURT = 8.0
+
 # ----------------------------------------------------------------------------------------
 # geometrie MOBILE (--mobile) : portes fermees + course, push blocks (SPEC_CONVERTER 5.1)
 # ----------------------------------------------------------------------------------------
@@ -103,7 +111,7 @@ class MobileTag:
 
     def __init__(self, sector, kind, lower, upper):
         self.sector = sector            # secteur Doom
-        self.kind = kind                # 'door' | 'lift' | 'floor_*'
+        self.kind = kind                # 'door' | 'lift' | 'floor_*' | 'raise_*' (raise_floors)
         self.lower, self.upper = lower, upper
         # OBJETS mur (dicts de l'Emitter), pas des index : `emit_leaf` reordonne les murs d'une
         # feuille apres emission (portails en tete), donc un index note pendant l'emission est
@@ -118,6 +126,12 @@ class MobileTag:
     @property
     def throw(self):
         return self.upper - self.lower
+
+    @property
+    def monte(self):
+        """Emis EN HAUT, charge EN BAS : l'objet (OT_DOOM_FLOOR) descend le push block de la course
+        a la construction, donc l'etat du niveau a son chargement est `lower` (raise_floors)."""
+        return self.kind.startswith("raise_")
 
     def add_wall(self, w):
         if id(w) not in self._wset:
@@ -140,6 +154,21 @@ def close_doors(M, specials, slit=DOOR_SLIT):
             sects[d["sector"]] = s._replace(ceilh=s.floorh + slit)
             n += 1
     return n
+
+
+def raise_floors(M, specials):
+    """Monte les sols qui montent (doom_specials.RAISE) a leur DESTINATION dans la carte a emettre.
+
+    Un sol qui monte est emis comme un ASCENSEUR EN HAUT, qui descendrait de sa course : c'est la
+    geometrie que les ascenseurs d'E1M1 ont validee sur console -- parois de cage fixes que le sol
+    cache, dalles rigides chez les voisins plus bas, fente de portail sous un plafond voisin. Emis EN
+    BAS, les contremarches qui APPARAISSENT en montant n'existeraient pas (un quad de hauteur nulle
+    est rejete). L'objet OT_DOOM_FLOOR descend le push block de la course au chargement : le niveau
+    demarre dans l'etat du WAD. -> nombre de sols montes."""
+    sects = M["sectors"]
+    for r in specials.raises:
+        sects[r["sector"]] = sects[r["sector"]]._replace(floorh=r["upper"])
+    return len(specials.raises)
 
 
 # ----------------------------------------------------------------------------------------
@@ -286,6 +315,13 @@ PARTITION = "bsp"
 #               entre eux (tools/ordre.py) -- CORRIGE un defaut, elle n'ajoute aucun risque
 #   bandes    : les faces d'un mur sont rangees dans l'ordre ou weldFaceStrip sait les souder
 #               (tools/bandes.py) -- PERMUTATION pure, aucun sommet ne bouge, aucune face ne change
+#   sommets   : deux murs dont un coin tombe au meme endroit partagent ce sommet (Emitter.partager_
+#               coins) -- aucune geometrie ne bouge ; -40 Ko sur E1M1, -94 Ko sur E1M6 ; les
+#               sommets des push blocks et des grilles de faces restent a eux
+#   tuiles    : un niveau qui produit plus de tuiles que l'octet et la RAM ne lui en accordent en
+#               fond les variantes d'une meme texture, les plus semblables d'abord (tools/tuiles.py,
+#               applique par make_e1m1.budget_tuiles) -- un mur peut montrer le calage ou la hauteur
+#               d'un voisin, jamais une autre texture ; SANS EFFET sous le budget (E1M1)
 #
 # `fusion` EST dans le defaut depuis le 18-09, apres deux verdicts contraires qu'il faut garder
 # ecrits tous les deux. Elle enleve de l'information au moteur : les cordes du BSP ne portent
@@ -311,9 +347,14 @@ PARTITION = "bsp"
 # refuse une piece percee, `--cap-canal` refuse une piece qui demanderait un canal de plans de coupe
 # plus gros que le plus gros que Lobotomy ait livre. Et `--optim penombres,avalement,ordre` la
 # coupe : qui edite ses cartes a la main retrouve le decoupage exact du BSP.
-OPTIMS = ("penombres", "avalement", "fusion", "ordre", "bandes")
-OPTIM_DEFAUT = ("penombres", "avalement", "fusion", "ordre", "bandes")
+#   grossiers : DEGRADANTE, hors du defaut, demandee carte par carte (make_e1m1.OPTIM_CARTE) : les
+#               carres pleins d'un flat se peignent par blocs de GROS_BLOC x GROS_BLOC puis 2 x 2,
+#               une face par bloc, tuile etiree -- texel de 2 a 4 u, motif 2 a 4 fois plus grand
+#               (geom3d.Emitter._gros_carres). Pour la carte que ses sols empechent de tourner.
+OPTIMS = ("penombres", "avalement", "fusion", "ordre", "bandes", "sommets", "tuiles", "grossiers")
+OPTIM_DEFAUT = ("penombres", "avalement", "fusion", "ordre", "bandes", "sommets", "tuiles")
 OPTIM_ACTIFS = set(OPTIM_DEFAUT)
+GROS_BLOC = geom3d_GROS_BLOC               # plus gros bloc de `grossiers`, en carres de TILESIZE
 
 # Plafond de secteurs par canal de plans de coupe, quand `fusion` est active (gridparts.CAP_CANAL
 # documente le chiffre). Global de module, comme PARTITION : make_e1m1 recree un DoomConverter pour
@@ -488,6 +529,7 @@ class DoomConverter:
         if "avalement" not in OPTIM_ACTIFS:
             self.em.eps_avale = 0.0           # --optim : l'auteur refuse l'avalement des echardes
         self.em.bandes = "bandes" in OPTIM_ACTIFS
+        self.em.gros_carres = GROS_BLOC if "grossiers" in OPTIM_ACTIFS else 0
         self.cap = cap_cells
         self.sizes = sizes                    # {nom de texture: (w, h)}
         self.pic = {}                         # ("tex"|"flat", nom) -> picnum
@@ -528,17 +570,27 @@ class DoomConverter:
         # l'ordre de dessin du peintre, et c'est `troue()` + `cap` qui rendent la fusion sure
         # (gridparts.partition, et l'entete OPTIMS ci-dessus pour toute l'histoire).
         fusionner = self.partition == "grid" or "fusion" in OPTIM_ACTIFS
+        rings = adjacency.leaf_polygons(M)
+        # ce qu'une feuille du BSP deborde hors de son secteur retourne a son vrai secteur
+        # (adjacency.reattribuer_debords) -- avant la fusion, qui recollerait le debord
+        rings, secs, membres, debords = adjacency.reattribuer_debords(M, rings, sub_sector)
+        if debords:
+            self.stats["feuilles_debordantes_coupees"] += debords
         if fusionner:
-            rings = adjacency.leaf_polygons(M)
-            parts = gridparts.partition(M, rings, sub_sector, self._ring_in_map,
-                                        g=64 if self.partition == "grid" else None, cap=CAP_CANAL)
-            self.fpolys, self.boundary = adjacency.build(M, polys=[r for r, _, _ in parts])
-            self.leaf_sector = [s for _, s, _ in parts]
-            self.members = [m for _, _, m in parts]
+            parts = gridparts.partition(M, rings, secs, self._ring_in_map,
+                                        g=64 if self.partition == "grid" else None, cap=CAP_CANAL,
+                                        membres=membres)
         else:
-            self.fpolys, self.boundary = adjacency.build(M)
-            self.leaf_sector = sub_sector
-            self.members = [[si] for si in range(len(sub_sector))]
+            parts = list(zip(rings, secs, membres))
+        # Un morceau trop grand pour UN sol (gridparts.CAP_PLAT : slave et vCalc[700]) part en
+        # plusieurs morceaux. Ce n'est pas une optimisation : sans cela le moteur ecrit hors de
+        # vCalc. adjacency.build(M, polys=leaf_polygons(M)) est adjacency.build(M) a l'octet pres.
+        parts, coupes = gridparts.decouper_gros(parts)
+        if coupes:
+            self.stats["morceaux_trop_gros_coupes"] += coupes
+        self.fpolys, self.boundary = adjacency.build(M, polys=[r for r, _, _ in parts])
+        self.leaf_sector = [s for _, s, _ in parts]
+        self.members = [m for _, _, m in parts]
         self._pieces_of_leaf = defaultdict(list)
         for li, m in enumerate(self.members):
             for si in m:
@@ -695,13 +747,24 @@ class DoomConverter:
         return sec.ceilpic == SKYFLAT
 
     def emit_wall(self, P, Q, bot, top, *, next_sector, tex, picnum, light, invisible,
-                  centre=None, mob=None, open_height=None):
+                  centre=None, mob=None, open_height=None, droite=None):
         """Emet un mur vertical. `mob` = [(MobileTag, 'top'|'bottom')] : les sommets de cette
         arete rejoignent le push block ; `open_height` : la tuile des cellules est refaite pour
         cette hauteur (etat OUVERT d'un mur qui grandit : rails de porte, contremarche d'ascenseur).
+        `droite` : l'etiquette (a, b, c) de la droite qui porte l'arete (voir MUR_COURT).
         Retourne la liste des index de murs emis (un mur trop grand est decoupe)."""
         if top - bot <= 0:
             return []
+        normale = None
+        if droite is not None and centre is not None and math.dist(P, Q) < MUR_COURT:
+            # orientee vers le centre du morceau (convexe, donc du bon cote de SA droite), et non
+            # d'apres le quad arrondi, qui ment justement sur ces murs
+            h = math.hypot(droite[0], droite[1]) or 1.0
+            nx, nz = droite[0] / h, droite[1] / h
+            if nx * (centre[0] - (P[0] + Q[0]) / 2.0) + nz * (centre[1] - (P[1] + Q[1]) / 2.0) < 0:
+                nx, nz = -nx, -nz
+            normale = (nx, nz)
+            self.stats["murs_courts_plan_exact"] += 1
         quad = [(P[0], top, P[1]), (Q[0], top, Q[1]),
                 (Q[0], bot, Q[1]), (P[0], bot, P[1])]
         pl = plane_of(quad)
@@ -722,7 +785,7 @@ class DoomConverter:
                 self.stats["quads_retournes"] += 1
         idx = self.em.add_wall(quad, next_sector=next_sector, picnum=picnum,
                                invisible=invisible, blocked=(next_sector < 0), light=light,
-                               cap_cells=self.cap, stats=self.stats, tex=tex)
+                               cap_cells=self.cap, stats=self.stats, tex=tex, normale=normale)
         if tex is not None and tex.get("uwin"):
             rec = self.uwin_use[tex["uwin_id"]]
             rec[0] += (top - bot) * math.dist(P, Q) * (tex["squash"] - 1.0)
@@ -1009,14 +1072,22 @@ class DoomConverter:
         if cnt == 0:
             self.stats["secteurs_vides"] += 1
             cnt = 1
+        # floorLevel est l'etat CHARGE : les things s'y posent (things2objects) et post_flags s'y
+        # mesure. Un sol qui monte est emis en haut mais charge en bas (MobileTag.monte).
+        niveau = (lvl // nl) if nl else fh
+        if ms is not None and ms.monte:
+            niveau = ms.lower
         self.em.sectors.append(dict(
             object=0, center=[acc[0] // cnt, acc[1] // cnt, acc[2] // cnt],
-            floorLevel=(lvl // nl) if nl else fh,
+            floorLevel=niveau,
             firstWall=first, lastWall=last, light=SECTOR_LIGHT, flags=0,
             cutIndex=0, cutChannel=0, pad=0))
 
     def emit_edge(self, leaf, P, Q, tag, ta, tb, nb, sec, fh, ch, light, cen):
         M = self.M
+
+        def emit_wall(*args, **kw):          # tous les murs de l'arete portent SA droite (MUR_COURT)
+            return self.emit_wall(*args, droite=tag, **kw)
         sg = self.seg_on_edge(leaf, tag, ta, tb)
         nbi = self.remap.get(nb, -1) if nb is not None and nb >= 0 else -1
 
@@ -1040,6 +1111,13 @@ class DoomConverter:
         # ni linteau (8 sur E1M1 : les tranches du chemin au-dessus du nukage, flanc d'ascenseur).
         if sg is None and not same:
             sg = self.seg_near(leaf, P, Q, other=self.leaf_sector[nb] if nbi >= 0 else None)
+            if sg is None and math.dist(P, Q) < MUR_COURT:
+                # Arete COURTE : le chanfrein qu'une ligne de noeud taille en passant a moins de 3 u
+                # d'un coin. Ses deux bouts ne sont pas a 1,5 u d'un MEME linedef, et elle sortait
+                # en mur plein INVISIBLE -- MESURE 2026-09-18, E1M7, coin (-64, -1792) du secteur
+                # Doom 129 : 4,5 u d'ou l'on voyait le vide. A 3 u elle prend le mur du coin.
+                sg = self.seg_near(leaf, P, Q, tol=3.0,
+                                   other=self.leaf_sector[nb] if nbi >= 0 else None)
             if sg is not None:
                 self.stats["bords_rattrapes_par_linedef"] += 1
             elif nbi >= 0:
@@ -1056,11 +1134,11 @@ class DoomConverter:
             # arete de partition pure : portail plein, invisible
             if nbi < 0:
                 self.stats["bords_de_carte"] += 1
-                self.emit_wall(P, Q, fh, ch, next_sector=-1, tex=None,
+                emit_wall(P, Q, fh, ch, next_sector=-1, tex=None,
                                picnum=self.picnum("tex", "-"), light=light, invisible=True,
                                centre=cen, mob=own(fh, ch))
             else:
-                self.emit_wall(P, Q, fh, ch, next_sector=nbi, tex=None, picnum=0,
+                emit_wall(P, Q, fh, ch, next_sector=nbi, tex=None, picnum=0,
                                light=light, invisible=True, centre=cen, mob=own(fh, ch))
                 self.stats["portails_chord"] += 1
             return
@@ -1116,7 +1194,7 @@ class DoomConverter:
             mid = (fh + h) if pegbot else ch
             v = ((mid - top_) % h) + yoff
             tex, pic = self.wall_tex(name, top_ - bot_, v, cadre)
-            idx = self.emit_wall(P, Q, bot_, top_, next_sector=-1, tex=tex, picnum=pic,
+            idx = emit_wall(P, Q, bot_, top_, next_sector=-1, tex=tex, picnum=pic,
                                  light=light, invisible=False, centre=cen, mob=mob)
             self._note_switch(sg, leaf, idx, name, fh, ch, P, Q)
             self.stats["murs_pleins"] += 1
@@ -1136,18 +1214,22 @@ class DoomConverter:
         mn_door = mn is not None and mn.kind == "door"
 
         lift_self = ms is not None and ms.kind != "door" and not same
-        if lift_self and nfh > ms.lower:
+        if lift_self and nfh > ms.lower and not mn_lift:
             # paroi de la cage vue DE l'ascenseur une fois descendu : fixe du bas de course au sol
             # du voisin. Doom ancre cette texture `lower` au sol du voisin (defaut) ou a notre
             # plafond (DONTPEGBOTTOM), deux bords fixes ; notre sol cache ce qui est dessous.
             # Remplace la contremarche dont le bas suivait le sol (etiree en descendant) et la
             # fente de 1 u du cote voisin (tournee vers le voisin, jamais vue de la cage).
+            # Contre un voisin qui BOUGE aussi, le haut de cette paroi n'est plus fixe : c'est la
+            # contremarche ci-dessous, bas avec nous, haut avec lui. MESURE 2026-09-18 : sans ce
+            # garde, deux sols qui montent ensemble (E1M3, secteurs 48 et 49) et chaque marche
+            # d'un escalier se dressaient au chargement un mur de toute leur course (120 u).
             name = side.lower if side and side.lower != "-" else "BROWN1"
             h = self.tex_h(name)
             hb = min(nfh, ch)
             v = ((ch - hb) % h if pegbot else 0) + yoff
             tex, pic = self.wall_tex(name, hb - ms.lower, v, cadre)
-            idx = self.emit_wall(P, Q, ms.lower, hb, next_sector=-1, tex=tex, picnum=pic,
+            idx = emit_wall(P, Q, ms.lower, hb, next_sector=-1, tex=tex, picnum=pic,
                                  light=light, invisible=False, centre=cen, mob=None)
             self._note_switch(sg, leaf, idx, name, ms.lower, hb, P, Q)
             self.stats["parois_cage"] += 1
@@ -1163,7 +1245,7 @@ class DoomConverter:
                 # plate-forme voisine plus haute que nous : Doom ancre la texture a SON sol, qui
                 # descend -> dalle rigide, ce qui passe sous notre sol est cache par lui
                 mob.append((mn, "top") if ms is not None else (mn, "rigid"))
-            idx = self.emit_wall(P, Q, fh, hb, next_sector=-1, tex=tex, picnum=pic,
+            idx = emit_wall(P, Q, fh, hb, next_sector=-1, tex=tex, picnum=pic,
                                  light=light, invisible=False, centre=cen, mob=mob)
             self._note_switch(sg, leaf, idx, name, fh, hb, P, Q)
             self.stats["contremarches"] += 1
@@ -1195,22 +1277,23 @@ class DoomConverter:
                 mid = ch if pegtop else hb + h
                 v = ((mid - top_) % h) + yoff
                 tex, pic = self.wall_tex(name, top_ - hb, v, cadre)
-                idx = self.emit_wall(P, Q, hb, top_, next_sector=-1, tex=tex, picnum=pic,
+                idx = emit_wall(P, Q, hb, top_, next_sector=-1, tex=tex, picnum=pic,
                                      light=light, invisible=False, centre=cen, mob=mob)
                 self._note_switch(sg, leaf, idx, name, hb, top_, P, Q)
                 self.stats["linteaux"] += 1
 
         if top > bot and nbi >= 0:
             mob = own(bot, top)
-            if lift_self and nfh >= fh:
-                # voisin au niveau de la plate-forme (ou plus haut) : le bas de l'ouverture est
-                # son sol, fixe ; la paroi de cage ci-dessus bouche ce qui passe dessous
+            if lift_self and nfh >= fh and not mn_lift:
+                # voisin FIXE au niveau de la plate-forme (ou plus haut) : le bas de l'ouverture est
+                # son sol, fixe ; la paroi de cage ci-dessus bouche ce qui passe dessous. Un voisin
+                # qui bouge avec nous (meme sol) : le bas suit notre sol.
                 mob = [m for m in mob if m[0] is not ms]
             if mn_door and top == nch:
                 mob.append((mn, "top"))
             if mn_lift and bot == nfh and nfh > fh:
                 mob.append((mn, "bottom"))
-            idx = self.emit_wall(P, Q, bot, top, next_sector=nbi, tex=None, picnum=0,
+            idx = emit_wall(P, Q, bot, top, next_sector=nbi, tex=None, picnum=0,
                                  light=light, invisible=True, centre=cen, mob=mob)
             if ld.flags & 0x0020:                      # ML_SECRET : un monstre ne l'ouvre pas
                 for wi in idx:
@@ -1227,7 +1310,7 @@ class DoomConverter:
             # avec l'ascenseur. Le linteau au-dessus est deja emis et reste fixe.
             mob = ([(ms, "bottom")] if (ms is not None and ms.kind != "door" and bot == fh)
                    else []) + ([(mn, "bottom")] if (mn_lift and bot == nfh) else [])
-            self.emit_wall(P, Q, bot - DOOR_SLIT, bot, next_sector=nbi, tex=None, picnum=0,
+            emit_wall(P, Q, bot - DOOR_SLIT, bot, next_sector=nbi, tex=None, picnum=0,
                            light=light, invisible=True, centre=cen, mob=mob)
             self.stats["portails_fente"] += 1
         elif top <= bot:
@@ -1237,19 +1320,26 @@ class DoomConverter:
             h = self.tex_h(name)
             v = ((h - (ch - fh)) % h if pegbot else 0) + yoff
             tex, pic = self.wall_tex(name, ch - fh, v, cadre)
-            idx = self.emit_wall(P, Q, fh, ch, next_sector=-1, tex=tex, picnum=pic,
+            idx = emit_wall(P, Q, fh, ch, next_sector=-1, tex=tex, picnum=pic,
                                  light=light, invisible=False, centre=cen, mob=own(fh, ch))
             self._note_switch(sg, leaf, idx, name, fh, ch, P, Q)
             self.stats["ouvertures_fermees"] += 1
 
     def post_flags(self):
         W, S, V = self.em.walls, self.em.sectors, self.em.vertices
+        # drapeaux de l'etat CHARGE : les sommets d'un sol qui monte sont emis `throw` plus haut
+        # (raise_floors) ; doom_pbBlockBits (DOOM_GAME.C) les recalcule ensuite a chaque pas
+        charge = {}
+        for t in self.mobile.values():
+            if t.monte:
+                for vi in t.verts:
+                    charge[vi] = -t.throw
         for s in S:
             for wi in range(s["firstWall"], s["lastWall"] + 1):
                 w = W[wi]
                 if w["nextSector"] == -1 or w["normal"][1] != 0:
                     continue
-                ys = [V[i]["y"] for i in w["v"]]
+                ys = [V[i]["y"] + charge.get(i, 0) for i in w["v"]]
                 h = max(ys) - min(ys)
                 if 1.0 < h < PLAYER_FIT_HEIGHT:
                     w["flags"] |= 0x1000                # SHORTOPENING
@@ -1260,6 +1350,20 @@ class DoomConverter:
                 if s["floorLevel"] - S[w["nextSector"]]["floorLevel"] > PLAYER_STEP_HEIGHT:
                     w["flags"] |= 0x800                 # CLIFFBNDRY : chute > 24 (monstres)
                     self.stats["cliffbndry"] += 1
+        # Un sol mobile FERME au chargement (sol = plafond dans le WAD : le mur que la mort des
+        # Barons abaisse sur E1M8, tag 666) ne s'ouvre qu'une fente de 1 u, par ou le moteur
+        # traversait tout ce qui est derriere (WALLS.C:2138). MESURE 18-09 sur E1M8 : l'ordre du
+        # peintre y voyait 118 secteurs de plus -- 81 % de positions fautives contre 0 %, et la
+        # conversion manquait de memoire. BLOCKSSIGHT (0x08, le drapeau des murs explosables de
+        # PowerSlave, AICOMMON.C:486) arrete le rendu, l'ordre (tools/ordre.py) et la ligne de vue
+        # (HITSCAN.C:289) ; DOOM_GAME.C l'enleve des portails du push block quand le sol part.
+        Ms = self.M["sectors"]
+        for t in self.mobile.values():
+            if t.kind.startswith("floor_") and Ms[t.sector].floorh >= Ms[t.sector].ceilh:
+                for w in t.walls:
+                    if w["nextSector"] >= 0 and w["normal"][1] == 0:
+                        w["flags"] |= 0x08
+                        self.stats["portails_fermes_a_la_vue"] += 1
 
     def choisir_fenetres(self, budget):
         """Les linedefs a fenetrer, par gain (aire x ecrasement evite) par tuile NOUVELLE, tant que
@@ -1306,6 +1410,15 @@ class DoomConverter:
         if self.mobile or self.switch_lines:
             self.finalize_mobile()
         self.anims = [[self.em._tile_index[k] for k in fam] for fam in self.anim_keys]
+        if "sommets" in OPTIM_ACTIFS:
+            # coins partages (Emitter.partager_coins) ; les sommets des push blocks restent a eux
+            mobiles = set()
+            for t in self.mobile.values():
+                mobiles |= t.verts
+            remap, n = self.em.partager_coins(mobiles)
+            for t in self.mobile.values():
+                t.verts = {remap[i] for i in t.verts}
+            self.stats["sommets_partages"] += n
         return self.em
 
     # -- mobile : interrupteurs et compaction des tuiles -----------------------------------
@@ -1314,11 +1427,22 @@ class DoomConverter:
         cherche `level_texture[t] == ourTile` dans les murs de `sectorNm`, AI2.C:606-632) et la
         tuile ON existe pour l'animation. On donne au mur de l'interrupteur une cle de tuile
         DEDIEE (cle E4.1c + marqueur 'sw') et on fabrique la cle ON (SW2xxx) de la meme cellule ;
-        doomtiles.py lit `key[0], key[5], key[6]` et ignore le reste. Un type OT_SW1..4 par paire
-        (OFF, ON) : `level_sequenceMap[type]` est la seule sequence d'un type (AI2.C:598)."""
+        doomtiles.py lit `key[0], key[5], key[6]` et ignore le reste. Un type par paire (OFF, ON) :
+        `level_sequenceMap[type]` est la seule sequence d'un type (AI2.C:598)."""
         em = self.em
         pos = {id(w): i for i, w in enumerate(em.walls)}
-        pairs = {}
+        # (tuile de la cellule, texture ON) -> type. C'est ce qui distingue une paire, et on le
+        # connait AVANT d'allouer quoi que ce soit : une paire refusee ne laisse ni tuile ni picnum.
+        types = {}
+        # Chaque type est UNE apparence -- l'objet cherche sa tuile OFF sur les murs de son secteur
+        # et s'y accroche (AI2.C:606-634, `assert(this->tilePos)`), donc meme un interrupteur qui ne
+        # change pas de texture consomme un type. Le moteur en a quatre, le jeu Doom 23 de plus
+        # (doom_specials.OT_SWITCH_TYPES). Au-dela on REFUSE l'interrupteur au lieu d'arreter la
+        # conversion : le critere `interrupteurs_types_disponibles` echoue alors, le .LEV n'est pas
+        # ecrit, mais tous les autres criteres ont parle.
+        self.interrupteurs_refuses = []
+        V = em.vertices
+        pris = set()                          # (feuille, apparence, k) deja accroches
         for line, hits in sorted(self.switch_hits.items()):
             info = self.switch_lines[line]
             cand = [h for h in hits if h["name"].startswith(("SW1", "SW2"))] or hits
@@ -1340,31 +1464,48 @@ class DoomConverter:
                 off_name = self.picnames[key[0]][1]
                 on_name = ("SW2" + off_name[3:]) if off_name.startswith("SW1") else (
                     ("SW1" + off_name[3:]) if off_name.startswith("SW2") else off_name)
+                # Deux interrupteurs de MEME apparence dans la meme feuille trouveraient la meme
+                # cellule (constructSwitch prend la premiere) : le second recoit une tuile, donc un
+                # type, a lui. MESURE 2026-09-18 : E1M3 en a trois dans une feuille.
+                k = 0
+                while (h["leaf"], key, on_name, k) in pris:
+                    k += 1
+                cle = (key, on_name, k)
+                if cle not in types and len(types) >= len(sp.OT_SWITCH_TYPES):
+                    self.stats["interrupteurs_sans_type"] += 1
+                    self.interrupteurs_refuses.append("ligne %d %s %s" % (line, off_name, key[1:]))
+                    continue
+                pris.add((h["leaf"], key, on_name, k))
+                marque = ("sw",) if k == 0 else ("sw", k)
                 p_on = self.picnum("tex", on_name)
-                off_key = key + ("sw",)
-                on_key = (p_on,) + key[1:] + ("sw",)
+                off_key = key + marque
+                on_key = (p_on,) + key[1:] + marque
                 t_off = em.tile(off_key)
                 t_on = em.tile(on_key)
-                for c in range(n):
-                    em.texture[w["textures"] + 2 * c + 1] = t_off
-                pair = (t_off, t_on)
-                if pair not in pairs:
-                    if len(pairs) >= 4:
-                        raise SystemExit("plus de 4 paires de tuiles d'interrupteur : "
-                                         "OT_SW1..OT_SW4 seulement (SLEVEL.H)")
-                    pairs[pair] = sp.OT_SW1 + len(pairs)
                 # orifice : milieu du mur, a hauteur d'oeil (le press mesure < 40 u depuis le
                 # POINT D'IMPACT du rayon, SRUINS.C:843-853 ; l'oeil est a sol + 41)
                 P, Q = h["P"], h["Q"]
                 oy = h["bot"] + sp.PLAYER_EYE
                 oy = max(h["bot"], min(h["top"], oy))
+                orifice = [int(round((P[0] + Q[0]) / 2.0)), int(oy), int(round((P[1] + Q[1]) / 2.0))]
+                # UNE cellule porte la tuile OFF : constructSwitch s'accroche a la premiere qu'il
+                # trouve et n'anime qu'elle (tilePos, AI2.C:613-627). La poser sur toutes les
+                # cellules d'un mur long la rendait non unique dans la feuille (critere 16 de
+                # verif_doom : 2 et 3 occurrences sur E1M2 et E1M3). On la pose sur la cellule la
+                # plus proche de l'orifice ; les autres gardent leur tuile, la meme image, qui ne
+                # bascule pas.
+                tl, th = w["tileLength"], w["tileHeight"]
+                quad = [(V[i]["x"], V[i]["y"], V[i]["z"]) for i in w["v"]]
+                c = min(range(n), key=lambda c_: math.dist(
+                    quad_point(quad, (c_ % tl + 0.5) / tl, (c_ // tl + 0.5) / th), orifice))
+                em.texture[w["textures"] + 2 * c + 1] = t_off
+                if cle not in types:
+                    types[cle] = sp.OT_SWITCH_TYPES[len(types)]
                 self.switches.append(dict(
                     line=line, channel=info["channel"], special=info["special"],
                     leaf=h["leaf"], leaf_sector=self.remap[h["leaf"]], wall=wi,
-                    tile_off=t_off, tile_on=t_on, type=pairs[pair],
-                    texture_off=off_name, texture_on=on_name,
-                    orifice=[int(round((P[0] + Q[0]) / 2.0)), int(oy),
-                             int(round((P[1] + Q[1]) / 2.0))]))
+                    tile_off=t_off, tile_on=t_on, type=types[cle],
+                    texture_off=off_name, texture_on=on_name, orifice=orifice))
                 self.stats["interrupteurs"] += 1
         for line in self.switch_lines:
             if line not in self.switch_hits:
@@ -1483,6 +1624,12 @@ def check(em, conv):
     put("voisins_reciproques",
         all(0 <= w["nextSector"] < len(em.sectors) for w in em.walls if w["nextSector"] >= 0),
         n=sum(1 for w in em.walls if w["nextSector"] >= 0))
+
+    # Une apparence d'interrupteur par type, et doom_specials.OT_SWITCH_TYPES en offre 27 (voir
+    # `finalize_mobile`). Un interrupteur refuse est un mur qu'on ne peut plus presser.
+    refus = getattr(conv, "interrupteurs_refuses", [])
+    put("interrupteurs_types_disponibles", not refus, n=len(refus), types=len(sp.OT_SWITCH_TYPES),
+        exemples=refus[:6])
     return crit
 
 
@@ -1631,7 +1778,7 @@ def open_doors(M):
 
 
 def main(argv=None):
-    global PARTITION, OPTIM_ACTIFS, CAP_CANAL   # make_e1m1 recree un DoomConverter : memes choix
+    global PARTITION, OPTIM_ACTIFS, CAP_CANAL, GROS_BLOC   # make_e1m1 recree un DoomConverter
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--wad", default=os.path.join(os.path.dirname(ROOT), "Mimas", "cd", "data",
                                                   "DOOM1.WAD"))
@@ -1662,12 +1809,16 @@ def main(argv=None):
                          "du moteur est MAXCUTSECTORS=%d pour le niveau entier). Plus haut = plus "
                          "de fusions, mais le tri du moteur est une insertion en une passe."
                          % (CAP_CANAL, MAXCUTSECTORS))
+    ap.add_argument("--gros-bloc", type=int, default=GROS_BLOC,
+                    help="avec `--optim ...,grossiers` : plus gros bloc, en carres de %d u (defaut %d)"
+                         % (TILESIZE, GROS_BLOC))
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
     if a.partition:
         PARTITION = a.partition          # module : build_objects (make_e1m1) doit decouper pareil
     OPTIM_ACTIFS = lire_optim(a.optim)   # idem : make_e1m1 recree un DoomConverter
     CAP_CANAL = a.cap_canal              # idem
+    GROS_BLOC = a.gros_bloc              # idem
 
     W = wadmod.Wad(a.wad)
     M = wadmod.read_map(W, a.map)
@@ -1680,22 +1831,27 @@ def main(argv=None):
     if a.mobile and not a.static_doors:
         specials = sp.specials_of(M)
         nportes = close_doors(M, specials)
+        raise_floors(M, specials)
+        mobiles = specials.doors + specials.lifts + specials.floors + specials.raises
         tags = {}
-        for d in specials.doors + specials.lifts + specials.floors:
+        for d in mobiles:
             tags[d["sector"]] = MobileTag(d["sector"], d["kind"], d["lower"], d["upper"])
         print(f"  mobile : {len(specials.doors)} portes fermees (fente {DOOR_SLIT} u, {nportes} "
               f"plafonds abaisses), {len(specials.lifts)} ascenseurs, {len(specials.floors)} sols, "
+              f"{len(specials.raises)} sols qui montent (emis en haut), "
+              f"{len(specials.teleports)} lignes de teleporteur, "
               f"{len(specials.wswitch)} lignes W, {len(specials.sswitch)} lignes S, "
               f"{len(specials.exits)} sorties, {len(specials.damage)} secteurs a degats"
               + (f" ; ignores : {specials.ignored}" if specials.ignored else ""))
-        for d in specials.doors + specials.lifts + specials.floors:
+        for d in mobiles:
             print(f"    secteur {d['sector']:3d} {d['kind']:13s} course {d['lower']} .. {d['upper']}"
-                  f" ({d['upper'] - d['lower']} u)")
+                  f" ({d['upper'] - d['lower']} u)" + (" -- arrete a la fente sous son plafond"
+                                                        if d.get("fente") else ""))
         switch_lines = {s["line"]: s for s in specials.sswitch}
         def mk(u=None):
             nonlocal tags                       # un MobileTag accumule les murs de SON passage
             tags = {d["sector"]: MobileTag(d["sector"], d["kind"], d["lower"], d["upper"])
-                    for d in specials.doors + specials.lifts + specials.floors}
+                    for d in mobiles}
             return DoomConverter(M, sizes, a.cap_cells, mobile=tags, switch_lines=switch_lines,
                                  uwin=u)
     else:
@@ -1761,18 +1917,21 @@ def main(argv=None):
     # assemble.py recalcule px, pz depuis build_xy : px = bx // 8, pz = -(by // 8)
     build_xy = [int(st.x) * 8, -int(st.y) * 8]
     # Angle. `suckSpriteParams` fait `angle = normalizeAngle(short * 5760)` (OBJECT.C:194) et
-    # F(90) = 5898240 = 1024 * 5760, donc **l'unite du .LEV est 360/4096 de degre**. Et l'init du
-    # joueur retire 90 degres (`angle - F(90)`, AI.C:51), qu'il faut donc ajouter ici.
-    # Doom : 0 = est, sens trigonometrique ; nous : vel.x = cos(angle), vel.z = sin(angle)
-    # (AI.C:528-529) avec Z = +y_doom = nord -> meme sens, pas de correction de repere.
-    angle = int(round(((st.angle + 90) % 360) * 4096.0 / 360.0))
+    # F(90) = 5898240 = 1024 * 5760, donc **l'unite du .LEV est 360/4096 de degre**.
+    # Doom : 0 = est, sens trigonometrique ; un sprite : vel.x = cos(angle), vel.z = sin(angle)
+    # (AI.C:528-529) avec Z = +y_doom = nord -> meme sens, l'angle Doom s'ecrit tel quel. L'init du
+    # joueur retire 90 degres (`angle - F(90)`, AI.C:51) pour passer a la convention de la CAMERA
+    # (regard (-sin yaw, cos yaw), SRUINS.C:389) : il ne faut PAS les ajouter ici -- le +90 d'avant
+    # faisait arriver le joueur tourne de 90 degres a gauche (console, 2026-09-18).
+    angle = int(round((st.angle % 360) * 4096.0 / 360.0))
 
     crit = check(em, conv)
     crit["depart_present"] = dict(ok=True, depart=dict(sector_gen1=sect, build_xy=build_xy,
                                                        angle_doom=st.angle, angle_lev=angle,
                                                        feuille=lf))
     out = dict(format="doom2ps/e3-geom3d v1",
-               source=dict(wad=os.path.basename(a.wad), map=a.map, optim=sorted(OPTIM_ACTIFS)),
+               source=dict(wad=os.path.basename(a.wad), map=a.map, optim=sorted(OPTIM_ACTIFS),
+                           **(dict(gros_bloc=GROS_BLOC) if "grossiers" in OPTIM_ACTIFS else {})),
                conventions=dict(repere="X = x_doom, Y = z_doom, Z = y_doom (1:1)",
                                 morceaux="feuilles du BSP du WAD",
                                 tuile=f"TILESIZE {TILESIZE}",
