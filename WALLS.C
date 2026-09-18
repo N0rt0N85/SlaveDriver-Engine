@@ -22,6 +22,7 @@
 #include "profile.h"
 #include "wallasm.h"
 #include "gamestat.h"
+#include "v_blank.h"
 
 #define WATER 1
 #define WAVYWATER 0
@@ -2640,6 +2641,13 @@ volatile int slaveJob;         /* 0 = draw, 1 = traverse */
    k.  Written through the cache-through alias, so the master reads it live. */
 volatile int slaveStep;
 #define SLAVESTEP (*(volatile int *)((int)&slaveStep|0x20000000))
+/* GCC14: what the servo measures (drawWallsFinish), in hblank lines (V_BLANK.C htimer): the line
+   the slave was kicked on, and the line it finished its share on -- the slave reads htimer and
+   writes it through the cache-through alias */
+static int kickLine;
+static volatile int slaveDone;
+#define SLAVEDONE (*(volatile int *)((int)&slaveDone|0x20000000))
+#define HTIMER    (*(volatile int *)((int)&htimer|0x20000000))
 static MthMatrix pipeMatrix;   /* copie stable : viewTransform sera depile entre-temps */
 static int pipeInFlight;
 static int pipeDone;
@@ -2806,7 +2814,9 @@ void wallRenderSlaveMain(void)
      if (job==1)
 	wallsTraverse(&pipeMatrix,1);
      else
-	slaveDraw();
+	{slaveDraw();
+	 SLAVEDONE=HTIMER;      /* the servo's gap, drawWallsFinish */
+	}
      *(Uint16 volatile *)0x21800000=0xffff;
      if (job==2)
 	{/* split screen: its share of view 0 is signalled; now the views queued behind it.
@@ -3008,6 +3018,7 @@ int slaveSize=1;
    drawWallsFinish, views 1.. run nothing: a single servo for all of them never settled, and the
    master waited for the slave (Slave Wait) in every view but the first. */
 static int slaveSplit[MPMAX]={1,1,1,1},wallsView;
+static signed char splitTrend[MPMAX];   /* the sign of each view's last correction (the servo) */
 /* --- GCC14: TRAVERSAL half ----------------------------------------------------------
    Split from the DRAW half so it can run on the slave, in the tail of the PREVIOUS frame
    (WALLPIPE).  Writes only sectorDraw[], updateList[], drawList[], doorwayCache and
@@ -3360,6 +3371,7 @@ void drawWalls(int k,MthMatrix *view)
     {TRAVDONE=0;
      travKicked=1;
     }
+ kickLine=htimer;
  *(Uint16 volatile *)0x21000000=0xffff; CFG_PROF("Master Draw");
  for (i=updateListSize-1;i>slaveDrawStart;i--)
     {parms[0].x=updateList[i]->xmin+viewCx;parms[0].y=updateList[i]->ymin+viewCy;
@@ -3388,17 +3400,36 @@ void drawWalls(int k,MthMatrix *view)
 
 
 void drawWallsFinish(void)
-{int i;
+{int i,arrive,dir;
  /* wait for slave to finish */
+ arrive=htimer;
  i=0; CFG_PROF("Slave Wait");
  while (!(*FTCSR & 0x80))
     i++;
  /* sync */
  *FTCSR=0x0; CFG_PROF_END();
- if (i>100 && slaveSize>0)
-    slaveSize--;
- if (i<100 && slaveSize<50)
-    slaveSize++;
+ /* GCC14: the servo moved the split one sector an image: after a turn the master waited 6-14 ms
+    an image for the slave, image after image (split screen, console 2026-09-18).  A gap that
+    keeps its sign from one image to the next is now closed by a share of itself: half of it is
+    the work to move, and the slave's lines over its sectors price a sector.  That is the slave's
+    average, and it holds the nearest, heaviest sectors: the step falls short of the boundary
+    rather than past it.  A gap that changes sign -- view 0's logic, one tic or two -- keeps the
+    one-sector step. */
+ dir=(i>100)? -1: (i<100)? 1: 0;
+ if (dir)
+    {int step=1,busy=SLAVEDONE-kickLine,gap=SLAVEDONE-arrive;
+     if (dir==splitTrend[wallsView] && busy>0)
+	{step=(abs(gap)*(slaveSize+1))/(busy<<1);
+	 if (step<1)
+	    step=1;
+	}
+     splitTrend[wallsView]=dir;
+     slaveSize+=dir*step;
+     if (slaveSize<0)
+	slaveSize=0;
+     if (slaveSize>50)
+	slaveSize=50;
+    }
  slaveSplit[wallsView]=slaveSize;
  CFG_PROF("Slave Cmds"); drawSlaveWalls(); CFG_PROF_END();
 #ifndef NDEBUG
