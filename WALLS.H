@@ -28,6 +28,9 @@ extern int nmMeshPolys;   /* cells from the mesh path: floors, ceilings, curved 
 extern int lodWeldWhy[2]; /* welds refused: [0] off the strip, [1] vertex off the edge */
 
 int vdp1NmClipped;  /* cells V-windowed in the frame: replaces the cx/cy maxima */
+/* GCC14: PROBE (STATUSTEXT) -- the VDP1's walk over the frame's cells, WALLASM.H
+   vdp1WalkProbe: all cells / the cells over VDP1BIGWALK, in units of 64 pixels */
+int vdp1Walk,vdp1Big,vdp1BigWalk;
 
 int vdp1MaxCoord;   /* kept for display compatibility */
 int vdp1MaxX,vdp1MaxY;  /* separate: says WHICH AXIS leaves the range */

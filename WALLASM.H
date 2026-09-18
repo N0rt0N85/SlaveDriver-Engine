@@ -35,6 +35,56 @@ static __inline__ XyInt *probeVDP1(XyInt *poly)
  return poly;
 }
 
+/* GCC14: PROBE (STATUSTEXT) -- what the VDP1 steps through for a cell, changes nothing.  A
+   distorted sprite, like a polygon, is drawn as lines from edge A-D to edge B-C: as many lines
+   as the longer of those two edges has pixels, each as long as the quad is wide there,
+   anti-aliased (|dx|+|dy| pixels).  The clipping drops the WRITE of a pixel outside the window,
+   not its step (HW_VDP1.md section 7).  Pre-clipping (Pclp = 0 on every cell) skips a line whose
+   two ends lie beyond the same side of the window.
+     vdp1Walk     every cell: lines x the wider of A-B and D-C
+     vdp1Big      the cells whose count passes VDP1BIGWALK, a quarter of the 3D window ...
+     vdp1BigWalk  ... re-counted on 16 of their lines with the pre-clip applied
+   Units of 64 pixels.  The window is the view's, not the sector box of RECTCLIP: a line only
+   that box would pre-clip still counts. */
+#ifdef STATUSTEXT
+#define VDP1BIGWALK 16384
+static __inline__ int vdp1Abs(int a)
+{return a<0? -a: a;
+}
+
+static __inline__ void vdp1WalkProbe(XyInt *q)
+{int ad,bc,ab,dc,lines,len,walk,j;
+ ad=vdp1Abs(q[3].x-q[0].x); j=vdp1Abs(q[3].y-q[0].y); if (j>ad) ad=j;
+ bc=vdp1Abs(q[2].x-q[1].x); j=vdp1Abs(q[2].y-q[1].y); if (j>bc) bc=j;
+ ab=vdp1Abs(q[1].x-q[0].x)+vdp1Abs(q[1].y-q[0].y);
+ dc=vdp1Abs(q[2].x-q[3].x)+vdp1Abs(q[2].y-q[3].y);
+ lines=(ad>bc? ad: bc)+1;
+ len=(ab>dc? ab: dc)+1;
+ if (lines>8192) lines=8192;          /* keeps lines x len under 2^27 */
+ if (len>16384) len=16384;
+ walk=lines*len;
+ if (walk>VDP1BIGWALK)
+    {int in=0;
+     for (j=1;j<32;j+=2)
+	{int px=q[0].x+(((q[3].x-q[0].x)*j)>>5),py=q[0].y+(((q[3].y-q[0].y)*j)>>5);
+	 int qx=q[1].x+(((q[2].x-q[1].x)*j)>>5),qy=q[1].y+(((q[2].y-q[1].y)*j)>>5);
+	 if ((px<viewXmin && qx<viewXmin) || (px>viewXmax && qx>viewXmax) ||
+	     (py<viewYmin && qy<viewYmin) || (py>viewYmax && qy>viewYmax))
+	    continue;                   /* pre-clipped */
+	 in+=vdp1Abs(qx-px)+vdp1Abs(qy-py)+1;
+	}
+     if (in>16*16384) in=16*16384;
+     walk=(in>>4)*lines;
+     vdp1Big++;
+     vdp1BigWalk+=walk>>6;
+    }
+ vdp1Walk+=walk>>6;
+}
+#define VDP1WALK(q) vdp1WalkProbe(q)
+#else
+#define VDP1WALK(q)
+#endif
+
 #define VDP1DIAG 0      /* 1 = diagnostic disc: paints out-of-range cells */
 #define VDP1LIM  1023
 #define VCLIPONE 1024   /* cut fractions in 1/1024: (30000<<10) fits in an int */
@@ -67,7 +117,8 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
      if (a>VDP1LIM) over=1;
     }
  if (!over)
-    {EZ_specialDistSpr2(charNm,poly,g);
+    {VDP1WALK(poly);
+     EZ_specialDistSpr2(charNm,poly,g);
      return;
     }
  /* Replaces the old cx/cy maxima: counting the cells actually windowed says the same (do we
@@ -104,6 +155,7 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
 	{if (ya>VDP1LIM || ya<-VDP1LIM)
 	    {/* edge wholly out of range at constant height: nothing to window in V,
 		it is a horizontal overflow.  Emit as is, as before. */
+	     VDP1WALK(poly);
 	     EZ_specialDistSpr2(charNm,poly,g);
 	     return;
 	    }
@@ -129,5 +181,6 @@ static __inline__ void EZ_distSprVClip(short charNm,XyInt *poly,
      poly[j].x=src[i].x+(((src[j].x-src[i].x)*t1)>>10);
      poly[j].y=src[i].y+(((src[j].y-src[i].y)*t1)>>10);
     }
+ VDP1WALK(poly);
  EZ_specialDistSpr2V(charNm,t0,t1,poly,g);
 }

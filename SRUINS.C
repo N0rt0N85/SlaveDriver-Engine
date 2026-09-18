@@ -2721,6 +2721,21 @@ int runLevel(char *filename,int levelNm)
      drawStringf(-158,-40,1,"mem:%dk+%dk=%dk",mem_coreleft(0)>>10,
 		 mem_coreleft(1)>>10,(mem_coreleft(0)+mem_coreleft(1))>>10);
 
+     /* LEGEND  walk : what the VDP1 steps through for the cells, in thousands of pixels:
+			 lines x width of every cell, the pixels outside the window
+			 included -- the clipping drops the write, not the step.  A cell
+			 over a quarter of the 3D window is re-counted with the pre-clip
+			 (a line wholly past one edge is skipped).  WALLASM.H vdp1WalkProbe.
+		 big  : those cells / their part of walk.  Things are not counted.
+	 Solo only: split screen has its c: line on this row.  The ASSERT build has extra: at
+	 its left end, so the line moves right there. */
+     if (mpPlayers==1)
+#ifdef NDEBUG
+	drawStringf(-158,-100,1,"walk:%dk big:%d/%dk",vdp1Walk>>4,vdp1Big,vdp1BigWalk>>4);
+#else
+	drawStringf(-60,-100,1,"walk:%dk big:%d/%dk",vdp1Walk>>4,vdp1Big,vdp1BigWalk>>4);
+#endif
+
      if (profileShow)
 	drawProfileData(-158,-28);
      CFG_PROF_END();

@@ -1348,7 +1348,8 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
  if (wallIsBlack(theWall,coords,nmWallLights,wavyIndex))
     {XyInt q[4];
      if (fuseWallPoly(coords,s,q))
-	{EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_FUSE,q,NULL);
+	{VDP1WALK(q);
+	 EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_FUSE,q,NULL);
 	 lodFused++;
 	 lodCells+=theWall->tileHeight*theWall->tileLength-1;
 	}
@@ -1401,7 +1402,8 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 	    {XyInt q[4];
 	     LODRUNQUAD(vCalc);
 	     if (clip_visible(q,s))
-		{EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_RECT,q,NULL);
+		{VDP1WALK(q);
+		 EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_RECT,q,NULL);
 		 nmPolys++;
 		 lodFlat++;
 		}
@@ -1578,7 +1580,8 @@ void drawWall(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
 	{XyInt q[4];
 	 int g=weldFaceStrip(wall,f,vCalc,q,lodWeldWhy);
 	 if (clip_visible(q,s))
-	    {EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_MESH,q,NULL);
+	    {VDP1WALK(q);
+	     EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,LODCOL_MESH,q,NULL);
 	     nmPolys++;
 	     lodFlat++;
 	    }
@@ -2597,6 +2600,7 @@ void drawSlaveWalls(void)
 	     case -5:
 		{/* wall fused by the LOD: one quad, its colour carried in the gouraud
 		    table for lack of another free field in the record */
+		 VDP1WALK(slaveResult[i].poly);
 		 EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,
 			    slaveResult[i].gtable.entry[0],slaveResult[i].poly,NULL);
 		 continue;
@@ -3209,6 +3213,7 @@ void drawWalls(int k,MthMatrix *view)
  slaveView=view;
  nmPolys=0;
  vdp1NmClipped=0;
+ vdp1Walk=0; vdp1Big=0; vdp1BigWalk=0;
  autoTarget=NULL;
  bestAutoAimRating=INT_MAX;
 
