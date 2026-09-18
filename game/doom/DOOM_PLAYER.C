@@ -248,6 +248,7 @@ static void doomMoveTic(void)
  if (side>doomForwardMove[1])
     side=doomForwardMove[1];
  if (side<-doomForwardMove[1])
+    side=-doomForwardMove[1];
  /* P_PlayerThink: MF_JUSTATTACKED, set by the chainsaw on a hit -- this tic no turn, no strafe,
     forwardmove 0xc800/512 = 100 (twice the run): the saw pulls the player into what it cuts */
  if (doomSawPull)
@@ -256,7 +257,6 @@ static void doomMoveTic(void)
      side=0;
      doomSawPull=0;
     }
-    side=-doomForwardMove[1];
 
  /* turning without inertia: 3.5 degrees per tic, 7 running, 1.75 the first 6 tics */
  if (turning)
@@ -422,14 +422,14 @@ static void doomCheatTic(void)
     }
  if (doomChord(input,PER_DGT_TL|PER_DGT_TR|PER_DGT_L,PER_DGT_B|PER_DGT_C|PER_DGT_X,&clipHeld))
     {noClipCheat=!noClipCheat;
+     doom_setMessage(noClipCheat?"NO CLIPPING MODE ON":"NO CLIPPING MODE OFF");
+    }
+}
+
 /* P_PlayerInSpecialSector case 11 (E1M8's last room): `cheats &= ~CF_GODMODE`, or the level
    that ends at 10 health would never end */
 void doom_playerGodOff(void)
 {doomCheatGod=0;
-}
-
-     doom_setMessage(noClipCheat?"NO CLIPPING MODE ON":"NO CLIPPING MODE OFF");
-    }
 }
 
 /* P_PlayerThink for one 35 Hz tic (CFG_PLAYER_TIC, before runObjects()): level clock + nukage,

@@ -382,6 +382,13 @@ void A_Punch(DoomPlayer *p,int ps)
  damage=(P_Random()%10+1)<<1;
  yaw=playerAngle.yaw+(P_Random()-P_Random())*DOOM_SPREAD_UNIT;
  doom_aimSlope(&pitch);
+ t=doom_playerLineAttack(normalizeAngle(yaw),pitch,DOOM_MELEERANGE,damage,1);
+ if (t)
+    {doom_playerSound(sfx_punch);
+     playerAngle.yaw=normalizeAngle(getAngle(t->pos.x-camera->pos.x,t->pos.z-camera->pos.z)-F(90));
+    }
+}
+
 /* A_Saw (p_pspr.c:490-534): damage 2*(P_Random()%10+1), spread, MELEERANGE + 1 (so the puff
    does not skip the flash).  No target: sfx_sawful.  A target: sfx_sawhit, the view locks on it
    -- snapped to within ANG90/21 when it is farther than ANG90/20, else turned by ANG90/20 --
@@ -413,13 +420,6 @@ void A_Saw(DoomPlayer *p,int ps)
     playerAngle.yaw=normalizeAngle((delta>DOOM_ANG90_20)?an-DOOM_ANG90_21:
 				   playerAngle.yaw+DOOM_ANG90_20);
  doom_playerSawPull();
-}
-
- t=doom_playerLineAttack(normalizeAngle(yaw),pitch,DOOM_MELEERANGE,damage,1);
- if (t)
-    {doom_playerSound(sfx_punch);
-     playerAngle.yaw=normalizeAngle(getAngle(t->pos.x-camera->pos.x,t->pos.z-camera->pos.z)-F(90));
-    }
 }
 
 /* A_FirePistol :657-673 */
