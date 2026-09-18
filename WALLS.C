@@ -3460,7 +3460,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
  nmDraw=0;
  assert(sector>=0 && sector<level_nmSectors);
 
- assert(viewSectorequence==-1);
+ assert(viewCamera->sequence==-1);
  for (o=CFG_SPR_FIRST(sector);nmDraw<100 && o;o=CFG_SPR_NEXT(o))
     if (o->sequence!=-1 && !(o->flags & SPRITEFLAG_INVISIBLE))
        drawList[nmDraw++]=o;
