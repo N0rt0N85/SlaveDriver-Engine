@@ -110,6 +110,13 @@ LIFT_BLAZE = {120, 121, 122, 123}
 # appele avant qu'on l'atteigne et renvoye en haut, vide, quand on en descendait.
 OT_DOOM_WLINE = 185
 WLINE_ONCE = 1
+# LIGNES G (P_ShootSpecialLine) : la ligne s'ouvre quand une BALLE la touche, pas quand on la
+# franchit. Une seule dans l'episode 1 -- E1M2 linedef 572, « GR open door » tag 6, le placard de
+# la tronconneuse -- et elle n'etait pas convertie du tout : le secteur 188 n'etait enregistre que
+# comme porte MANUELLE, sans canal, donc rien ne pouvait l'ouvrir. Meme objet que les lignes W,
+# avec un drapeau : DOOM_GAME.C la saute au franchissement et la teste au tir.
+WLINE_GUN = 2
+DOOR_TAGGED_G = {46: None}    # genre rempli plus bas (PORTE_OUVERTE), les constantes suivent
 # W1 = les cas de P_CrossSpecialLine avant « RETRIGGERS » (p_spec.c, Mimas/core) : `line->special
 # = 0` apres le premier passage. Les autres (72-98, 105-107, 120, 126, 128, 129) repartent.
 W_ONCE = {2, 3, 4, 5, 6, 8, 10, 12, 13, 16, 17, 19, 22, 25, 30, 35, 36, 37, 38, 39, 40, 44, 52,
@@ -135,6 +142,7 @@ DOOR_KEYED = {s for s, (g, k) in DOOR_MANUAL_KIND.items() if k}
 DOOR_TAGGED_W = {2: PORTE_OUVERTE, 4: PORTE_NORMALE, 86: PORTE_OUVERTE, 90: PORTE_NORMALE,
                  105: PORTE_BLAZERAISE, 106: PORTE_BLAZEOPEN, 108: PORTE_BLAZERAISE,
                  109: PORTE_BLAZEOPEN}
+DOOR_TAGGED_G[46] = PORTE_OUVERTE            # 46 = GR open door, au tir : reste ouverte
 DOOR_TAGGED_S = {29: PORTE_NORMALE, 61: PORTE_OUVERTE, 63: PORTE_NORMALE, 103: PORTE_OUVERTE,
                  111: PORTE_BLAZERAISE, 112: PORTE_BLAZEOPEN, 114: PORTE_BLAZERAISE,
                  115: PORTE_BLAZEOPEN}
@@ -429,11 +437,13 @@ def specials_of(M):
             elif (d["manual"], d["key"]) != (genre, cle):
                 ignored["porte manuelle de deux genres (secteur %d : le 1er garde)" % si] += 1
             d["lines"].append(li)
-        elif sp in DOOR_TAGGED_W or sp in DOOR_TAGGED_S:
-            genre = DOOR_TAGGED_W.get(sp) or DOOR_TAGGED_S[sp]
+        elif sp in DOOR_TAGGED_W or sp in DOOR_TAGGED_S or sp in DOOR_TAGGED_G:
+            genre = (DOOR_TAGGED_W.get(sp) or DOOR_TAGGED_G.get(sp) or DOOR_TAGGED_S[sp])
             for si in by_tag.get(ld.tag, ()):
                 door_tag(si, ld.tag, genre, li)
-            (wsw if sp in DOOR_TAGGED_W else ssw).append(dict(line=li, channel=ld.tag, special=sp))
+            # une ligne G part avec les lignes W : meme objet, distingue par WLINE_GUN
+            (wsw if (sp in DOOR_TAGGED_W or sp in DOOR_TAGGED_G) else ssw).append(
+                dict(line=li, channel=ld.tag, special=sp))
         elif sp in LIFT_W or sp in LIFT_S:
             add_mobile(lifts, ld.tag, "lift",
                        speed=LIFT_SPEED_BLAZE if sp in LIFT_BLAZE else LIFT_SPEED)
@@ -744,7 +754,9 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
         ld = L[w["line"]]
         (x1, z1), (x2, z2) = V[ld.v1], V[ld.v2]
         emit(OT_DOOM_WLINE, x1, z1, x2, z2, w["channel"],
-             WLINE_ONCE if w["special"] in W_ONCE else 0, line=w["line"], kind="wswitch")
+             (WLINE_ONCE if w["special"] in W_ONCE else 0)
+             | (WLINE_GUN if w["special"] in DOOR_TAGGED_G else 0),
+             line=w["line"], kind="wswitch")
     # interrupteurs S : sectorNm, channel, ox, oy, oz
     for sw in (switches or []):
         emit(sw["type"], sw["leaf_sector"], sw["channel"], *sw["orifice"],

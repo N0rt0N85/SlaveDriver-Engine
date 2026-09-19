@@ -976,7 +976,9 @@ def main(argv=None):
         spw = sp.specials_of(M).wswitch
         Vm, Lm = M["vertices"], M["linedefs"]
         want_w = sorted(Vm[Lm[w_["line"]].v1] + Vm[Lm[w_["line"]].v2]
-                        + (w_["channel"], sp.WLINE_ONCE if w_["special"] in sp.W_ONCE else 0)
+                        + (w_["channel"],
+                           (sp.WLINE_ONCE if w_["special"] in sp.W_ONCE else 0)
+                           | (sp.WLINE_GUN if w_["special"] in sp.DOOR_TAGGED_G else 0))
                         for w_ in spw)
         put("lignes W : une par linedef W, ses bouts, canal, W1 / WR (P_CrossSpecialLine)",
             sorted(wl) == want_w,

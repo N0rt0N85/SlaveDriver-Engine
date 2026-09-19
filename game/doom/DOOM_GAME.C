@@ -39,6 +39,7 @@
 #define OT_DOOM_WLINE    185
 #define DOOM_TELE_ONCE   1
 #define DOOM_WLINE_ONCE  1
+#define DOOM_WLINE_GUN   2       /* P_ShootSpecialLine: fired by a BULLET, never by crossing */
 #define DOOM_DAMAGE_EXIT 0x100
 
 typedef struct
@@ -383,6 +384,7 @@ static void doomLift_func(Object *_this,int message,int param1,int param2)
    again from a leaf the player stands in when its channel is reset -- E1M2's lift was called
    before the player reached it, and sent back up empty as the player stepped off.  Monsters do not cross them
    (Doom lets them on 4, 10 and 88). */
+#define DOOM_SHOOTLINE_TOL  (8*16)           /* how far off the line a hit may land, 1/16 u */
 static DoomWLineObject *doomWLines;          /* this level's, in placing order */
 static Fixed32 doomWPrevX[MPMAX],doomWPrevZ[MPMAX];
 static char doomWPrevOk[MPMAX];              /* 0: no previous position (level start, death) */
@@ -410,6 +412,35 @@ static int doomWLineCrossed(DoomWLineObject *w,int px,int pz,int cx,int cz)
  return 1;
 }
 
+/* P_ShootSpecialLine (p_spec.c): a line a BULLET opens -- Doom's "GR open door" (46), the only
+   one of its kind in episode 1 (E1M2's chainsaw closet).  doom_playerLineAttack calls this with
+   the point its hitscan struck a wall at; the line is the Doom linedef the wall was built from,
+   so the point sits on it to within rounding.  Distances in 1/16 u, like doomWLineCrossed. */
+void doom_shootLine(Fixed32 hx,Fixed32 hz)
+{DoomWLineObject *w;
+ int x=hx>>12,z=hz>>12;
+ for (w=doomWLines;w;w=w->wnext)
+    {long long ex,ez,ax,az,s,l2,t;
+     if (w->channel==-1 || !(w->flags & DOOM_WLINE_GUN))
+	continue;
+     ex=w->x2-w->x1; ez=w->z2-w->z1; ax=w->x1*16; az=w->z1*16;
+     l2=ex*ex+ez*ez;
+     if (!l2)
+	continue;
+     s=ex*(z-az)-ez*(x-ax);                  /* perpendicular distance x |AB| */
+     if (s*s>(long long)DOOM_SHOOTLINE_TOL*DOOM_SHOOTLINE_TOL*l2)
+	continue;
+     t=ex*((x>>4)-w->x1)+ez*((z>>4)-w->z1);  /* where along it, x |AB| */
+     if (t<0 || t>l2)
+	continue;
+     {int channel=w->channel;
+      if (w->flags & DOOM_WLINE_ONCE)
+	 w->channel=-1;
+      signalAllObjects(SIGNAL_SWITCH,channel,0);
+     }
+    }
+}
+
 /* doom_playerTic, per player (mpCur): the move since this player's last tic */
 void doom_wlineTic(void)
 {DoomWLineObject *w;
@@ -425,7 +456,8 @@ void doom_wlineTic(void)
  /* a teleport, a respawn: a jump, not a walk (P_TeleportMove crosses nothing) */
  if (doomWPrevOk[k] && abs(cx-px)+abs(cz-pz)<64*16)
     for (w=doomWLines;w;w=w->wnext)
-       if (w->channel!=-1 && doomWLineCrossed(w,px,pz,cx,cz))
+       if (w->channel!=-1 && !(w->flags & DOOM_WLINE_GUN) &&
+	   doomWLineCrossed(w,px,pz,cx,cz))
 	  {int channel=w->channel;
 	   if (w->flags & DOOM_WLINE_ONCE)
 	      w->channel=-1;

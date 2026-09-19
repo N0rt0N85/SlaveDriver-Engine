@@ -139,7 +139,12 @@ void doom_weaponDraw(int nmFrames)
      st=(doomRole.atk>=0)? doom_chainAt(doomWeaponInfo[wp].atkstate,doomRole.atk): 0;
      if (!st)                           /* not firing, or the chain ran past its end */
 	st=doomWeaponInfo[wp].readystate;
-     fl=(doomRole.atk>=0)? doom_chainAt(doomWeaponInfo[wp].flashstate,doomRole.atk): 0;
+     /* the flash does NOT start with the attack: Doom fires on the SECOND state of the chain
+	(S_PISTOL1 holds 4 tics before A_FirePistol, S_SGUN1 3 before A_FireShotgun), and the
+	flash psprite runs its own chain from there.  Feeding it doomRole.atk unshifted ran it
+	ahead of the gun by exactly the first state's tics. */
+     an=doomStates[doomWeaponInfo[wp].atkstate].tics;
+     fl=(doomRole.atk>=an)? doom_chainAt(doomWeaponInfo[wp].flashstate,doomRole.atk-an): 0;
      if (st!=roleGunPin[mpCur])
 	{roleGunPin[mpCur]=st;
 	 setWeaponSequence(st-1,0,DOOM_PSP_Y0+f(DOOM_WEAPONTOP));
@@ -355,6 +360,7 @@ Sprite *doom_playerLineAttack(int yaw,int pitch,Fixed32 range,int damage,int mel
     return NULL;
  if (code & COLLIDE_WALL)
     {MthXyz p;
+     doom_shootLine(hit.x,hit.z);              /* P_ShootSpecialLine, before the puff */
      p.x=hit.x-(ray.x<<2);
      p.y=hit.y-(ray.y<<2);
      p.z=hit.z-(ray.z<<2);

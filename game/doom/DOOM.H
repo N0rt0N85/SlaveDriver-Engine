@@ -248,6 +248,7 @@ void        doom_mpLevelStart(void);
 void        doom_mpRespawned(int k);
 int         doom_mpRespawnHold(int k);         /* CFG_MP_RESPAWN_HOLD: 1 = stays where it fell */
 int         doom_chainAt(int st,int t);        /* the state t tics into the chain starting at st */
+void        doom_shootLine(Fixed32 hx,Fixed32 hz);  /* P_ShootSpecialLine: a line a bullet opens */
 void        doom_mpJoined(int k);
 void        doom_levelEnd(int action);
 /* DOOM_GAME.C, for the modes */

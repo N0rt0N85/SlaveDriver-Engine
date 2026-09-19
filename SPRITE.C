@@ -898,17 +898,30 @@ void updatePushBlockPositions(void)
 	}
      fs=level_pushBlock[block].floorSector;
      if (fs!=-1)
-	{/* look thru sprites in floorSector, moving ones that are on
-	    that floor */
-	 for (o=sectorSpriteList[fs];
-	      o;o=o->next)
-	    {if (o->floorSector==fs && o!=camera)
-		{o->pos.y+=F(pb->dy);
+	{/* GCC14: EVERY leaf of the block, not just the one the field names.  A Doom sector
+	   becomes several leaves and floorSector holds a single one (doom3d push_blocks: the
+	   largest), so anything standing on one of the others stayed in mid-air -- E1M2's
+	   chainsaw on its donut floor, whose four leaves carry four floor walls.  Walking the
+	   block's FLOOR walls visits each leaf exactly once: a leaf has one floor. */
+	 int k;
+	 for (k=level_pushBlock[block].startWall;
+	      k<=level_pushBlock[block].endWall;k++)
+	    {int w=level_PBWall[k],s2;
+	     if (level_wall[w].normal[1]<=0)
+		continue;
+	     s2=findWallsSector(w);
+	     if (s2<0 || s2>=level_nmSectors)
+		continue;
+	     for (o=sectorSpriteList[s2];
+		  o;o=o->next)
+		{if (o->floorSector==s2 && o!=camera)
+		    {o->pos.y+=F(pb->dy);
+		    }
 		}
-	    }
-	 /* do extra check for player */
-	 if (camera->floorSector==fs)
-	    {camera->pos.y+=F(pb->dy);
+	     /* do extra check for player */
+	     if (camera->floorSector==s2)
+		{camera->pos.y+=F(pb->dy);
+		}
 	    }
 	}
      pb->dy=0;
