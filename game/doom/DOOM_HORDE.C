@@ -218,11 +218,14 @@ static void hordeNextWave(void)
  doom_setMessage(msg);
 }
 
-/* One life a player: mpScoreDeath counted it (doom_playerKilled), and nothing brings it back. */
+/* One life a player, and doom_mpRespawnHold never lets one back up: the run is over when no
+   marine is left standing.  Read the HEALTH rather than the score -- mpStat counts the deaths
+   doom_playerKilled saw, and a run must end on a death by any road at all.  mpPeekInt answers
+   for the loaded player too (MPLAYER.C:128). */
 static int hordeAllDown(void)
 {int k;
  for (k=0;k<mpPlayers;k++)
-    if (!mpStat[k].deaths)
+    if (mpPeekInt(k,&currentState.health)>0)
        return 0;
  return 1;
 }
