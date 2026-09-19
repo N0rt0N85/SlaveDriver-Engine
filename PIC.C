@@ -758,10 +758,38 @@ static void load16BPPRLETile(fd,lock)
    the top banks for something else (split screen: the players' colours, MPLAYER.C);
    drawSprites reads nmObjectFogBanks. */
 int nmObjectFogBanks=NMOBJECTPALLETES;
+/* GCC14: the see-through things' bank (SPRITEFLAG_MESH, the spectre).  The fog banks bottom out
+   at SPRITEFOGMAX below bank 0 -- about a third -- because a monster must stay readable; a
+   spectre must do the opposite.  It gets a bank of its own, GREY (the luminance of each PLAYPAL
+   entry, ITU-R 601 weights) and darkened well past the fog floor, so the mesh shows a shape
+   rather than a demon you can see past.  Grey is only possible in a bank of its own: the VDP1's
+   gouraud shifts the palette INDEX on a colour-bank sprite, not the colour, and PLAYPAL is not
+   ordered by luminance (measured on hardware, ../saturn-refs/knowledge HW_VDP1.md).
+   It costs one fog step: buildObjectFogBanks builds 0..n-1 and takes n for this. */
+#define SPECTREGREY 13         /* 5-bit units taken off the grey; the fog floor is SPRITEFOGMAX */
+int spectreBank=NMOBJECTPALLETES-1;
+
+static void buildSpectreBank(int bank)
+{unsigned short *colorRam=(unsigned short *)SCL_COLRAM_ADDR;
+ int c,r,g,b,y;
+ assert(bank>0 && bank<NMOBJECTPALLETES);
+ spectreBank=bank;
+ for (c=0;c<256;c++)
+    {unsigned short v=colorRam[c];
+     r=v & 0x1f;
+     g=(v>>5) & 0x1f;
+     b=(v>>10) & 0x1f;
+     y=((r*77+g*151+b*28)>>8)-SPECTREGREY;
+     if (y<0) y=0;
+     colorRam[bank*256+c]=RGB(y,y,y);
+    }
+}
+
 void buildObjectFogBanks(int n)
 {unsigned short *colorRam=(unsigned short *)SCL_COLRAM_ADDR;
  int i,c,r,g,b,sub;
- assert(n>=2 && n<=NMOBJECTPALLETES);
+ assert(n>=3 && n<=NMOBJECTPALLETES);
+ n--;                           /* the top one goes to the spectre, below */
  nmObjectFogBanks=n;
  for (i=1;i<n;i++)
     {sub=(SPRITEFOGMAX*i)/(n-1);
@@ -776,6 +804,7 @@ void buildObjectFogBanks(int n)
 	 colorRam[i*256+c]=RGB(r,g,b);
 	}
     }
+ buildSpectreBank(n);
 }
 
 /* GCC14: bank `bank` = bank 0 seen through an index remap (Doom's player translations: the

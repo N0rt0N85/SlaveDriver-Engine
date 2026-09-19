@@ -3635,10 +3635,6 @@ static int sprRect(XyInt *pos)
  return 1;
 }
 
-/* GCC14: fog banks a see-through sprite is pushed down, on top of its own fog (SPRITEFLAG_MESH).
-   2 of the 6 takes the spectre from "a demon you can see through" to a shape that reads as one. */
-#define SPRITE_MESH_DARKEN 2
-
 void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 {Sprite *o;
  Sprite *drawList[100];
@@ -3821,15 +3817,12 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	  if (k>=0 && mpBank[k])
 	     spriteBank=mpBank[k];
 	 }
-      /* GCC14: the spectre.  The mesh lets the background through, but a fully lit one still
-	 reads as a solid demon: it is pushed down the fog banks, which are darkened copies of
-	 PLAYPAL already in CRAM, so it costs nothing.  This is the only way to dim a sprite
-	 here -- a greyscale bank would want a CRAM bank the split sky already spends. */
+      /* GCC14: the spectre wears its own bank -- grey, and darker than the fog ever goes
+	 (PIC.C buildSpectreBank).  No distance fog on it: it is meant to read as a shape, and
+	 the fog banks stop a third of the way down because a monster must stay readable. */
       if (o->flags & SPRITEFLAG_MESH)
-	 {spriteBank+=SPRITE_MESH_DARKEN;
-	  if (spriteBank>nmObjectFogBanks-1)
-	     spriteBank=nmObjectFogBanks-1;
-	  spriteFog+=SPRITE_MESH_DARKEN*2;     /* the 16bpp path shades by hand, below */
+	 {spriteBank=spectreBank;
+	  spriteFog=SPRITEFOGMAX;              /* the 16bpp path shades by hand, below */
 	 }
      }
      /* tformed is center of sprite */

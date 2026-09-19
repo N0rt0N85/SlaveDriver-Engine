@@ -41,7 +41,8 @@ int createMippedPics(void);
 
 /* GCC14: CRAM banks of the object palette (UTIL.H NMOBJECTPALLETES) */
 extern int nmObjectFogBanks;                    /* banks 0..n-1 carry the things' fog */
-void buildObjectFogBanks(int n);                /* rebuild 1..n-1 from bank 0 */
+extern int spectreBank;                         /* bank n: grey and dark, SPRITEFLAG_MESH */
+void buildObjectFogBanks(int n);                /* rebuild 1..n-1 from bank 0, and n for the spectre */
 void buildRemappedBank(int bank,const unsigned char *remap);   /* bank = bank 0 through remap[] */
 
 /* GCC14: which slot a miss takes (PIC.C map).  lastUse is a clock, one tick per use: the least
