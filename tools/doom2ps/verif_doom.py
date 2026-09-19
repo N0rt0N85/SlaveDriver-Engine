@@ -962,6 +962,8 @@ def main(argv=None):
             ecoute[_sh(o, 5)[2]] += 1
         elif o["type"] == sp.OT_DOOM_FLOOR:
             ecoute[_sh(o, 6)[2]] += 1
+        elif o["type"] == sp.OT_DOOM_LIGHT:
+            ecoute[_sh(o, 3)[1]] += 1
         elif o["type"] in (sp.OT_DOOM_EXIT, sp.OT_DOOM_SECRETEXIT):
             ecoute[_sh(o, 1)[0]] += 1
     boss = {t_ for t_, _g in sp.BOSS_TAGS.get((a.map or "").upper(), ())}
@@ -989,6 +991,12 @@ def main(argv=None):
     if dmg:
         put("OT_DOOM_DAMAGE : feuilles dans les bornes, hp > 0",
             all(0 <= d[0] < len(S) and d[1] > 0 for d in dmg), f"{len(dmg)} feuilles")
+    lig = [_sh(o, 3) for o in obj if o["type"] == sp.OT_DOOM_LIGHT]
+    if lig:
+        put("OT_DOOM_LIGHT : feuilles dans les bornes, lumiere 0..16",
+            all(0 <= l_[0] < len(S) and 0 <= l_[2] <= 16 for l_ in lig),
+            f"{len(lig)} feuilles, canaux {sorted({l_[1] for l_ in lig})}, "
+            f"lumieres {sorted({l_[2] for l_ in lig})}")
 
     # 17-21. CONTRAT « Verifications PC » (DOOM_ABI, SPEC_CONVERTER 7) : tuiles, sequences
     #        atteignables, sons, barils, tailles. Tout est relu dans le FICHIER par lev_io (le

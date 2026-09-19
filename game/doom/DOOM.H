@@ -131,6 +131,7 @@ void        doom_init(void);                   /* size guards + tables sanity; o
 int         game_placeObject(int ot);          /* OBJECT.C:212 hook: 1 = consumed (params read)  */
 void        doom_item_func(Object *this,int message,int param1,int param2);   /* collision -> doom_playerGetObject */
 void        exit_func(Object *this,int message,int param1,int param2);        /* OT_DOOM_EXIT   */
+void        doomLight_func(Object *this,int message,int param1,int param2);   /* OT_DOOM_LIGHT  */
 char       *doom_levelName(int lNm);           /* CFG_LEVEL_NAME: doomLevelNames[lNm], bounded   */
 extern unsigned char doomSectorDamage[MAXNMSECTORS];   /* OT_DOOM_DAMAGE: hp per 32 tics, 0 = none */
 void        doom_weaponMpRegister(void);        /* GCC14: MPLAYER.H, per-player state of DOOM_WEAPON.C */

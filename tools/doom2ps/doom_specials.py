@@ -59,7 +59,14 @@ OT_DOLL1 = 204
 OT_SWITCH_TYPES = tuple(range(OT_SW1, OT_SW4 + 1)) + tuple(range(OT_DOLL1, OT_DOLL1 + 23))
 OT_DOOM_EXIT = 176
 OT_DOOM_SECRETEXIT = 177
+# LUMIERES DE LIGNE (p_lights.c EV_LightTurnOn) : 3 params = feuille, canal, lumiere 0..16. Doom
+# n'anime pas ces specialites, il AFFECTE un niveau aux secteurs du tag. Une par FEUILLE, comme
+# les secteurs a degats. L'episode 1 n'en porte qu'une sorte -- `35`, trois lignes autour de la
+# clef bleue d'E1M3 (tag 13) : la lumiere tombe quand on la prend. Les autres (12, 13, 80, 81,
+# 104, 138, 139) n'existent nulle part dans l'episode et ne sont donc PAS emises : leur cible se
+# lit sur les voisins au moment du declenchement, ce qu'on ne saurait figer sans mentir.
 OT_DOOM_LIGHT = 178
+LIGHT_LINES = {35: 35}        # special -> lightlevel Doom a poser sur les secteurs du tag
 OT_DOOM_DAMAGE = 179
 OT_DOOM_SECRETWALL = 180      # param : mur DOORWALL d'une ligne ML_SECRET (les monstres ne la pressent pas)
 # Teleporteur de ligne (EV_Teleport, p_telept.c) : 8 params = feuille qui declenche, feuille
@@ -444,6 +451,9 @@ def specials_of(M):
             # une ligne G part avec les lignes W : meme objet, distingue par WLINE_GUN
             (wsw if (sp in DOOR_TAGGED_W or sp in DOOR_TAGGED_G) else ssw).append(
                 dict(line=li, channel=ld.tag, special=sp))
+        elif sp in LIGHT_LINES:
+            # rien de mobile : seule la ligne compte, les receveurs se posent par feuille
+            wsw.append(dict(line=li, channel=ld.tag, special=sp))
         elif sp in LIFT_W or sp in LIFT_S:
             add_mobile(lifts, ld.tag, "lift",
                        speed=LIFT_SPEED_BLAZE if sp in LIFT_BLAZE else LIFT_SPEED)
@@ -757,6 +767,24 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
              (WLINE_ONCE if w["special"] in W_ONCE else 0)
              | (WLINE_GUN if w["special"] in DOOR_TAGGED_G else 0),
              line=w["line"], kind="wswitch")
+    # lumieres de ligne : un OT_DOOM_LIGHT par feuille des secteurs du tag. Plusieurs lignes
+    # peuvent partager un tag (E1M3 en a trois autour de la clef) : un seul jeu de receveurs.
+    import doom3d                                  # tardif : doom3d importe ce module
+    vus = set()
+    for w in specials.wswitch:
+        if w["special"] not in LIGHT_LINES:
+            continue
+        cle = (w["channel"], LIGHT_LINES[w["special"]])
+        if cle in vus:
+            continue
+        vus.add(cle)
+        niveau = doom3d.light_of(LIGHT_LINES[w["special"]])
+        for si, sec in enumerate(M["sectors"]):
+            if sec.tag != w["channel"]:
+                continue
+            for s in leaves_of_sector(conv, si):
+                emit(OT_DOOM_LIGHT, s, w["channel"], niveau,
+                     sector_doom=si, line=w["line"], kind="light")
     # interrupteurs S : sectorNm, channel, ox, oy, oz
     for sw in (switches or []):
         emit(sw["type"], sw["leaf_sector"], sw["channel"], *sw["orifice"],
@@ -807,6 +835,8 @@ def expected_param_bytes(objects):
             n += 1
         elif t == OT_DOOM_DAMAGE:
             n += 2
+        elif t == OT_DOOM_LIGHT:
+            n += 3                      # feuille, canal, lumiere
         else:
             n += 6                      # mobj Doom : sector, x, y, z, angle, flags
     return 2 * n

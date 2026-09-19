@@ -89,10 +89,20 @@ typedef struct __doomWLine
  short x1,z1,x2,z2,channel,flags;
 } DoomWLineObject;
 
+/* OT_DOOM_LIGHT: one leaf whose brightness a channel sets (Doom's "light to 35" and kin, one
+   object per LEAF since a Doom sector becomes several).  The slot was reserved and empty. */
+typedef struct
+{short type,class;
+ struct __object *next,*prev;
+ messHandler func;
+ short sector,channel,level;
+} DoomLightObject;
+
 /* compile-time guards (C89): the DoomActor must fit the Object pool slot, and the generated
    tables must have the layout the contract fixes (section 4) */
 typedef char doomActorFitsObject_[(sizeof(DoomActor)<sizeof(Object))?1:-1];
 typedef char doomExitFitsObject_[(sizeof(DoomExitObject)<=sizeof(Object))?1:-1];
+typedef char doomLightFitsObject_[(sizeof(DoomLightObject)<=sizeof(Object))?1:-1];
 typedef char doomTeleportFitsObject_[(sizeof(DoomTeleportObject)<=sizeof(Object))?1:-1];
 typedef char doomFloorFitsObject_[(sizeof(DoomFloorObject)<=sizeof(Object))?1:-1];
 typedef char doomDoorFitsObject_[(sizeof(DoomDoorObject)<=sizeof(Object))?1:-1];
@@ -689,6 +699,7 @@ void doom_init(void)
  assert(doomOtToMt[OT_DOOM_SECRETWALL]==-1);
  assert(doomOtToMt[OT_DOOM_TELEPORT]==-1 && doomOtToMt[OT_DOOM_FLOOR]==-1);
  assert(doomOtToMt[OT_DOOM_LIFT]==-1 && doomOtToMt[OT_DOOM_WLINE]==-1);
+ assert(doomOtToMt[OT_DOOM_LIGHT]==-1);
  assert(doomMobjInfo[MT_TROOPSHOT].speed==10);
  /* the pad as Mimas lays it out (dg_saturn.cxx pad_map: A fire, B use, C run held, L/R strafe)
     so the two are played with the same hands.  controllerConfig maps an action slot to a button
@@ -785,6 +796,21 @@ int game_placeObject(int ot)
 	 if (o)
 	    {moveObject((Object *)o,objectIdleList);   /* SIGNAL_SWITCH reaches both lists */
 	     o->channel=(short)channel;
+	    }
+	 return 1;
+	}
+     case OT_DOOM_LIGHT:
+	{int sectorNm=suckShort();
+	 int channel=suckShort();
+	 int level=suckShort();
+	 DoomLightObject *o=(DoomLightObject *)getFreeObject(doomLight_func,ot,CLASS_SECTOR);
+	 assert(sectorNm>=0 && sectorNm<level_nmSectors);
+	 assert(level>=0 && level<=16);
+	 if (o)
+	    {moveObject((Object *)o,objectIdleList);   /* SIGNAL_SWITCH reaches both lists */
+	     o->sector=(short)sectorNm;
+	     o->channel=(short)channel;
+	     o->level=(short)level;
 	    }
 	 return 1;
 	}
@@ -1026,6 +1052,17 @@ static void doomExitLevel(int secret)
     }
  else
     playerHitTeleport(2-200);
+}
+
+/* EV_LightTurnOn and kin (p_lights.c): the channel sets this leaf's brightness, once and for
+   good -- Doom's light specials do not animate, they assign.  setSectorBrightness (AICOMMON.C)
+   writes the leaf's vertex lights, which is what the walls and the sprites both read. */
+void doomLight_func(Object *_this,int message,int param1,int param2)
+{DoomLightObject *this=(DoomLightObject *)_this;
+ (void)param2;
+ if (message!=SIGNAL_SWITCH || param1!=this->channel)
+    return;
+ setSectorBrightness(this->sector,this->level);
 }
 
 void exit_func(Object *_this,int message,int param1,int param2)
