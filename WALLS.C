@@ -506,7 +506,8 @@ void stepWater(void)
 #define LIGHTRADIUS CFG_LIGHTRADIUS
 
 static Sprite *lightSource[MAXNMLIGHTSOURCES];
-static int nmLights,delayNmLights;
+int nmLights;                              /* GCC14: lights live in this image (WALLS.H, overlay) */
+static int delayNmLights;
 static MthXyz tLightPos[MAXNMLIGHTSOURCES];
 static int lColor[MAXNMLIGHTSOURCES][3];   /* proportional: k * intensity */
 static int delayColor[MAXNMLIGHTSOURCES][3];

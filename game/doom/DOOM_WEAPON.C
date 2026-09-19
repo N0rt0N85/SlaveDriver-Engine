@@ -186,13 +186,19 @@ static void doomDecreaseAmmo(int amount)
 /* --- player muzzle flash ------------------------------------------------------------------------
    A light on `camera`, so it lights exactly the walls the backface test keeps.  An addition:
    Doom's A_Light1/2 is a screen tint.  Tuned apart (LIGHT_MUZZLE_PLAYER) because it sits on the
-   view; a shot landing on a half-faded flash relights it instead of adding a second light. */
+   view; a shot landing on a half-faded flash relights it instead of adding a second light.
+   Add or relight is decided by the ENGINE's list (hasLight), not by muzzleTics: the counter can
+   be set with no light behind it -- addLightEx drops a light when the 15 slots are taken (the
+   players are served in order, so 2-4 are the ones that lose) and when the tuner has the
+   intensity at zero.  Deciding on the counter, a player in that state kept relighting a light
+   that was not there, and as long as it went on firing the counter never fell back to zero:
+   no muzzle flash again for the rest of the game. */
 void doom_muzzleFlash(void)
 {assert(camera);
- if (!doomPlayer.muzzleTics)
-    doom_lightAdd(camera,DLF_MUZZLE_PLAYER);
- else
+ if (hasLight(camera))
     doom_lightChange(camera,DLF_MUZZLE_PLAYER);
+ else
+    doom_lightAdd(camera,DLF_MUZZLE_PLAYER);
  doomPlayer.muzzleTics=doomLightFx[DLF_MUZZLE_PLAYER].tics;
 }
 

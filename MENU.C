@@ -41,6 +41,9 @@ DlgItem dlgItem[MAXDLGSIZE];
 unsigned short lastUsedSelButton;
 static int nmItems;
 static int currentButton;
+/* GCC14: the code B returns, for a dialog that has a way out (dlg_setCancel).  Off by default:
+   the button remap screen reads every button, B included, and must keep it. */
+static int cancelCode,hasCancel;
 
 #define MAXNMPICS 48
 
@@ -54,6 +57,27 @@ static int fontHeight;
 
 void dlg_selectButton(int b)
 {currentButton=b;
+}
+
+void dlg_setCancel(int code)
+{cancelCode=code;
+ hasCancel=1;
+}
+
+/* the selectable item carrying `code`, or -1 (same types as moveSel) */
+static int dlg_findCode(int code)
+{int i;
+ for (i=0;i<nmItems;i++)
+    if (dlgItem[i].code==code &&
+	(dlgItem[i].type==IT_BUTTON ||
+	 dlgItem[i].type==IT_WAVYBUTTON ||
+	 dlgItem[i].type==IT_GAMEBUTTON
+#ifdef JAPAN
+	  || dlgItem[i].type==IT_WAVYJBUTTON
+#endif
+	 ))
+       return i;
+ return -1;
 }
 
 void dlg_centerStuff(void)
@@ -259,6 +283,7 @@ void plotOverPicHarf(int x,int y,int picNm)
 
 void dlg_clear(void)
 {nmItems=0;
+ hasCancel=0;
  currentButton=-1;
  texVramPos=-1;
  fontHeight=getFontHeight(DLGFONT);
@@ -740,6 +765,7 @@ int dlg_run(int selSound,int pushSound,int movement)
 #endif
  int pressed=0;
  int returnTime=0;
+ int selKeys=hasCancel? (SELKEYS & ~PER_DGT_B): SELKEYS;
 
  fontHeight=getFontHeight(DLGFONT);
  data=lastInputSample;
@@ -806,14 +832,25 @@ int dlg_run(int selSound,int pushSound,int movement)
      if (i!=currentButton && selSound>=0)
 	playSound(0,selSound);
 
-     if ((changeData&~data)&SELKEYS)
-	{lastUsedSelButton=(changeData&~data) & SELKEYS;
+     /* GCC14: B picks the way out and presses it -- the screens that have one say so */
+     if (hasCancel && ((changeData&~data)&PER_DGT_B))
+	{i=dlg_findCode(cancelCode);
+	 if (i>=0)
+	    {currentButton=i;
+	     lastUsedSelButton=PER_DGT_B;
+	     if (pushSound>=0)
+		playSound(0,pushSound);
+	     pressed=1;
+	    }
+	}
+     if ((changeData&~data)&selKeys)
+	{lastUsedSelButton=(changeData&~data) & selKeys;
 	 if (pushSound>=0)
 	    playSound(0,pushSound);
 	 pressed=1;
 	}
 
-     if ((data & SELKEYS)==SELKEYS && pressed)
+     if ((data & selKeys)==selKeys && pressed)
 	{returnTime=5;
 	 pressed=0;
 	}
@@ -899,6 +936,7 @@ int dlg_runYesNo(char *message,int w)
  dlg_addButton(0,space/2,h/2-(bh+13)-4,bw,bh+8,
 	       getText(LB_PROMPTS,4));
 #endif
+ dlg_setCancel(0);                     /* GCC14: B answers no (BUP.C reads 0 as the refusal) */
  ret=dlg_run(-1,-1,MENUMOVE_FREE);
 #ifdef JAPAN
  resetPics();

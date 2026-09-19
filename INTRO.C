@@ -196,10 +196,20 @@ static char *optFogText(void)
 {static char *const t[4]={"FOG OFF","FOG LOW","FOG MEDIUM","FOG HIGH"};
  return t[fogLevel()];
 }
-#define OPT_DONE_Y (-24+130)
+/* GCC14: six lines where PowerSlave had four, and at its pitch of 20 the last one (DONE) ran off
+   the bottom of the screen -- y is measured from its middle.  18, the pitch of the multiplayer
+   and light screens, puts the last line at 96, where those two put theirs.  PowerSlave's own
+   four lines keep the layout they had. */
+#define OPT_ROW0    6
+#define OPT_PITCH   18
+#define OPT_NM      6
 #else
-#define OPT_DONE_Y (-24+90)
+#define OPT_ROW0    6
+#define OPT_PITCH   20
+#define OPT_NM      4
 #endif
+#define OPT_ROW(i)  (OPT_ROW0+(i)*OPT_PITCH)
+#define OPT_DONE_Y  OPT_ROW(OPT_NM-1)
 
 static void optionMenu(int hx,int hy,int lx,int ly)
 {int menuSel=-1;
@@ -208,9 +218,9 @@ static void optionMenu(int hx,int hy,int lx,int ly)
  bigReset:
  dlg_clear();
 #ifndef JAPAN
- dlg_addBigWavyButton(0,0,-24+30,getText(LB_OPTIONMENU,4));
- dlg_addBigWavyButton(1,0,-24+50,getText(LB_OPTIONMENU,0+!enable_stereo));
- dlg_addBigWavyButton(2,0,-24+70,getText(LB_OPTIONMENU,2+!enable_music));
+ dlg_addBigWavyButton(0,0,OPT_ROW(0),getText(LB_OPTIONMENU,4));
+ dlg_addBigWavyButton(1,0,OPT_ROW(1),getText(LB_OPTIONMENU,0+!enable_stereo));
+ dlg_addBigWavyButton(2,0,OPT_ROW(2),getText(LB_OPTIONMENU,2+!enable_music));
  dlg_addBigWavyButton(3,0,OPT_DONE_Y,getText(LB_OPTIONMENU,5));
 #else
  dlg_addBigWavyJapaneseButton(0,0,-24+30,
@@ -228,8 +238,8 @@ static void optionMenu(int hx,int hy,int lx,int ly)
  dlg_addFontText(0,400,320,2,"");
  dlg_addRect(-60,-7,120,1,RGB(31,31,31));
 #if CFG_GFX_OPTIONS
- dlg_addBigWavyButton(4,0,-24+90,optFogText());
- dlg_addBigWavyButton(5,0,-24+110,"LIGHTS");
+ dlg_addBigWavyButton(4,0,OPT_ROW(3),optFogText());
+ dlg_addBigWavyButton(5,0,OPT_ROW(4),"LIGHTS");
  dlg_centerStuff();
 #endif
 #else
@@ -237,6 +247,7 @@ static void optionMenu(int hx,int hy,int lx,int ly)
  dlg_addFontText(0,400,320,3,"");
  dlg_addRect(-60,-2,120,1,RGB(31,31,31));
 #endif
+ dlg_setCancel(3);                     /* GCC14: B is DONE, as it is BACK everywhere else */
  dlg_setupSlideIn();
  if (menuSel!=-1)
     {dlg_selectButton(menuSel);
@@ -355,6 +366,7 @@ static int loadMenu(int hx,int hy,int lx,int ly)
  dlg_addBigWavyJapaneseButton(100,0,-84+20+20*7,getText(LB_PROMPTS,1));
 #endif
  dlg_centerStuff();
+ dlg_setCancel(100);                   /* GCC14: B backs out, as it does in the other menus */
  dlg_setupSlideIn();
  if (menuSel!=-1)
     {dlg_selectButton(menuSel);
@@ -411,6 +423,7 @@ static int newMenu(int hx,int hy,int lx,int ly)
 #endif
 
  dlg_centerStuff();
+ dlg_setCancel(100);                   /* GCC14: B backs out, as it does in the other menus */
  dlg_setupSlideIn();
 /* dlg_setupSlideUp();*/
  if (menuSel==-1)

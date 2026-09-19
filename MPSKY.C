@@ -522,12 +522,16 @@ static void mapBolt(int band,int bolt,int on)
    character VRAM has (PIC.C initPicSystem), leaving no room to allocate one.  Two fans of
    triangles, round enough at this size, both drawn IN THE SKY'S OWN COLOUR at the line where
    the moon lands and darkened by gouraud -- the outer fan walks that darkening back to 16 (the
-   sky untouched) at its rim, which is the few pixels of edge that fade into the sky; the inner
-   fan is flat, and is the disc.  No mesh: a halftone glow read as dirt. ---- */
+   sky untouched) at its rim, which is the few pixels of edge that fade into the sky.  The disc
+   is not flat: each rim vertex carries its own level (moonRelief), and two quads are its seas,
+   shaded corner to corner so no edge of them is ever drawn.  No mesh: a halftone read as dirt.
+   Its colour is the sky's OWN, offset B included (mpSkyFrame lastB), so the fog that dims the
+   three layers dims the moon with them instead of leaving it hanging in front. ---- */
 #define MOON_SEGS 12
-#define MOON_R    9                     /* the disc; its edge is MOON_EDGE pixels around it */
-#define MOON_EDGE 4
-#define MOON_DARK 9                     /* the disc's gouraud level; 16 is the sky untouched */
+#define MOON_R    6                     /* the disc; its edge is MOON_EDGE pixels around it */
+#define MOON_EDGE 3
+#define MOON_DARK 12                    /* the disc's gouraud level; 16 is the sky untouched */
+#define MOON_SEA  4                     /* a sea, that much darker again */
 static int moonOk;
 static Fixed32 moonDir[3];
 static short skyBB[MPMAX][4];
@@ -536,6 +540,11 @@ static char skyBBok[MPMAX];
 static const short moonUnit[MOON_SEGS+1][2]=
    {{256,0},{221,128},{128,221},{0,256},{-128,221},{-221,128},{-256,0},
     {-221,-128},{-128,-221},{0,-256},{128,-221},{221,-128},{256,0}};
+/* the disc's ground, one level per rim vertex (the ends are the same vertex) */
+static const signed char moonRelief[MOON_SEGS+1]=
+   {0,-2,-1,1,2,1,-1,-2,-1,1,2,1,0};
+/* two seas, in sixteenths of the radius: centre x,y then half width, half height */
+static const signed char moonSeaBox[2][4]={{-5,-5,7,5},{5,4,5,4}};
 
 static void makeMoon(void)
 {int i;
@@ -549,22 +558,55 @@ static void makeMoon(void)
  moonOk=1;
 }
 
+#define MOONMODE (UCLPIN_ENABLE|ECDSPD_DISABLE|DRAW_GOURAU|COLOR_5)
+
+static int moonLevel(int v)
+{return (v<0)? 0: (v>31)? 31: v;
+}
+
 /* a fan of triangles around (cx,cy): gouraud `mid` at the centre, `edge` at the rim (16 = the
-   colour as given, less is darker) */
-static void moonFan(int cx,int cy,int r,Uint16 color,int mid,int edge)
+   colour as given, less is darker).  `relief` adds a level per rim vertex, so two neighbouring
+   wedges share theirs and the ground is uneven without a facet anywhere; NULL = a plain rim. */
+static void moonFan(int cx,int cy,int r,Uint16 color,int mid,int edge,
+		    const signed char *relief)
 {struct gourTable g;
  XyInt q[4];
  int i;
  g.entry[0]=greyTable[mid];
- g.entry[1]=greyTable[edge];
- g.entry[2]=greyTable[edge];
  g.entry[3]=greyTable[mid];
  q[0].x=cx; q[0].y=cy;
  q[3].x=cx; q[3].y=cy;
  for (i=0;i<MOON_SEGS;i++)
-    {q[1].x=cx+((moonUnit[i][0]*r)>>8);   q[1].y=cy+((moonUnit[i][1]*r)>>8);
+    {g.entry[1]=greyTable[moonLevel(edge+(relief? relief[i]: 0))];
+     g.entry[2]=greyTable[moonLevel(edge+(relief? relief[i+1]: 0))];
+     q[1].x=cx+((moonUnit[i][0]*r)>>8);   q[1].y=cy+((moonUnit[i][1]*r)>>8);
      q[2].x=cx+((moonUnit[i+1][0]*r)>>8); q[2].y=cy+((moonUnit[i+1][1]*r)>>8);
-     EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|DRAW_GOURAU|COLOR_5,color,q,&g);
+     EZ_polygon(MOONMODE,color,q,&g);
+    }
+}
+
+/* the seas: a quad each, darkest at one corner and back to the disc's own level at the opposite
+   one, so what is drawn is a gradient inside the disc and never an outline */
+static void moonSeas(int cx,int cy,int r,Uint16 color,int disc)
+{struct gourTable g;
+ XyInt q[4];
+ int i,x,y,w,h,d,m;
+ d=moonLevel(disc-MOON_SEA);
+ m=(d+disc)>>1;
+ g.entry[0]=greyTable[d];
+ g.entry[1]=greyTable[m];
+ g.entry[2]=greyTable[disc];
+ g.entry[3]=greyTable[m];
+ for (i=0;i<2;i++)
+    {x=cx+((moonSeaBox[i][0]*r)>>4); y=cy+((moonSeaBox[i][1]*r)>>4);
+     w=(moonSeaBox[i][2]*r)>>4;      h=(moonSeaBox[i][3]*r)>>4;
+     if (w<1) w=1;
+     if (h<1) h=1;
+     q[0].x=x-w; q[0].y=y-h;
+     q[1].x=x+w; q[1].y=y-h;
+     q[2].x=x+w; q[2].y=y+h;
+     q[3].x=x-w; q[3].y=y+h;
+     EZ_polygon(MOONMODE,color,q,&g);
     }
 }
 
@@ -844,8 +886,9 @@ void mpSkyMoon(int view,MthMatrix *m)
  if (r[1].x>viewCx+viewXmax-1) r[1].x=viewCx+viewXmax-1;
  if (r[1].y>viewCy+viewYmax-1) r[1].y=viewCy+viewYmax-1;
  EZ_userClip(r);
- /* the sky's own colour at the line it lands on, darkened; the outer fan walks that darkening
-    back to nothing at its rim, so the moon ends in the sky and not on an edge */
+ /* the sky's own colour at the line it lands on, offset B and all, darkened; the outer fan
+    walks that darkening back to nothing at its rim, so the moon ends in the sky and not on an
+    edge, and the fog takes the moon down with the rest of the sky */
  {int line=viewCy+p.y;
   C3 sky;
   Uint16 c;
@@ -854,9 +897,13 @@ void mpSkyMoon(int view,MthMatrix *m)
   if (line<0) line=0;
   if (line>=vaultRows) line=vaultRows-1;
   vaultBase(line,&sky);
+  sky.r=clamp8(sky.r+lastB[0]);
+  sky.g=clamp8(sky.g+lastB[1]);
+  sky.b=clamp8(sky.b+lastB[2]);
   c=pack(&sky,0,0);
-  moonFan(p.x,p.y,MOON_R+MOON_EDGE,c,MOON_DARK,16);
-  moonFan(p.x,p.y,MOON_R,c,MOON_DARK,MOON_DARK);
+  moonFan(p.x,p.y,MOON_R+MOON_EDGE,c,MOON_DARK,16,NULL);
+  moonFan(p.x,p.y,MOON_R,c,MOON_DARK,MOON_DARK,moonRelief);
+  moonSeas(p.x,p.y,MOON_R,c,MOON_DARK);
  }
  r[0].x=viewCx+viewXmin;   r[0].y=viewCy+viewYmin;
  r[1].x=viewCx+viewXmax-1; r[1].y=viewCy+viewYmax-1;

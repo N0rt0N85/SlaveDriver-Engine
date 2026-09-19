@@ -75,6 +75,7 @@ void changeLightColor(Sprite *s,int r,int g,int b);
 void addLightEx(Sprite *s,int r,int g,int b,int radius,int peak);    /* GCC14: k 0..16, radius, intensity 0..31 */
 void changeLightEx(Sprite *s,int r,int g,int b,int radius,int peak); /* GCC14: in the light's model; radius <= 0 keeps it */
 int  hasLight(Sprite *s);                       /* GCC14: no duplicates in the list */
+extern int nmLights;                            /* GCC14: lights live, of the 15 slots (overlay) */
 
 void initWater(void);
 void stepWater(void);

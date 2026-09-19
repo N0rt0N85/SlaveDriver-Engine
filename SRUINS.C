@@ -2727,6 +2727,11 @@ int runLevel(char *filename,int levelNm)
 		     without fog and under its share gives the rest to the others.
 		 MTRAV : views the master traverses itself -- their set did not fit in the
 		     level's memory (WALLS.C wallsSplitAlloc).  Shown only then.
+		 lt : dynamic lights live, of the 15 slots (WALLS.C MAXNMLIGHTSOURCES)
+		 mz : one digit per player, 1 = it holds a light right now.  A muzzle flash
+		     is a light on the firing player: the digit blinks at every shot.  It
+		     stays 0 when the list was full at that moment -- the players are served
+		     in order, so 2, 3, 4 are the ones that lose the slot.
 		 Only the views in play are listed. */
 	 static const char *fmtF[MPMAX+1]={"","","B:%d f:%d %d","B:%d f:%d %d %d",
 					   "B:%d f:%d %d %d %d"};
@@ -2739,6 +2744,13 @@ int runLevel(char *filename,int levelNm)
 	    drawStringf(60,-110,1,"MTRAV:%d",mpPlayers-1-wallsSplitSets());
 	 drawStringf(-158,-100,1,fmtC[mpPlayers],mpCells[0],mpShare[0],
 		     mpCells[1],mpShare[1],mpCells[2],mpShare[2],mpCells[3],mpShare[3]);
+	 {int k;                       /* the lights, and who holds one: the flash of each player */
+	  char mz[MPMAX+1];
+	  for (k=0;k<mpPlayers;k++)
+	     mz[k]=(mpBody[k] && hasLight(mpBody[k]))? '1': '0';
+	  mz[mpPlayers]=0;
+	  drawStringf(-158,-90,1,"lt:%d mz:%s",nmLights,mz);
+	 }
 	}
 
 #ifndef NDEBUG

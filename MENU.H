@@ -30,6 +30,7 @@ void dlg_addBigWavyJapaneseButton(int pressCode,int x,int y,char *text);
 
 void dlg_selectButton(int b);
 void dlg_centerStuff(void);
+void dlg_setCancel(int code);   /* GCC14: B returns this code instead of selecting (MENU.C) */
 
 enum {MENUMOVE_FREE,MENUMOVE_HORZ,MENUMOVE_VERT};
 int dlg_run(int selSound,int pushSound,int movement);
