@@ -58,6 +58,7 @@ class TileMaker:
         self.pnames = wad.pnames()
         self._patch = {}
         self._tex = {}
+        self._cov = {}
 
     def palette(self):
         out = [0x0000]                                  # 0 = transparence (PIC.C:500-531)
@@ -130,7 +131,39 @@ class TileMaker:
         self._tex[name] = (w, h, bytes(px))
         return self._tex[name]
 
-    def tile_from_wall(self, name, cu, cv, voff=0, uoff=0):
+    def coverage(self, name):
+        """Masque de COUVERTURE d'une texture composite : 1 la ou un patch pose un pixel.
+
+        Doom dessine une texture du MILIEU d'une ligne a deux faces en ne peignant que les
+        colonnes que ses patches couvrent -- c'est ce qui fait les barreaux d'une grille
+        (BRNBIGC : 27,7 % de vide). `texture()` remplit le reste de zero puis `fix()` remplace
+        ce zero par du presque-noir, parce que TOUTE la geometrie doit etre opaque ; ici il faut
+        l'inverse, et l'indice 0 vaut transparence dans la palette du moteur (PIC.C:500-531).
+        La decision se prend sur la couverture, jamais sur l'indice : un pixel VRAIMENT noir
+        d'un patch est peint."""
+        if name in self._cov:
+            return self._cov[name]
+        td = self.texdefs.get(name)
+        if td is None:
+            self._cov[name] = (64, 64, bytes([1]) * (64 * 64))
+            return self._cov[name]
+        w, h = td["width"], td["height"]
+        cov = bytearray(w * h)
+        for (ox, oy, pi) in td["patches"]:
+            pw, ph, ppx, pmk = self.patch(pi)
+            for y in range(ph):
+                ty = oy + y
+                if not (0 <= ty < h):
+                    continue
+                row, trow = y * pw, ty * w
+                for x in range(pw):
+                    tx = ox + x
+                    if 0 <= tx < w and pmk[row + x]:
+                        cov[trow + tx] = 1
+        self._cov[name] = (w, h, bytes(cov))
+        return self._cov[name]
+
+    def tile_from_wall(self, name, cu, cv, voff=0, uoff=0, masked=False):
         """64x64 indices : la texture echantillonnee sur UNE cellule de cu x cv unites monde.
         Le bouclage (`% w`, `% h`) rend la formule correcte dans les deux sens : une texture plus
         petite que la cellule se repete, une plus grande se sous-echantillonne.
@@ -139,6 +172,7 @@ class TileMaker:
         c'est ce qui met l'echelle verticale d'aplomb (voir `wall_tex`, E4.1c). `voff` est la
         ligne de texture qui tombe en haut de la cellule -- le calage de Doom (r_segs.c)."""
         w, h, px = self.texture(name)
+        cov = self.coverage(name)[2] if masked else None
         out = bytearray(CELL * CELL)
         for y in range(CELL):
             sy = (int(y * cv / CELL) + int(voff)) % h
@@ -146,7 +180,10 @@ class TileMaker:
             orow = y * CELL
             for x in range(CELL):
                 sx = int(x * cu / CELL + uoff) % w     # uoff : colonne au bord gauche (cle uwin)
-                out[orow + x] = self.fix(px[row + sx])
+                if cov is not None and not cov[row + sx]:
+                    out[orow + x] = 0                  # ajoure : le moteur laisse voir derriere
+                else:
+                    out[orow + x] = self.fix(px[row + sx])
         return bytes(out)
 
     def tile_from_flat(self, name):
@@ -161,6 +198,9 @@ class TileMaker:
         from doom3d import CELL_MIN_U, CELL_MAX_U, CELL_MIN_V, CELL_MAX_V
         if "sw" in key:                       # marqueur d'interrupteur (doom3d.finalize_mobile)
             key = tuple(key[:list(key).index("sw")])
+        masked = "mask" in key                # marqueur de grille (doom3d.wall_tex, ajourage)
+        if masked:
+            key = tuple(key[:list(key).index("mask")])
         pic = key[0]
         kind, name = picnames[pic]
         if kind == "flat":
@@ -176,8 +216,9 @@ class TileMaker:
         uoff = 0
         if len(key) >= 9:                     # + fenetre (cu, u0) : mur plus etroit que la texture
             cu, uoff = key[7], key[8]
-        return (self.tile_from_wall(name, cu, cv, voff, uoff),
-                dict(pic=pic, kind=kind, name=name, w=w, h=h, cu=cu, cv=cv, voff=voff, uoff=uoff))
+        return (self.tile_from_wall(name, cu, cv, voff, uoff, masked),
+                dict(pic=pic, kind=kind, name=name, w=w, h=h, cu=cu, cv=cv, voff=voff, uoff=uoff,
+                     masked=masked))
 
 
 def reduire(G, wad, budget, trace=print):

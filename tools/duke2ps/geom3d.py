@@ -466,6 +466,10 @@ class Emitter:
             # sur une repetition de la texture, comme en E4.1b. Mettre aussi la largeur faisait
             # passer E1M1 de 112 a 295 tuiles (1,2 Mo) sans rien corriger de plus.
             key = key + (round(cell[1], 2), int(tex.get("voff", 0)))
+            if tex.get("mask"):
+                # grille : la tuile garde ses trous (doomtiles.coverage).  Dans la cle, sinon la
+                # meme texture posee ailleurs en plein partagerait la tuile ajouree.
+                key = key + ("mask",)
             if tex.get("uwin"):
                 # Doom, mur plus ETROIT que sa texture : Doom n'en montre que les colonnes
                 # [u, u + L), on fabrique la tuile pour elles au lieu d'ecraser la texture entiere
@@ -527,7 +531,8 @@ class Emitter:
 
     # -- murs ----------------------------------------------------------------------------
     def add_wall(self, quad, *, next_sector, picnum, invisible, blocked, parallax=False,
-                 light=0, cap_cells=CAP_CELLS, stats=None, tex=None, normale=None):
+                 light=0, cap_cells=CAP_CELLS, stats=None, tex=None, normale=None,
+                 force_blocked=None):
         """Emet UN mur (quad = [v0,v1,v2,v3], v0/v1 en haut). Retourne la liste des index emis.
         Un mur trop gros pour la reservation du slave est decoupe en longueur puis en hauteur.
 
@@ -558,11 +563,13 @@ class Emitter:
             return self._split_wall(quad, ctl, cth, next_sector=next_sector, picnum=picnum,
                                     invisible=invisible, blocked=blocked, parallax=parallax,
                                     light=light, cap_cells=cap_cells, stats=stats, tex=tex,
-                                    normale=normale)
+                                    normale=normale, force_blocked=force_blocked)
         normal, d = pl
         flags = 0
         if invisible or parallax:
             flags |= 0x02                        # WALLFLAG_INVISIBLE
+        if force_blocked is not None:
+            blocked = force_blocked              # grille : dessinee, mais elle ne bouche pas
         if blocked:
             flags |= 0x100                       # WALLFLAG_BLOCKED
         if parallax:

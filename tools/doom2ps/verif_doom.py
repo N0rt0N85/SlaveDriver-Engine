@@ -41,6 +41,28 @@ OK = []
 SEUIL_ORDRE = 20.0
 
 
+def murs_ajoures(a, W, tex):
+    """Index des murs AJOURES : un mur plein, dessine, en parallelogramme, dont une cellule porte
+    une tuile qui contient l'indice 0 -- la transparence du moteur (PIC.C:500-531).  C'est la
+    signature d'une grille (texture du milieu d'une ligne a deux faces, doom3d), et elle se lit
+    dans la SORTIE seule : le verificateur ne consulte aucun intermediaire du convertisseur."""
+    sys.path.insert(0, os.path.join(ROOT, "tools", "duke2ps"))
+    import lev_io
+    model, _ = lev_io.read_model(a.lev)
+    tiles = model["tiles"]
+    creuse = {i for i, t in enumerate(tiles) if 0 in (t.get("pixels") or ())}
+    out = set()
+    for wi, w in enumerate(W):
+        if w["nextSector"] >= 0 or (w["flags"] & 0x02) or not (w["flags"] & 0x01):
+            continue
+        base = w["textures"]
+        for c in range(w["tileLength"] * w["tileHeight"]):
+            if tex[base + 2 * c + 1] in creuse:
+                out.add(wi)
+                break
+    return out
+
+
 def put(name, ok, detail=""):
     (OK if ok else FAIL).append(name)
     print(f"  [{'OK  ' if ok else 'ECHEC'}] {name}{(' : ' + detail) if detail else ''}")
@@ -759,9 +781,26 @@ def main(argv=None):
                     ys_ = [V[vi]["y"] + dy.get(vi, 0) for vi in W[fw]["v"]]
                     ov = min(hi, max(ys_)) - max(lo, min(ys_))
                     if ov > 1:
-                        bad.append((si, n, fw, round(ov)))
-        put("etat charge : aucun mur plein dans l'ouverture d'un portail", not bad,
-            f"{vus_} portails ouverts" + (f", {len(bad)} murs dedans, ex. {bad[:3]}" if bad else ""))
+                        # POSE SUR le portail : meme droite et meme segment, aux arrondis pres.
+                        pxz = sorted((V[vi]["x"], V[vi]["z"]) for vi in W[pw]["v"])
+                        fxz = sorted((V[vi]["x"], V[vi]["z"]) for vi in W[fw]["v"])
+                        meme = (len(set(pxz)) == 2 and len(set(fxz)) == 2
+                                and set(pxz) == set(fxz))
+                        bad.append((si, n, fw, round(ov), meme))
+        # Une GRILLE est justement un mur plein pose dans l'ouverture d'un portail : c'est comme
+        # cela que Doom peint la texture du milieu d'une ligne a deux faces.  Elle est excusee
+        # quand elle est POSEE SUR le portail -- meme droite, meme segment : c'est la signature
+        # d'une texture du milieu, et non d'une geometrie etrangere qui traverse l'ouverture.
+        # La plupart sont ajourees (BRNBIG*, BRNSMAL*), une ne l'est pas (BROWNGRN, pleine) et
+        # Doom la peint tout autant, donc la transparence ne peut pas etre le critere ; elle est
+        # comptee a part, pour qu'un trou reel se voie dans le detail.
+        ajoures = murs_ajoures(a, W, tex) if bad else set()
+        sur_portail = [t for t in bad if t[4]]
+        bad = [t for t in bad if not t[4]]
+        put("etat charge : aucun mur plein ETRANGER dans l'ouverture d'un portail", not bad,
+            f"{vus_} portails ouverts, {len(sur_portail)} textures du milieu dont "
+            f"{sum(1 for t in sur_portail if t[2] in ajoures)} ajourees"
+            + (f", {len(bad)} murs dedans, ex. {bad[:3]}" if bad else ""))
         if M is not None:
             spx = sp.specials_of(M)
             # fermee a sol + fente (ou entrouverte par le WAD, M n'est pas referme ici), door_func
@@ -1125,9 +1164,21 @@ def tail_checks(a, L, S, W, V, F, tex, obj, p, M):
         f"= {G + tile_base}, marge {255 - G - tile_base}")
     put("tuiles : nmWeaponTiles + nmTiles < 800 (MAXNMPICS)", tile_base + len(tiles) < 800,
         f"{tile_base} + {len(tiles)} = {tile_base + len(tiles)}")
-    n0 = sum(t["pixels"].count(0) for t in tiles[:G])
+    # L'indice 0 est la transparence (PIC.C:500-531) : interdit partout SAUF dans les tuiles des
+    # murs ajoures (les grilles), ou il est le trou entre les barreaux.  Une tuile creuse posee
+    # ailleurs -- sur une face de sol ou de plafond, sur un mur opaque -- ferait un vrai trou.
+    ajoures = murs_ajoures(a, W, tex)
+    tuiles_grille = set()
+    for wi in ajoures:
+        w = W[wi]
+        for c in range(w["tileLength"] * w["tileHeight"]):
+            tuiles_grille.add(tex[w["textures"] + 2 * c + 1])
+    n0 = sum(t["pixels"].count(0) for i, t in enumerate(tiles[:G]) if i not in tuiles_grille)
+    n0g = sum(t["pixels"].count(0) for i, t in enumerate(tiles[:G]) if i in tuiles_grille)
     n255 = sum(t["pixels"].count(255) for t in tiles[:G])
-    put("tuiles : aucun pixel 0 / 255 en geometrie", n0 == 0 and n255 == 0, f"0 x{n0}, 255 x{n255}")
+    put("tuiles : pixel 0 seulement dans les grilles, aucun 255 en geometrie",
+        n0 == 0 and n255 == 0,
+        f"hors grilles 0 x{n0}, 255 x{n255} ; {len(tuiles_grille)} tuiles de grille, 0 x{n0g}")
     pal = model["palettes"]
     put("palette 0 = objet, entree 0 = 0x0000, objectPalette = 0",
         pal["objectPalette"] == 0 and pal["palettes"] and pal["palettes"][0][0] == 0

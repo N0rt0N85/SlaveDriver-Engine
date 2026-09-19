@@ -645,7 +645,7 @@ class DoomConverter:
     def tex_h(self, name):
         return self.sizes.get(name, (64, 128))[1] or 128
 
-    def wall_tex(self, name, hauteur=None, voff=0, cadre=None):
+    def wall_tex(self, name, hauteur=None, voff=0, cadre=None, masked=False):
         """Descripteur de placage E4.1c : la cellule porte la HAUTEUR REELLE du mur.
 
         E4.1b posait cv = hauteur de la texture, en comptant sur `tile_counts` pour tomber juste.
@@ -677,6 +677,8 @@ class DoomConverter:
         d = dict(mode="wall", pic=p, cu=cu, cv=cv, ncx=1, ncy=1,
                  ox=0, oz=0, dx=1, dz=0, yref=0, pu=0, pv=0, flipx=False, flipy=False,
                  keyed_cell=True, voff=int(voff) % h)
+        if masked:
+            d["mask"] = True                    # grille : la tuile garde ses trous
         if cadre is not None and cadre[6] < w - 0.5 and (self.uwin is None or cadre[7] in self.uwin):
             # LINEDEF plus ETROIT que la texture : une cellule de toute la longueur, dont la tuile
             # porte seulement les colonnes que Doom y montre (Emitter.cell_tile, cle `uwin`).
@@ -747,7 +749,7 @@ class DoomConverter:
         return sec.ceilpic == SKYFLAT
 
     def emit_wall(self, P, Q, bot, top, *, next_sector, tex, picnum, light, invisible,
-                  centre=None, mob=None, open_height=None, droite=None):
+                  centre=None, mob=None, open_height=None, droite=None, force_blocked=None):
         """Emet un mur vertical. `mob` = [(MobileTag, 'top'|'bottom')] : les sommets de cette
         arete rejoignent le push block ; `open_height` : la tuile des cellules est refaite pour
         cette hauteur (etat OUVERT d'un mur qui grandit : rails de porte, contremarche d'ascenseur).
@@ -785,7 +787,8 @@ class DoomConverter:
                 self.stats["quads_retournes"] += 1
         idx = self.em.add_wall(quad, next_sector=next_sector, picnum=picnum,
                                invisible=invisible, blocked=(next_sector < 0), light=light,
-                               cap_cells=self.cap, stats=self.stats, tex=tex, normale=normale)
+                               cap_cells=self.cap, stats=self.stats, tex=tex, normale=normale,
+                               force_blocked=force_blocked)
         if tex is not None and tex.get("uwin"):
             rec = self.uwin_use[tex["uwin_id"]]
             rec[0] += (top - bot) * math.dist(P, Q) * (tex["squash"] - 1.0)
@@ -1293,6 +1296,27 @@ class DoomConverter:
                                      light=light, invisible=False, centre=cen, mob=mob)
                 self._note_switch(sg, leaf, idx, name, hb, top_, P, Q)
                 self.stats["linteaux"] += 1
+
+        if top > bot and side and side.middle not in ("-", ""):
+            # TEXTURE DU MILIEU (grille, barreaux, grillage) : Doom la peint DANS l'ouverture,
+            # sans la repeter verticalement -- DONTPEGBOTTOM ancre son bas au bas de l'ouverture,
+            # sinon son haut au haut (r_segs.c). Elle n'etait pas emise du tout : `side.middle`
+            # ne servait qu'aux murs a une face et aux ouvertures fermees, et les 46 lignes de
+            # l'episode qui en portent une montraient un trou. Mur PLEIN (nextSector = -1) pour
+            # ne pas doubler la traversee du portail deja emis juste au-dessous, place apres lui
+            # par le tri « portails en tete », et qui ne BOUCHE que si Doom le dit (ML_BLOCKING).
+            # La tuile garde ses texels a zero (doomtiles.coverage), et les cellules de mur sont
+            # tirees sans SPD_DISABLE (SPR.C:287) : le moteur laisse donc voir a travers.
+            hm = self.tex_h(side.middle)
+            mtop = (bot + hm if pegbot else top) + yoff
+            t_ = min(top, mtop)
+            b_ = max(bot, mtop - hm)
+            if t_ - b_ > 0:
+                tex, pic = self.wall_tex(side.middle, t_ - b_, mtop - t_, cadre, masked=True)
+                emit_wall(P, Q, b_, t_, next_sector=-1, tex=tex, picnum=pic, light=light,
+                          invisible=False, centre=cen, mob=own(b_, t_),
+                          force_blocked=bool(ld.flags & 0x0001))
+                self.stats["grilles"] = self.stats.get("grilles", 0) + 1
 
         if top > bot and nbi >= 0:
             mob = own(bot, top)

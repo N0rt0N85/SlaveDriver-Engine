@@ -117,33 +117,43 @@ void doom_psprTic(void)
    pspSx/pspSy belong to the psprites, which are not being clocked. */
 static const short doomRoleGun[2][2]={{MT_POSSESSED,wp_pistol},{MT_SHOTGUY,wp_shotgun}};
 
-/* setWeaponSequence RESETS the sequence's frame and clock (SEQUENCE.C:353): the player's own
-   weapon is pinned once per TIC, from doom_psprTic, and the frames in between only advance it.
-   Pinning it here every image would hold the gun on the first frame of its state for ever, so
-   the role's gun is pinned only when its state changes -- at the edges of the attack. */
+/* The frames come from the STATE CHAIN, one state per tic, the way doom_psprTic walks it for the
+   marine: the converter builds ONE SEQUENCE PER STATE (89 of them for 55 frames), so a pinned
+   state is a single frame and never animates by itself.  Pinning atkstate alone showed the
+   pistol's first firing frame, which IS its ready frame -- the gun looked idle while its flash
+   played.  doomRole.atk counts the tics into the attack, so it indexes the chain directly.
+   setWeaponSequence resets the sequence's frame (SEQUENCE.C:353), so it is called only when the
+   state changes; the bob rides advanceWeaponSequence's offsets instead, and moves every image. */
 static short roleGunPin[MPMAX];     /* the state each role gun stands pinned at, 0 = none */
-static char roleGunAtk[MPMAX];      /* whether it was attacking when it was pinned */
 
 void doom_weaponDraw(int nmFrames)
-{(void)nmFrames;
+{int bx=0,by=0;
+ (void)nmFrames;
  if (doomRoleMt[mpCur])
-    {int i,wp=-1,st,atk=(doomRole.atk>=0);
+    {int i,wp=-1,st,fl,an;
      for (i=0;i<2;i++)
 	if (doomRoleGun[i][0]==doomRoleMt[mpCur])
 	   wp=doomRoleGun[i][1];
      if (wp<0)
 	return;                         /* the others hold no gun (DOOM_MODES.C) */
-     st=atk? doomWeaponInfo[wp].atkstate: doomWeaponInfo[wp].readystate;
-     if (st!=roleGunPin[mpCur] || atk!=roleGunAtk[mpCur])
+     st=(doomRole.atk>=0)? doom_chainAt(doomWeaponInfo[wp].atkstate,doomRole.atk): 0;
+     if (!st)                           /* not firing, or the chain ran past its end */
+	st=doomWeaponInfo[wp].readystate;
+     fl=(doomRole.atk>=0)? doom_chainAt(doomWeaponInfo[wp].flashstate,doomRole.atk): 0;
+     if (st!=roleGunPin[mpCur])
 	{roleGunPin[mpCur]=st;
-	 roleGunAtk[mpCur]=atk;
 	 setWeaponSequence(st-1,0,DOOM_PSP_Y0+f(DOOM_WEAPONTOP));
-	 addWeaponSequence(atk? doomWeaponInfo[wp].flashstate-1: -1);
 	}
+     addWeaponSequence(fl? fl-1: -1);   /* the flash follows the same chain: it ends on its own */
+     /* A_WeaponReady's bob (:393-396), which no verb runs for a role */
+     an=normalizeAngle(((doomLevelTime*128)&8191)*DOOM_FINE_UNIT);
+     bx=f(F(1)+MTH_Mul(doomPlayer.bob,MTH_Cos(an)));
+     an=((doomLevelTime*128)&4095)*DOOM_FINE_UNIT;
+     by=f(MTH_Mul(doomPlayer.bob,MTH_Sin(an)));
     }
  else
     roleGunPin[mpCur]=0;               /* the role is gone: the next one pins its gun afresh */
- advanceWeaponSequence(0,0,0);
+ advanceWeaponSequence(bx,by,0);
 }
 
 /* --- P_BringUpWeapon, P_CheckAmmo, P_FireWeapon --------------------------------------------- */

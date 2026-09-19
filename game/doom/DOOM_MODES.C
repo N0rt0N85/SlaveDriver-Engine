@@ -494,7 +494,7 @@ void doom_rolePain(void)
 /* --- the body the others see ---------------------------------------------------------------- */
 
 /* the state `t` tics into the chain that starts at `st` (0 = S_NULL: nothing to draw) */
-static int doomChainAt(int st,int t)
+int doom_chainAt(int st,int t)
 {int n,tics;
  for (n=0;n<32 && st>0;n++)
     {tics=doomStates[st].tics;
@@ -514,14 +514,14 @@ short doom_roleBodySeq(int k,Sprite *body,Sprite *viewer,int health)
  int st,frame,view,saved,seq;
  mpPeek(k,&doomRole,sizeof(r),&r);
  if (health<=0)
-    st=doomChainAt(info->deathstate,(doomLevelTime-r.dieTic)&0x7fff);
+    st=doom_chainAt(info->deathstate,(doomLevelTime-r.dieTic)&0x7fff);
  else if (r.atk>=0)
-    st=doomChainAt((r.melee && info->meleestate)? info->meleestate:
-		   (info->missilestate? info->missilestate: info->meleestate),r.atk);
+    st=doom_chainAt((r.melee && info->meleestate)? info->meleestate:
+		    (info->missilestate? info->missilestate: info->meleestate),r.atk);
  else if (r.hurt && info->painstate)
     st=info->painstate;
  else if (body->vel.x || body->vel.z)
-    st=doomChainAt(info->seestate,doomLevelTime&63);
+    st=doom_chainAt(info->seestate,doomLevelTime&63);
  else
     st=info->spawnstate;
  if (st<=0)

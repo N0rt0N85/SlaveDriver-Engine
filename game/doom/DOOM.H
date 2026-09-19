@@ -247,6 +247,7 @@ int         doom_levelOpenChannel(int i);      /* BOSS BATTLE: the channels that
 void        doom_mpLevelStart(void);
 void        doom_mpRespawned(int k);
 int         doom_mpRespawnHold(int k);         /* CFG_MP_RESPAWN_HOLD: 1 = stays where it fell */
+int         doom_chainAt(int st,int t);        /* the state t tics into the chain starting at st */
 void        doom_mpJoined(int k);
 void        doom_levelEnd(int action);
 /* DOOM_GAME.C, for the modes */
