@@ -1245,6 +1245,18 @@ class DoomConverter:
                 # plate-forme voisine plus haute que nous : Doom ancre la texture a SON sol, qui
                 # descend -> dalle rigide, ce qui passe sous notre sol est cache par lui
                 mob.append((mn, "top") if ms is not None else (mn, "rigid"))
+            elif mn_lift and ms is None and nfh > ch and mn.lower < ch:
+                # plate-forme dont le HAUT depasse notre plafond (E1M8, couloir 26 sous
+                # l'ascenseur 28 : plafond 0, plate-forme 8, bas de course -96). La contremarche
+                # coupee a notre plafond ne touchait pas la plate-forme : mur FIXE de -96 a 0, qui
+                # bouchait le passage une fois l'ascenseur descendu (vu sur console 2026-09-19,
+                # « le joueur reste coince dans le couloir », l'interrupteur de ce mur marchait).
+                # Dalle rigide jusqu'a SON sol : les 8 u au-dessus de notre plafond sont caches
+                # par lui, et en bas de course la dalle entiere passe sous notre sol.
+                hb = nfh
+                tex, pic = self.wall_tex(name, hb - fh, v, cadre)
+                mob = own(fh, hb) + [(mn, "rigid")]
+                self.stats["contremarches_sous_plafond"] = self.stats.get("contremarches_sous_plafond", 0) + 1
             idx = emit_wall(P, Q, fh, hb, next_sector=-1, tex=tex, picnum=pic,
                                  light=light, invisible=False, centre=cen, mob=mob)
             self._note_switch(sg, leaf, idx, name, fh, hb, P, Q)
