@@ -239,9 +239,9 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
 	       {if (!this->flashTics)
 		   removeLight(this->sprite);
 		else if (this->mt==MT_ROCKET || this->mt==MT_BARREL)   /* A_Explode's two users */
-		   doom_lightFade(this->sprite,GP_LIGHT_EXPLODE,this->flashTics,GP_LIGHT_EXPLODE_TICS);
+		   doom_lightFade(this->sprite,DLF_EXPLODE,this->flashTics);
 		else
-		   doom_lightFade(this->sprite,GP_LIGHT_MUZZLE_MONSTER,this->flashTics,GP_LIGHT_MUZZLE_TICS);
+		   doom_lightFade(this->sprite,DLF_MUZZLE_MONSTER,this->flashTics);
 	       }
 	   }
 	if (this->tics>0)
@@ -654,27 +654,7 @@ static void doomMissileHit(DoomActor *this,int collide)
     doomExplodeMissile(this);
 }
 
-/* --- dynamic lights (tint, radius, intensity, durations: params/doom.cfg, LIGHT_*) ----------- */
-
-/* Scales the intensity to left/total; tint and radius unchanged. */
-void doom_lightFade(Sprite *s,int r,int g,int b,int radius,int peak,int left,int total)
-{assert(s && total>0);
- (void)radius;
- changeLightEx(s,r,g,b,0,peak*left/total);
-}
-
-/* A_Explode.  A rocket already carries its flight light and the list takes no duplicates, so
-   that light is brightened and widened instead.  Fading and removal go through flashTics. */
-void doom_explosionLight(DoomActor *this)
-{assert(this);
- if (!this->sprite)
-    return;
- if (hasLight(this->sprite))
-    changeLightEx(this->sprite,GP_LIGHT_EXPLODE);
- else
-    addLightEx(this->sprite,GP_LIGHT_EXPLODE);
- this->flashTics=GP_LIGHT_EXPLODE_TICS;
-}
+/* --- dynamic lights (what each effect asks for, and the tuner: DOOM_LIGHTS.C) ---------------- */
 
 /* Every level: the old level's sprites are freed, so is the lit bolt. */
 void doom_missileLightsReset(void)
@@ -689,22 +669,22 @@ static void doomLightMissile(DoomActor *th,int mt)
     return;
  switch (mt)
     {case MT_TROOPSHOT:
-	addLightEx(th->sprite,GP_LIGHT_IMP);
+	doom_lightAdd(th->sprite,DLF_IMP);
 	break;
      case MT_HEADSHOT:
-	addLightEx(th->sprite,GP_LIGHT_CACO);
+	doom_lightAdd(th->sprite,DLF_CACO);
 	break;
      case MT_BRUISERSHOT:
-	addLightEx(th->sprite,GP_LIGHT_BARON);
+	doom_lightAdd(th->sprite,DLF_BARON);
 	break;
      case MT_ROCKET:
-	addLightEx(th->sprite,GP_LIGHT_ROCKET);
+	doom_lightAdd(th->sprite,DLF_ROCKET);
 	break;
      case MT_PLASMA:
 	if (doomPlasmaLight)
 	   break;
 	doomPlasmaLight=th->sprite;
-	addLightEx(th->sprite,GP_LIGHT_PLASMA);
+	doom_lightAdd(th->sprite,DLF_PLASMA);
 	break;
     }
 }
@@ -857,10 +837,10 @@ int doom_lineAttack(DoomActor *src,int yaw,int damage)
  /* Muzzle flash on the shooter -- an addition: Doom only marks firing frames fullbright.
     The flashTics guard avoids a second light when a monster fires on consecutive tics. */
  if (!src->flashTics)
-    addLightEx(src->sprite,GP_LIGHT_MUZZLE_MONSTER);
+    doom_lightAdd(src->sprite,DLF_MUZZLE_MONSTER);
  else
-    changeLightEx(src->sprite,GP_LIGHT_MUZZLE_MONSTER);   /* back to full after the half tic */
- src->flashTics=GP_LIGHT_MUZZLE_TICS;
+    doom_lightChange(src->sprite,DLF_MUZZLE_MONSTER);     /* back to full after the half tic */
+ src->flashTics=doomLightFx[DLF_MUZZLE_MONSTER].tics;
  info=&doomMobjInfo[src->mt];
  eye=src->sprite->pos;
  eye.y=eye.y-src->sprite->radius+F(info->height/2+8);

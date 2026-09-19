@@ -27,6 +27,7 @@
 #include "aicommon.h"
 #include "mplayer.h"
 #include "walls.h"
+#include "doom_lights.h"
 
 DoomPlayer doomPlayer;
 int doomViewBob;                        /* P_CalcHeight's bob, added to the view (CFG_VIEW_BOB)    */
@@ -205,6 +206,10 @@ void doom_playerInit(void)
    and weaponPlayerMove (:1043) are inert. */
 void doom_playerFrame(unsigned short input,unsigned short pushed)
 {assert(camera);
+ if (doom_lightTuner(input))            /* GCC14: the light tuner has the d-pad (DOOM_LIGHTS.C) */
+    {input|=LIGHT_TUNER_KEYS;           /* pad bits are active low: released */
+     pushed&=~LIGHT_TUNER_KEYS;
+    }
  doomPlayer.input=input;
  doomPlayer.pushed|=pushed;
  playerAngle.pitch=0;
@@ -378,7 +383,7 @@ static void doomDeathTic(void)
    yellow = bonuscount (cnt+7)>>3 of 4, plus extralight.  Not while dead: the death branch drives
    colorCenter to -255 and runLevel waits for colorOffset to get there (SRUINS.C:2321). */
 static void doomFlashTic(void)
-{int red,bonus,r,g,b;
+{int red,bonus,r,g,b,step;
  red=(doomPlayer.damageCount+7)>>3;
  if (red>8)
     red=8;
@@ -387,9 +392,12 @@ static void doomFlashTic(void)
     bonus=4;
  if (red)
     bonus=0;                                    /* ST_doPaletteStuff: the bonus only when no red */
- r=red*8+bonus*12+doomPlayer.extralight*4*lightLevel;      /* GCC14: 12 a step at full strength */
- g=-red*8+bonus*12+doomPlayer.extralight*4*lightLevel;     /* (WALLS.H lightLevel, the options) */
- b=-red*8+doomPlayer.extralight*4*lightLevel;
+ step=lightOn? 12*lightPeakPct/100: 0;          /* GCC14: Doom's 12 a step, under the player's */
+ if (step>24)                                   /* settings (WALLS.H, DOOM_LIGHTS.C's tuner) */
+    step=24;
+ r=red*8+bonus*12+doomPlayer.extralight*step;
+ g=-red*8+bonus*12+doomPlayer.extralight*step;
+ b=-red*8+doomPlayer.extralight*step;
  if (r>63) r=63;
  if (r<-63) r=-63;
  if (g>63) g=63;

@@ -190,10 +190,10 @@ static void doomDecreaseAmmo(int amount)
 void doom_muzzleFlash(void)
 {assert(camera);
  if (!doomPlayer.muzzleTics)
-    addLightEx(camera,GP_LIGHT_MUZZLE_PLAYER);
+    doom_lightAdd(camera,DLF_MUZZLE_PLAYER);
  else
-    changeLightEx(camera,GP_LIGHT_MUZZLE_PLAYER);
- doomPlayer.muzzleTics=GP_LIGHT_MUZZLE_TICS;
+    doom_lightChange(camera,DLF_MUZZLE_PLAYER);
+ doomPlayer.muzzleTics=doomLightFx[DLF_MUZZLE_PLAYER].tics;
 }
 
 /* Called by doom_playerTic before the psprites: full on tic N, half on N+1, off at N+2. */
@@ -203,7 +203,7 @@ void doom_muzzleTic(void)
  if (!--doomPlayer.muzzleTics)
     removeLight(camera);
  else
-    doom_lightFade(camera,GP_LIGHT_MUZZLE_PLAYER,doomPlayer.muzzleTics,GP_LIGHT_MUZZLE_TICS);
+    doom_lightFade(camera,DLF_MUZZLE_PLAYER,doomPlayer.muzzleTics);
 }
 
 /* --- hitscan and autoaim (SPEC_PLAYER section 2.5) ------------------------------------------ */

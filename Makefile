@@ -272,7 +272,7 @@ $(OBJDIR)/%.o: %.C | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 # GCC14: the multiplayer rules, menu and score run a few times a level or at the title: built for
 # size -- every byte of MAIN is a byte less for the level's tiles (tools/doom2ps/make_e1m1.py)
-$(OBJDIR)/MPRULES.o $(OBJDIR)/DOOM_MODES.o $(OBJDIR)/MPSKY.o: CFLAGS += -Os
+$(OBJDIR)/MPRULES.o $(OBJDIR)/DOOM_MODES.o $(OBJDIR)/MPSKY.o $(OBJDIR)/DOOM_LIGHTS.o: CFLAGS += -Os
 
 # --- shim (lower-case .c, keeps the same flags) -----------------------------------------------
 $(SNSTUBS_OBJ): shim/sn_stubs.c | $(OBJDIR)

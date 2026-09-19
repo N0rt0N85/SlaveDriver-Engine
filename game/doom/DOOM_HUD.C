@@ -26,6 +26,7 @@
 #include "sruins.h"
 #include "gamestat.h"
 #include "doom.h"
+#include "doom_lights.h"
 #include "mplayer.h"
 #define DOOM_ART_DEFINE                 /* doom_stbar, doom_faces, doom_keys: MAIN only          */
 #define DOOM_ART_DEFINE_FONTS           /* the fonts too: PRINT.o only sees them through doomFontList */
@@ -254,6 +255,7 @@ void doom_setMessage(const char *msg)
 void doom_drawMessage(void)
 {int x,c,w;
  const char *s;
+ doom_lightTunerDraw();                 /* GCC14: the light tuner's lines, under the message */
  if (!doomMessageOn)
     return;
  if (doomLevelTime>=doomMessageUntil)

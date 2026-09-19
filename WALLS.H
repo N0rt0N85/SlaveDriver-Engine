@@ -20,9 +20,12 @@ extern int pipeSpin;          /* spins at the join; -1 = nothing in flight */
 extern int fogDist;
 void setFog(int dist);
 /* GCC14: the player's settings (the title's OPTIONS, CFG_GFX_OPTIONS): fogCap, the fog's ceiling
-   -- one of fogLevels, off to heavy; every view's fog is at most that (SRUINS.C mpSetViewFog) --
-   and lightLevel, the dynamic lights' strength (addLightEx), 0 off .. 3 full. */
-extern int fogCap,lightLevel;
+   -- one of fogLevels, off to heavy; every view's fog is at most that (SRUINS.C mpSetViewFog).
+   The dynamic lights (addLightEx, changeLightEx): a switch, the intensity and radius each as a
+   percentage of what the effect asks, and an offset on each channel's k.  What every effect
+   asks for is the game's (game/doom/DOOM_LIGHTS.C, the tuner that edits both). */
+extern int fogCap;
+extern int lightOn,lightPeakPct,lightRadPct,lightAddR,lightAddG,lightAddB;
 extern const short fogLevels[4];
 int fogLevel(void);                     /* fogCap's index in fogLevels */
 

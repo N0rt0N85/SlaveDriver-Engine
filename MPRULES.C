@@ -114,9 +114,10 @@ void mpLevelReset(void)
 /* --- the title's game screens ------------------------------------------------------------
    NEW GAME (co-op rules, 1 to 4 players) and MULTIPLAYER (every mode, 2 to 4).  Their own loop
    rather than a dialog: dlg_run answers only a press, and every line here is a value the d-pad
-   turns -- but MR_BOSS, which only says what the boss battle's map holds.  bigFont (2), like the
+   turns -- but MR_BOSS, which only says what the boss battle's map holds.  MAP sits under MODE:
+   the mode says which maps may be played.  bigFont (2), like the
    title's buttons: capitals, digits, spaces and '-' only. */
-enum {MR_MAP,MR_BOSS,MR_MODE,MR_SKILL,MR_PLAYERS,MR_FRAGS,MR_TIME,MR_P1,MR_START=MR_P1+MPMAX,MR_BACK,MR_NM};
+enum {MR_MODE,MR_MAP,MR_BOSS,MR_SKILL,MR_PLAYERS,MR_FRAGS,MR_TIME,MR_P1,MR_START=MR_P1+MPMAX,MR_BACK,MR_NM};
 static const char *const mpModeName[MP_NMMODES]=
    {"COOPERATIVE","DEATHMATCH","TEAM DEATHMATCH",CFG_MP_MONSTERS_NAME,"BOSS BATTLE"};
 static const unsigned char mpFragChoice[5]={0,10,20,30,50};
@@ -257,7 +258,7 @@ static int mpGameMenu(int multi)
  if (players>MPMAX)
     players=MPMAX;
  level=multi? mpStartLevel: 0;
- row=multi? MR_MAP: MR_SKILL;
+ row=multi? MR_MODE: MR_SKILL;
  fadeEnd=-150;                  /* the title picture dims behind the lines, as for a submenu */
  fadeDir=-5;
  SCL_SetFrameInterval(0xfffe);

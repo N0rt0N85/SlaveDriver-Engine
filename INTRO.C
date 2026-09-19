@@ -189,17 +189,12 @@ static void remapMenu(int hx,int hy,int lx,int ly)
 }
 
 #if CFG_GFX_OPTIONS
-/* GCC14: the fog and the lights (WALLS.H fogCap, lightLevel), two more lines under MUSIC: items 7
-   and 8 (codes 4 and 5), after the title, the sliding text and the rule PowerSlave's code counts
-   on as items 4-6.  bigFont: capitals and spaces. */
+/* GCC14: the fog (WALLS.H fogCap) and LIGHTS, which opens the game's light tuner, two more lines
+   under MUSIC: items 7 and 8 (codes 4 and 5), after the title, the sliding text and the rule
+   PowerSlave's code counts on as items 4-6.  bigFont: capitals and spaces. */
 static char *optFogText(void)
 {static char *const t[4]={"FOG OFF","FOG LOW","FOG MEDIUM","FOG HIGH"};
  return t[fogLevel()];
-}
-
-static char *optLightText(void)
-{static char *const t[4]={"LIGHTS OFF","LIGHTS LOW","LIGHTS MEDIUM","LIGHTS FULL"};
- return t[lightLevel&3];
 }
 #define OPT_DONE_Y (-24+130)
 #else
@@ -234,7 +229,7 @@ static void optionMenu(int hx,int hy,int lx,int ly)
  dlg_addRect(-60,-7,120,1,RGB(31,31,31));
 #if CFG_GFX_OPTIONS
  dlg_addBigWavyButton(4,0,-24+90,optFogText());
- dlg_addBigWavyButton(5,0,-24+110,optLightText());
+ dlg_addBigWavyButton(5,0,-24+110,"LIGHTS");
  dlg_centerStuff();
 #endif
 #else
@@ -296,22 +291,24 @@ static void optionMenu(int hx,int hy,int lx,int ly)
 	    break;
 #if CFG_GFX_OPTIONS
 	 case 4:
-	 case 5:
-	    {int it=menuSel+3;          /* items 7 and 8 */
-	     if (menuSel==4)
-		fogCap=fogLevels[(fogLevel()+1)&3];
-	     else
-		lightLevel=(lightLevel+1)&3;
-	     dlgItem[5].text=dlgItem[it].text;
-	     dlgItem[it].text=(menuSel==4)? optFogText(): optLightText();
-	     dlgItem[5].xp=dlgItem[it].xp; dlgItem[5].yp=dlgItem[it].yp;
-	     dlg_centerStuff();
-	     dlg_setupNoSlide();
-	     dlgItem[5].x2+=(menuSel==4)? 250: -300;
-	     dlgItem[it].x1+=(menuSel==4)? -250: 300;
-	     dlg_runSlideIn();
-	    }
+	    fogCap=fogLevels[(fogLevel()+1)&3];
+	    dlgItem[5].text=dlgItem[7].text;   /* item 7 = the FOG line */
+	    dlgItem[7].text=optFogText();
+	    dlgItem[5].xp=dlgItem[7].xp; dlgItem[5].yp=dlgItem[7].yp;
+	    dlg_centerStuff();
+	    dlg_setupNoSlide();
+	    dlgItem[5].x2+=250;
+	    dlgItem[7].x1+=-250;
+	    dlg_runSlideIn();
 	    break;
+	 case 5:                               /* LIGHTS: the game's tuner, its own screen */
+	    dlg_setupSlideOut();
+	    dlgItem[5].x2=0; dlgItem[5].y2=400;
+	    dlgItem[5].x1=0; dlgItem[5].y1=400;
+	    dlg_runSlideIn();
+	    CFG_LIGHT_MENU();
+	    menuSel=8;                         /* the menu comes back on the LIGHTS line (item 8) */
+	    goto bigReset;
 #endif
 	   }
      if (menuSel==3)

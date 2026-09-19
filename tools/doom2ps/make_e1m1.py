@@ -161,17 +161,27 @@ def sky_block(W, retail_path, lump="SKY1", horizon=SKY_HORIZON):
     112, 8 texels plus haut (viewp.y = 20 de PLAX.C:48 est cale sur 240) -> la ligne 100 de SKY1
     (skytexturemid de Doom, r_sky.c) tombe en xb `horizon` = 260 (estime, a confirmer a l'ecran).
     Doom dessine son ciel en miroir (r_plane.c : colonne = (viewangle + xtoviewangle[x]) >> 22, qui
-    DECROIT vers la droite) -> colonne = -yb. Au-dela de la texture, la derniere ligne se repete."""
+    DECROIT vers la droite) -> colonne = -yb.
+
+    SOUS la texture, Doom REPETE : R_DrawColumn masque la ligne par &127, donc passe 28 lignes sous
+    l'horizon on revoit le haut du ciel. Clamper la derniere ligne donnait au contraire une bande
+    noire sans fin (SKY1 finit par 8 lignes noires), tres visible des qu'on domine la carte. On
+    repete donc comme Doom, mais sur les `hv` premieres lignes : les lignes noires de fin ne sont
+    la que parce que la texture fait 128. Au-DESSUS, la ligne 0 se repete (le ciel, pas le sol)."""
     tm = doomtiles.TileMaker(W)
     w, h, px = tm.texture(lump)
     assert w == SKY_H, "SKY1 attendu 256 de large : un tour = 4 x 256 colonnes (PLAX.C:28)"
+    noir = {i for i, c in enumerate(W.playpal(0)) if max(c) < 8}
+    hv = h
+    while hv > 1 and all(px[(hv - 1) * w + c] in noir for c in range(w)):
+        hv -= 1                                  # SKY1 : 120, les 8 dernieres lignes sont noires
     bmp = bytearray(SKY_W * SKY_H)
     for yb in range(SKY_H):
         col = (-yb) % w
         orow = yb * SKY_W
         for xb in range(SKY_W):
-            r = min(max(100 - (xb - horizon), 0), h - 1)
-            bmp[orow + xb] = px[r * w + col]
+            r = 100 - (xb - horizon)
+            bmp[orow + xb] = px[(0 if r < 0 else r % hv) * w + col]
     r = levmod.Reader(retail_path)
     s = levmod.parse_sky(r)
     assert (s["width"], s["height"]) == (SKY_W, SKY_H), "ciel retail attendu 512x256 (PLAX.C:91-93)"

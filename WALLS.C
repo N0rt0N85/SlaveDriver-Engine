@@ -552,14 +552,34 @@ void addLight(Sprite *s,int r,int g,int b)
 {lightPut(s,r,g,b,LIGHTRADIUS,0);
 }
 
+/* GCC14: the player's settings over what an effect asks (WALLS.H): the switch, the two scales
+   and the tint offsets.  0 = nothing to light (intensity fell to 0, or the lights are off). */
+static int lightTune(int *r,int *g,int *b,int *radius,int *peak)
+{int k[3],i,p,d;
+ if (!lightOn)
+    return 0;
+ k[0]=*r; k[1]=*g; k[2]=*b;
+ for (i=0;i<3;i++)
+    {d=k[i]+((i==0)? lightAddR: (i==1)? lightAddG: lightAddB);
+     k[i]=(d<0)? 0: (d>16)? 16: d;
+    }
+ *r=k[0]; *g=k[1]; *b=k[2];
+ p=(*peak)*lightPeakPct/100;
+ *peak=(p>31)? 31: p;
+ if (*radius>0)
+    {d=(*radius)*lightRadPct/100;
+     *radius=(d<16)? 16: (d>1024)? 1024: d;
+    }
+ return *peak>0;
+}
+
 /* GCC14: k 0..16 per channel, radius in world units, intensity 0..31 at the centre. */
 void addLightEx(Sprite *s,int r,int g,int b,int radius,int peak)
 {assert(radius>=16 && radius<=1024);
  assert(peak>=0 && peak<=31);
  assert(r>=0 && r<=16 && g>=0 && g<=16 && b>=0 && b<=16);
- peak=peak*lightLevel/3;        /* the player's strength: none at all is no light to light */
- if (!peak)
-    return;
+ if (!lightTune(&r,&g,&b,&radius,&peak))
+    return;                       /* the player's settings put this light out */
  lightPut(s,r*peak,g*peak,b*peak,radius,1);
 }
 
@@ -581,7 +601,12 @@ void changeLightEx(Sprite *s,int r,int g,int b,int radius,int peak)
  if (i<0)
     return;
  assert(!lMode[i] || (peak>=0 && peak<=31));
- m=lMode[i]? peak*lightLevel/3: 1;
+ if (lMode[i])
+    {lightTune(&r,&g,&b,&radius,&peak);   /* switched off gives intensity 0: an unlit light */
+     m=peak;
+    }
+ else
+    m=1;
  delayColor[i][0]=r*m;
  delayColor[i][1]=g*m;
  delayColor[i][2]=b*m;
@@ -2683,7 +2708,7 @@ unsigned char fogTable[256];
 int fogDist=4096;      /* distance at which a fully lit sector (16) reaches black */
 const short fogLevels[4]={4096,2048,1024,512};
 int fogCap=4096;
-int lightLevel=3;
+int lightOn=1,lightPeakPct=100,lightRadPct=100,lightAddR,lightAddG,lightAddB;
 
 int fogLevel(void)
 {int i;

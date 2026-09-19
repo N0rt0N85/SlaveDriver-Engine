@@ -7,14 +7,21 @@
    (lines 0..111, one horizon); three and four have two bands, one per row of quadrants, cut by
    the two windows (the 3p empty quadrant gets none).
 
+   A band runs from the top of its views down to THEIR BOTTOM, not to the horizon: the vault's
+   96 rows are 56 down to the horizon (line 112 of a half screen, 56 of a quadrant) and 40 under
+   it, where the gradient goes to the haze's colour -- so a player standing high sees sky, not
+   black, below the horizon.  The fog never moves a layer: it thickens the haze and takes all
+   three towards black through colour offset B, which is the fog passing in front of the sky.
+
    The layers, back to front, all under the walls (sprite priority 4):
      RBG0, 1  the vault: an opaque 512x256 RGB bitmap over A0+A1, shown at 2x -- the sky's
-              gradient and its high clouds.  No coefficient table: A0 holds bitmap too.
+              gradient, its high clouds and its fogged floor.  No coefficient table: A0 holds
+              bitmap too.
      NBG1, 2  the clouds: 32768-colour cells in B1, with gaps; a lit copy of every cell and four
               baked bolts, swapped in through the map when lightning strikes.
      NBG0, 3  the haze: 32768-colour cells in B0 -- the panorama's own ridges, fogged, over a
               veil that goes to the fog's black at the horizon; semi-transparent (colour
-              calculation), raised and thickened as the fog closes in.
+              calculation), thickened as the fog closes in.
    The CRAM is full in split screen (the players' colours took the sky's bank, MPLAYER.C), so
    every layer is RGB, and NBG0/NBG1 at 32768 colours evict NBG2/NBG3 (VDP2 p.61): three
    textured layers is the ceiling.  Plus, per view, a sun or a moon on the VDP1 (mpSkySun).
@@ -24,6 +31,9 @@
    each column, the brightest azimuth for the sun.  A new seed at every build: the same level
    never gets the same clouds twice.  Built when the level starts in split screen or when a
    second player joins (~0.3 s of CPU); a third or fourth player only re-lays the maps.
+   The sun (mpSkySun) is four VDP1 polygons per view, not a character: the level's tiles leave
+   no room in the VDP1's character VRAM (PIC.C initPicSystem takes what is left of it).
+
    Only when the level loaded no VDP2 picture: B0-B1 then hold nothing (Doom's STATIC.DAT
    sheet is zeros); a solo level load takes everything back (mpSkyOff, then setVDP2/initPlax). */
 #include <stdlib.h>
@@ -66,12 +76,16 @@ static const Uint16 skyCycle[8]={0xeeee,0xeeee,0xeeee,0xeeee,
 				 0x144f,0x44fe,         /* B0: N1 name, N0 x4, CPU */
 				 0x055f,0x55fe};        /* B1: N0 name, N1 x4, CPU */
 
-/* per layout (players 2, 3, 4): the first map row of each band's clouds and haze, the bands */
+/* per layout (players 2, 3, 4): the first map row of each band's clouds and haze, the bands --
+   each the whole height of its views (2 players: lines 0..191; 3-4: a row of quadrants) */
 static const signed char cloudRow[3][2]={{6,-1},{0,14},{0,14}};
 static const signed char hazeRow[3][2]={{10,-1},{3,17},{3,17}};
-static const short bandRect[3][2][4]={{{0,0,319,111},{1,1,0,0}},
-				      {{0,0,319,55},{0,112,159,167}},
-				      {{0,0,319,55},{0,112,319,167}}};
+static const short bandRect[3][2][4]={{{0,0,319,191},{1,1,0,0}},
+				      {{0,0,319,95},{0,112,159,207}},
+				      {{0,0,319,95},{0,112,319,207}}};
+#define VAULT_ROWS   96         /* a band's rows: 56 down to the horizon, 40 under it */
+#define VAULT_HOR    56
+#define VAULT_BAND2  112        /* the second band's first row */
 
 typedef struct {short r,g,b;} C3;               /* 0..255 */
 
@@ -80,12 +94,18 @@ static unsigned char perm[256];
 static C3 cZen,cHor,cDark,cMid,cLight,cTop,cTint,cVeil;
 static int stormy,night,sunAz,layout;
 static Fixed32 windDeck,windCloud,windHaze;
-static int windDir,hazeY,ccRate,lastB[3];
+static int windDir,fogDim,ccRate,lastB[3];
 static unsigned int now,evNext,gustStart,gustEnd;
 static int evType,evT,evBand,evCol,evBoltNm,flash;
 static short savedPri[2];
 
-static const unsigned char bayer[16]={0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5};
+/* 0..15 from the pixel.  The ordered 4x4 matrix repeats its dots over a slow gradient and the
+   eye finds the grid, so the thresholds here are hashed instead. */
+static int hash2(int x,int y)
+{unsigned int h=(unsigned int)x*374761393u+(unsigned int)y*668265263u;
+ h=(h^(h>>13))*1274126177u;
+ return (int)((h>>16)&15);
+}
 
 static int rnd(void)
 {seed=seed*1103515245+12345;
@@ -108,7 +128,7 @@ static int clamp8(int v)
 
 /* 8-bit colour to VDP2 RGB, opaque, with a 4x4 ordered dither of one 5-bit step */
 static Uint16 pack(const C3 *c,int x,int y)
-{int d=bayer[((y&3)<<2)|(x&3)]-8,r,g,b;
+{int d=hash2(x,y)-8,r,g,b;
  r=clamp8(c->r+d)>>3; g=clamp8(c->g+d)>>3; b=clamp8(c->b+d)>>3;
  return 0x8000|(b<<10)|(g<<5)|r;
 }
@@ -247,47 +267,71 @@ static int fbm(int x,int y,int o)
 {return (vnoise(x,y,7,o)*8+vnoise(x,y,6,o+61)*4+vnoise(x,y,5,o+122)*2+vnoise(x,y,4,o+183))/15;
 }
 
-/* ---- the vault: rows 0..55 of the A0+A1 bitmap, copied to 112..167 for the second band ---- */
+/* ---- the vault: rows 0..95 of the A0+A1 bitmap, copied to 112..207 for the second band ----
+   Above the horizon (row 56): the sky's gradient and its high clouds.  Below it: the same
+   colour walked down to the haze's, which the fog then takes to black -- what a wall at that
+   distance turns into, so sky and ground meet in the same colour. */
 static void makeVault(void)
 {volatile Uint16 *v=VW(0);
+ static const C3 black={0,0,0};
  int x,y,n,a,t,thr=150-stormy/6;
- C3 base,cc;
- for (y=0;y<56;y++)
-    {mix(&base,&cZen,&cHor,(y*y*256)/(55*55));
+ C3 base,cc,deep;
+ mix(&deep,&cVeil,&black,128);
+ for (y=0;y<VAULT_ROWS;y++)
+    {if (y<VAULT_HOR)
+	mix(&base,&cZen,&cHor,(y*y*256)/(55*55));
+     else
+	{t=((y-VAULT_HOR)*256)/(VAULT_ROWS-VAULT_HOR);
+	 mix(&base,&cHor,&deep,(t*t)>>8);
+	}
      for (x=0;x<512;x++)
-	{n=fbm(x,y*3,0);
-	 a=clamp8((n-thr)*4);
-	 t=clamp8((n-thr)*3+128-y*2);
-	 mix(&cc,&cMid,&cLight,t);
-	 mix(&cc,&base,&cc,a*3>>2);
+	{if (y<VAULT_HOR)
+	    {n=fbm(x,y*3,0);
+	     a=clamp8((n-thr)*4);
+	     t=clamp8((n-thr)*3+128-y*2);
+	     mix(&cc,&cMid,&cLight,t);
+	     mix(&cc,&base,&cc,a*3>>2);
+	    }
+	 else
+	    cc=base;
 	 v[(y<<9)+x]=pack(&cc,x,y);
 	}
     }
- for (x=0;x<56*512;x++)
-    v[112*512+x]=v[x];
+ for (x=0;x<VAULT_ROWS*512;x++)
+    v[VAULT_BAND2*512+x]=v[x];
 }
 
 static void cloudPixel(int k,int x,int y,Uint16 p)
 {VW(CLOUD_CHARS)[(k<<6)+(((y&7)<<3)|(x&7))]=p;
 }
 
-/* the clouds, 512x40: puffs under an envelope, lit from above (bright where the puff three
-   lines up is thin); the lit copy is the same mask pushed toward lightning's tint */
+/* a second noise field bends the first: plain fbm draws the same blobs on its lattice and the
+   repetition shows; a warped one draws wisps */
+static int warped(int x,int y,int o)
+{int wx=x+((fbm(x,y,o+29)-128)>>2),
+     wy=y+((fbm(x+211,y+37,o+53)-128)>>2);
+ return fbm(wx,wy,o);
+}
+
+/* the clouds, 512x40: smoke under an envelope, lit from above (bright where the puff three
+   lines up is thin), its edge blended into the sky behind rather than cut out with a dither;
+   the lit copy is the same mask pushed toward lightning's tint */
 static void makeClouds(void)
 {unsigned char above[4][512];
  int x,y,n,a,t,k,env,thr=140-(stormy>>3);
- C3 c,lit;
+ C3 c,lit,bg;
  for (x=0;x<64;x++)
     {VW(CLOUD_CHARS)[x]=0;      /* the blank cell */
     }
  for (y=0;y<40;y++)
     {env=256-(((y-20)*(y-20))<<8)/400;
+     mix(&bg,&cZen,&cHor,(y*256)/40);   /* the vault behind: near enough for an edge */
      for (x=0;x<512;x++)
 	{k=((y>>3)<<6)+(x>>3);
-	 n=fbm(x,y*2,97);
+	 n=warped(x,y*2,97);
 	 a=((n*env)>>8)-thr;
 	 above[y&3][x]=clamp8(a*2);
-	 if (a<=0 || (a<24 && (a*16)/24<=bayer[((y&3)<<2)|(x&3)]))
+	 if (a<=1+(hash2(x,y)>>3))
 	    {cloudPixel(1+k,x,y,0);
 	     cloudPixel(CLOUD_LIT+k,x,y,0);
 	     continue;
@@ -297,6 +341,8 @@ static void makeClouds(void)
 	    mix(&c,&cDark,&cMid,t<<1);
 	 else
 	    mix(&c,&cMid,&cTop,(t-128)<<1);
+	 if (a<48)                      /* the edge fades into the sky over 48 levels */
+	    mix(&c,&bg,&c,(a*256)/48);
 	 mix(&lit,&c,&cTint,160);
 	 cloudPixel(1+k,x,y,pack(&c,x,y));
 	 cloudPixel(CLOUD_LIT+k,x,y,pack(&lit,x,y));
@@ -349,8 +395,8 @@ static void makeBolts(void)
 }
 
 /* the haze, 512x56: 32 lines of the panorama's own ridges, fogged the nearer they come to the
-   horizon, over a dithered veil that thickens down to it; 24 lines of black below, which the
-   fog raises into the band as it closes in */
+   horizon, over a dithered veil that thickens down to it.  Below the horizon it is clear: the
+   vault's own fade carries the band from there to the bottom of the views. */
 static void makeHaze(const unsigned char *ridge)
 {int x,y,h,k,d,xb;
  C3 c;
@@ -362,7 +408,7 @@ static void makeHaze(const unsigned char *ridge)
 	k=1+((y>>3)<<6)+(x>>3);
 	h=32-y;
 	if (h<=0)
-	   p=0x8000;
+	   p=0;                 /* under the horizon: the vault, which fades on its own */
 	else if (h<=ridge[x&255])
 	   {xb=H0+(h*ridge[256])/30;
 	    panoPixel(x,xb,&c);
@@ -371,7 +417,7 @@ static void makeHaze(const unsigned char *ridge)
 	   }
 	else
 	   {d=((32-h)*(32-h)*200)>>10;
-	    p=(d>(bayer[((y&3)<<2)|(x&3)]<<4)+8)? pack(&cVeil,x,y): 0;
+	    p=(d>(hash2(x+7,y+3)<<4)+8)? pack(&cVeil,x,y): 0;
 	   }
 	VW(HAZE_CHARS)[(k<<6)+(((y&7)<<3)|(x&7))]=p;
        }
@@ -417,25 +463,22 @@ static void mapLight(int band,int col,int bolt,int on)
        }
 }
 
-/* ---- the sun (VDP1, per view): a 32x32 4-bit cell and its lookup table, from the sky ---- */
-#define SUN_CHAR 511            /* the last of SPR.C's MAXNMCHARS: never a pic slot */
-#define SUN_CLUT 0              /* Doom's fonts take tables 1-3 (PRINT.C initFonts) */
-static int sunOk;
+/* ---- the sun (VDP1, per view): four polygons in the sky's own colours.  Not a character: a
+   level's tiles take what the VDP1's character VRAM has (PIC.C initPicSystem), leaving no room
+   to allocate one.  A square and a diamond of one radius make an octagon; the halo over them
+   is half transparent. ---- */
+static int sunOk,sunNight;
+static Uint16 sunHalo,sunRim,sunCore;
 static Fixed32 sunDir[3];
 static short sunBB[MPMAX][4];
 static char sunBBok[MPMAX];
 
 static void makeSun(void)
-{static struct sprLookupTbl tbl;   /* dmaMemCpy reads it after we return */
- C3 core,rim,c;
- int i,x,y,r2,idx;
- volatile unsigned char *p;
+{C3 core,rim,c;
+ int i;
  static const Fixed32 sin16[16]={0,25080,46341,60547,65536,60547,46341,25080,
 				 0,-25080,-46341,-60547,-65536,-60547,-46341,-25080};
  sunOk=0;
- if (EZ_charRoom()<512+64)
-    return;
- EZ_setChar(SUN_CHAR,COLOR_1,32,32,NULL);
  if (night)
     {mix(&core,&cTop,&(C3){215,222,240},150);
      mix(&rim,&cZen,&core,90);
@@ -444,35 +487,32 @@ static void makeSun(void)
     {mix(&core,&cTop,&(C3){255,244,214},170);
      mix(&rim,&cHor,&cTint,128);
     }
- tbl.entry[0]=0;
- for (i=1;i<16;i++)
-    {mix(&c,&rim,&core,(i*256)/15);
-     tbl.entry[i]=pack(&c,0,0);
-    }
- EZ_setLookupTbl(SUN_CLUT,&tbl);
- p=(volatile unsigned char *)(0x25c00000+(EZ_charNoToVram(SUN_CHAR)<<3));
- for (y=0;y<32;y++)
-    for (x=0;x<32;x+=2)
-       {int v[2],j;
-	for (j=0;j<2;j++)
-	   {int dx=(x+j)*2-31,dy=y*2-31;
-	    r2=(dx*dx+dy*dy)>>2;          /* squared radius in pixels */
-	    if (night)
-	       idx=r2<36? 15-((lat(x+j,y)>>6)&1)*3: r2<81? (r2<56? 5: 3): 0;
-	    else
-	       idx=r2<16? 15: r2<36? 13: r2<64? 10: r2<225? 1+((225-r2)*7)/161: 0;
-	    if (idx && idx<8 && (idx<<1)<=bayer[((y&3)<<2)|((x+j)&3)])
-	       idx=0;                     /* the glow thins out, dithered */
-	    v[j]=idx;
-	   }
-	p[(y<<4)+(x>>1)]=(v[0]<<4)|v[1];
-       }
+ sunCore=pack(&core,0,0);
+ sunRim=pack(&rim,0,0);
+ mix(&c,&rim,&cZen,150);              /* the halo: the rim, halfway into the sky behind it */
+ sunHalo=pack(&c,0,0);
+ sunNight=night;
  /* where: the panorama's brightest azimuth, one of its four turns, 14 degrees up */
  i=((sunAz>>6)+((rnd()&3)<<2))&15;
  sunDir[0]=MTH_Mul(sin16[i],63587);
  sunDir[1]=15854;
  sunDir[2]=MTH_Mul(sin16[(i+4)&15],63587);
  sunOk=1;
+}
+
+/* one of the octagon's two quads, centred on (cx,cy) in the view's local coordinates */
+static void sunQuad(int cx,int cy,int r,int diamond,int mode,Uint16 color)
+{XyInt q[4];
+ if (diamond)
+    {q[0].x=cx;   q[0].y=cy-r; q[1].x=cx+r; q[1].y=cy;
+     q[2].x=cx;   q[2].y=cy+r; q[3].x=cx-r; q[3].y=cy;
+    }
+ else
+    {int h=(r*181)>>8;              /* the square inside the same circle */
+     q[0].x=cx-h; q[0].y=cy-h; q[1].x=cx+h; q[1].y=cy-h;
+     q[2].x=cx+h; q[2].y=cy+h; q[3].x=cx-h; q[3].y=cy+h;
+    }
+ EZ_polygon(mode,color,q,NULL);
 }
 
 /* ---- registers ---- */
@@ -572,7 +612,7 @@ void mpSkyPlayers(int players)
      makeSun();
      windDir=(rnd()&1)? 1: -1;
      windDeck=windCloud=windHaze=0;
-     hazeY=0;
+     fogDim=0;
      now=0;
      evType=0; flash=0;
      evNext=240+rnd()%240;
@@ -666,7 +706,7 @@ static void events(int ticks)
 }
 
 void mpSkyFrame(int fog,const int *offA,int ticks)
-{int t,g=256,dy,rate,i,b[3];
+{int t,g=256,rate,i,b[3];
  if (!mpSkyOn)
     return;
  if (ticks<1) ticks=1;
@@ -687,23 +727,26 @@ void mpSkyFrame(int fog,const int *offA,int ticks)
  Scl_n_reg.n1_move_x=windCloud&(F(512)-1);
  Scl_n_reg.n1_move_y=0;
  Scl_n_reg.n0_move_x=windHaze&(F(512)-1);
- /* the fog: 4096 = none, 512 = the thickest.  The haze climbs up to 20 lines and loses its
-    transparency */
+ /* The fog: 4096 = none, 512 = the thickest.  Nothing MOVES with it -- a sky sliding up and
+    down as the budget breathed read as the sky itself moving.  It thickens the haze and pulls
+    the three layers towards black, which is the fog passing in front of the sky. */
  t=fog>=4096? 0: fog<=512? 256: ((4096-fog)<<8)/3584;
- dy=t*20;                       /* 8.8 lines */
- hazeY+=(dy-hazeY)>>3;
- Scl_n_reg.n0_move_y=hazeY<<8;
- rate=12-((t*9)>>8);
+ fogDim+=(t-fogDim)>>3;         /* and it closes in as smoothly as the budget's own fog */
+ Scl_n_reg.n0_move_y=0;
+ rate=16-((fogDim*13)>>8);
  if (rate!=ccRate)
     {SCL_SetColMixRate(SCL_NBG0,rate);
      ccRate=rate;
     }
- /* offset B: A (the damage flash, the fades), plus the lightning in its tint */
+ /* offset B: A (the damage flash, the fades), less the fog, plus the lightning in its tint */
  b[0]=offA[0]+((cTint.r*flash)>>9);
  b[1]=offA[1]+((cTint.g*flash)>>9);
  b[2]=offA[2]+((cTint.b*flash)>>9);
  for (i=0;i<3;i++)
-    if (b[i]>255) b[i]=255;
+    {b[i]-=(fogDim*150)>>8;
+     if (b[i]>255) b[i]=255;
+     if (b[i]<-255) b[i]=-255;
+    }
  if (b[0]!=lastB[0] || b[1]!=lastB[1] || b[2]!=lastB[2])
     {SCL_SetColOffset(SCL_OFFSET_B,SCL_NBG0|SCL_NBG1|SCL_RBG0,b[0],b[1],b[2]);
      lastB[0]=b[0]; lastB[1]=b[1]; lastB[2]=b[2];
@@ -743,8 +786,12 @@ void mpSkySun(int view,MthMatrix *m)
  if (r[1].x>viewCx+viewXmax-1) r[1].x=viewCx+viewXmax-1;
  if (r[1].y>viewCy+viewYmax-1) r[1].y=viewCy+viewYmax-1;
  EZ_userClip(r);
- p.x-=16; p.y-=16;
- EZ_normSpr(DIR_NOREV,UCLPIN_ENABLE|ECD_DISABLE|COLOR_1,SUN_CLUT,SUN_CHAR,&p,NULL);
+ {int rad=sunNight? 9: 13;
+  sunQuad(p.x,p.y,rad+6,1,UCLPIN_ENABLE|ECDSPD_DISABLE|COMPO_TRANS|COLOR_5,sunHalo);
+  sunQuad(p.x,p.y,rad,0,UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,sunRim);
+  sunQuad(p.x,p.y,rad,1,UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,sunRim);
+  sunQuad(p.x,p.y,(rad*5)>>3,1,UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,sunCore);
+ }
  r[0].x=viewCx+viewXmin;   r[0].y=viewCy+viewYmin;
  r[1].x=viewCx+viewXmax-1; r[1].y=viewCy+viewYmax-1;
  EZ_userClip(r);
