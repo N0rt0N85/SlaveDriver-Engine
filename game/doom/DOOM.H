@@ -151,6 +151,7 @@ void        doom_bossDeath(DoomActor *mo);     /* A_BossDeath: the level's boss 
 void        game_actor_func(Object *this,int message,int param1,int param2);
 DoomActor  *doom_spawn(int mt,int sector,MthXyz *pos,int angle,int thingFlags);   /* NULL = no slot */
 void        doom_setState(DoomActor *this,int state);                          /* P_SetMobjState */
+#define DOOM_BASETHRESHOLD 100         /* p_local.h:58 -- tics a hurt monster keeps its target */
 short       doom_seq(int sprite,int frame,int view);                           /* contract section 2 formula */
 void        doom_damage(Sprite *target,Object *inflictor,Object *source,int damage);
 void        doom_damageActor(DoomActor *this,int damage,Object *source);       /* P_DamageMobj   */

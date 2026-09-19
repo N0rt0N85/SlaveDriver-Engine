@@ -389,6 +389,18 @@ void doom_mpJoined(int k)
 int doom_modePlace(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
 {int flags=doomMobjInfo[mt].flags;
  static const unsigned char skillBit[4]={1,1,2,4};    /* P_SpawnMapThing: easy and baby share */
+ /* HORDE, before the skill filter and on its own: EVERY monster thing is a spawn spot and a
+    family, whatever skill it was placed for.  The .LEV carries ULTRA-VIOLENCE's things and the
+    skill only sieves them here, so the sprites of the sieved ones ARE in RAM -- and the mode
+    would otherwise lose most of its map on the easy skills.  What the skill changes in a horde
+    is the pressure (how many come, how fast), not where they come from (DOOM_HORDE.C). */
+ if (mpMode==MP_HORDE)
+    {doom_hordeSaw(mt);
+     if ((flags & MF_COUNTKILL) || mt==MT_SKULL)
+	{mpSpotAdd(sector,pos,angle-F(90));
+	 return 1;
+	}
+    }
  if (!(thingFlags & skillBit[(mpSkill>=0 && mpSkill<4)? mpSkill: 2]))
     return 1;                            /* not at this skill: doom2ps keeps ULTRA-VIOLENCE's things */
  if (mt==doom_levelBossMt() && doomNmBossSpots<DOOM_MAXBOSSSPOTS)
@@ -397,18 +409,13 @@ int doom_modePlace(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
      doomBossSpot[doomNmBossSpots].yaw=(short)(normalizeAngle(angle-F(90))>>16);
      doomNmBossSpots++;
     }
- if (mpCompetitive() || mpMode==MP_HORDE)
+ if (mpCompetitive())
     {if ((flags & MF_COUNTKILL) || mt==MT_SKULL)
 	{mpSpotAdd(sector,pos,angle-F(90));
-	 /* HORDE: the place a monster would have stood is where a wave is born, and the family
-	    is one this level's sprites can show (DOOM_HORDE.C) */
-	 doom_hordeSaw(mt);
 	 return 1;
 	}
-     if (mpMode==MP_HORDE)
-	doom_hordeSaw(mt);              /* ... and so is every pickup, for the drop table */
-     else if (flags & MF_NOTDMATCH)
-	return 1;                       /* HORDE keeps the keys: the level is still played */
+     if (flags & MF_NOTDMATCH)
+	return 1;
     }
  if (flags & MF_COUNTKILL)
     mpTotal[0]++;

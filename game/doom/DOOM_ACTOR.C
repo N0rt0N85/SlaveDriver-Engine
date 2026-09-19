@@ -27,7 +27,6 @@
 static Sprite *doomPlasmaLight;
 
 #define DOOM_MISSILERANGE F(2048)      /* p_local.h:55 */
-#define DOOM_BASETHRESHOLD 100         /* p_local.h:58 */
 
 int nmSpawnFail;
 Object *doomSoundTarget[MAXNMSECTORS];

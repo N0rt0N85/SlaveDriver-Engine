@@ -32,14 +32,22 @@
 #include "mplayer.h"
 
 #define DOOM_HORDE_MAXFAM   8          /* the walkers of the shareware, at most                  */
-#define DOOM_HORDE_GAP      12         /* tics between two births: about three a second          */
 #define DOOM_HORDE_REST     140        /* 4 s of quiet between two waves                         */
-#define DOOM_HORDE_ALIVE    10         /* alive at once, per player                              */
 #define DOOM_HORDE_KEEP     40         /* objects left free for the shots, the blood, the drops  */
-#define DOOM_HORDE_BASE     5          /* monsters in wave 1, per player                         */
+#define DOOM_HORDE_BASE     5          /* monsters in wave 1, per player, at HURT ME PLENTY      */
 #define DOOM_HORDE_GROW     3          /* ... and per wave after it                              */
 #define DOOM_HORDE_NEWFAM   2          /* a new family every this many waves                     */
 #define DOOM_HORDE_NEAR     512        /* no birth nearer than this to the loaded player         */
+
+/* Doom's skill sieves the things a map places and softens the damage; a horde places its own
+   things, so here the skill is the PRESSURE and nothing else -- how many a wave brings, how fast
+   they come, how many stand at once.  Where they come from is the same map on every skill
+   (doom_modePlace).  Index 0..3: TOO YOUNG TO DIE, NOT TOO ROUGH, HURT ME PLENTY, ULTRA-VIOLENCE;
+   the count is in eighths, so HURT ME PLENTY is the 8/8 the constants above are written for. */
+static const unsigned char hordeSkillNum[4]  ={4,6,8,11};   /* eighths of the wave's size        */
+static const unsigned char hordeSkillGap[4]  ={24,17,12,8}; /* tics between two births           */
+static const unsigned char hordeSkillAlive[4]={5,7,10,14};  /* alive at once, per player         */
+#define hordeSkill() ((mpSkill>=0 && mpSkill<4)? mpSkill: 2)
 
 /* The walkers in the order the mode lets them in.  MT_SERGEANT is the pink demon, MT_SHOTGUY the
    shotgun zombie: the wave that adds a family adds the next one down this list. */
@@ -142,6 +150,28 @@ static int hordePick(void)
  return hordeFam[i];
 }
 
+/* P_DamageMobj's wake (DOOM_ACTOR.C doom_damageActor): the monster comes into the world already
+   hunting one marine, drawn at random, exactly as if that one had shot it -- target, Doom's own
+   threshold of 100 tics on it, and the see state.  A_Chase then walks it there whether it can see
+   the marine or not; the threshold running out lets it turn on whoever is nearer.  Without this a
+   wave born across the map would stand in its spawn room until someone walked into its view. */
+static void hordeHunt(DoomActor *a)
+{int k,n=0;
+ unsigned char pick[MPMAX];
+ for (k=0;k<mpPlayers;k++)
+    if (mpObj[k] && doom_targetAlive(mpObj[k]) && !doom_isMonsterPlayer(k))
+       pick[n++]=(unsigned char)k;
+ if (!n)
+    return;
+ k=pick[getNextRand()%n];
+ a->target=mpObj[k];
+ a->lastlook=(short)k;                  /* A_Look starts its round on the same one */
+ a->threshold=DOOM_BASETHRESHOLD;
+ a->reactiontime=0;
+ if (doomMobjInfo[a->mt].seestate)
+    doom_setState(a,doomMobjInfo[a->mt].seestate);
+}
+
 /* One monster at a spawn spot away from every player (mpSpotFar with no player of its own to
    skip), with the teleport fog Doom gives an arrival.  0 = the pool said no, try again next tic. */
 static int hordeBirth(void)
@@ -164,6 +194,7 @@ static int hordeBirth(void)
  a=doom_spawn(mt,sector,&pos,normalizeAngle(yaw+F(90)),0);
  if (!a || a->type==OT_DEAD)
     return 0;
+ hordeHunt(a);
  pos=feet;
  pos.y+=F(doomMobjInfo[MT_TFOG].height/2);
  f=doom_spawn(MT_TFOG,sector,&pos,0,0);
@@ -175,7 +206,9 @@ static void hordeNextWave(void)
 {char msg[24];
  int n;
  hordeWave++;
- n=(DOOM_HORDE_BASE+DOOM_HORDE_GROW*(hordeWave-1))*mpPlayers;
+ n=(DOOM_HORDE_BASE+DOOM_HORDE_GROW*(hordeWave-1))*mpPlayers*hordeSkillNum[hordeSkill()]/8;
+ if (n<1)
+    n=1;
  if (n>0x7000)
     n=0x7000;
  hordeLeft=(short)n;
@@ -210,14 +243,14 @@ void doom_hordeTic(void)
      return;
     }
  /* hordeAlive walks the object lists, so it is asked only when its answer is about to be used:
-    at a birth (one tic in DOOM_HORDE_GAP) and, between waves, one tic in four. */
+    at a birth (one tic in hordeSkillGap) and, between waves, one tic in four. */
  if (hordeLeft>0)
     {if (hordeClock>0)
 	{hordeClock--;
 	 return;
 	}
-     hordeClock=DOOM_HORDE_GAP;
-     cap=DOOM_HORDE_ALIVE*mpPlayers;
+     hordeClock=hordeSkillGap[hordeSkill()];
+     cap=hordeSkillAlive[hordeSkill()]*mpPlayers;
      alive=hordeAlive();
      if (alive<cap && objectsFree()>DOOM_HORDE_KEEP && spritesFree()>DOOM_HORDE_KEEP)
 	{if (hordeBirth())
