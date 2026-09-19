@@ -127,6 +127,8 @@ int doom_lookForPlayer(DoomActor *this,int allaround)
      p=mpBody[k];
      if (mpPeekInt(k,&currentState.health)<=0)
 	continue;                               /* dead */
+     if (doom_isMonsterPlayer(k))
+	continue;                               /* GCC14: one of theirs -- until it hurts them */
      if (!doomSee(s,p))
 	continue;                               /* out of sight */
      if (!allaround)

@@ -14,6 +14,7 @@
  * 22 464 for stat_bar 13 440 + compasses 1 920 + brianFont 7 104; + tiles 389 120 (PIC_SLOTS
  * {32,31,1,0,0}, params/doom.cfg) = 517 056 / 524 288: 7 232 bytes free -- no 8 bpp slot given up.
  */
+#include <stdio.h>
 #include <sega_spr.h>
 #include <sega_scl.h>
 #include "util.h"
@@ -335,11 +336,12 @@ void doom_drawSplitHud(int view,int nmViews)
      if (i==0)
 	{assert(doomPlayer.readyWeapon>=0 && doomPlayer.readyWeapon<NUMWEAPONS);
 	 a=doomWeaponInfo[(int)doomPlayer.readyWeapon].ammo;
-	 if (a>=0 && a<DOOM_NUMAMMO)
+	 if (a>=0 && a<DOOM_NUMAMMO && !doomRoleMt[mpCur])   /* GCC14: a monster has no ammo */
 	    doomHudNum(HUD_X(44),HUD_Y(171),FONT_TNUM,TNUM_PITCH,doomPlayer.ammo[a],3);
 	}
-     else if (i==1)
-	doomHudPercent(HUD_X(90),HUD_Y(171),currentState.health);
+     else if (i==1)                    /* GCC14: a monster's health: the share of its full health */
+	doomHudPercent(HUD_X(90),HUD_Y(171),doomRoleMt[mpCur] && doomRole.maxHealth>0?
+		       currentState.health*100/doomRole.maxHealth: currentState.health);
      else
 	doomHudPercent(HUD_X(221),HUD_Y(171),doomPlayer.armorPoints);
     }
@@ -353,6 +355,19 @@ void doom_drawSplitHud(int view,int nmViews)
 	pos.y=yb-DOOM_KEY_H-2;
 	EZ_normSpr(DIR_NOREV,COLOR_4,HUD_CWORD,CH_KEY0+i,&pos,NULL);
        }
+
+ /* GCC14: the frags, and the time a limit leaves, top right of the view (MPLAYER.H) */
+ {char text[16];                       /* no space: STCFN has none, drawString would drop it */
+  int left=mpTimeLimit*60-doomLevelTime/35;
+  sprintf(text,"FRAGS:%d",mpStat[mpCur].frags);
+  drawString(x0+160-4-getStringWidth(FONT_MSG,(unsigned char *)text),y0+2,FONT_MSG,(unsigned char *)text);
+  if (mpTimeLimit)
+     {if (left<0)
+	 left=0;
+      sprintf(text,"%d:%02d",left/60,left%60);
+      drawString(x0+160-4-getStringWidth(FONT_MSG,(unsigned char *)text),y0+12,FONT_MSG,(unsigned char *)text);
+     }
+ }
 
  /* the pickup message at the view's top-left: Doom's (0,0) is the view's corner */
  EZ_localCoord(x0+160,y0+CFG_YCENTER);

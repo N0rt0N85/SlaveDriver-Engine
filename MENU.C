@@ -754,7 +754,6 @@ int dlg_run(int selSound,int pushSound,int movement)
 	plotOverPicW(texX,texY,texWidth,texHeight,texVramPos,
 		     COLOR_5|ECD_DISABLE);
      dlg_draw(currentButton,pressed);
-     mpMenuFrame();             /* GCC14: START on pad 2 -- the players of the next game */
      SPR_WaitDrawEnd();
      EZ_closeCommand();
 #if 0

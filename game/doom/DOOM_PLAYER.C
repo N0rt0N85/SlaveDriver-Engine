@@ -125,6 +125,7 @@ void doom_mpRegister(void)
  MPREG(doomCarry); MPREG(doomSawPull);
  doom_weaponMpRegister();
  doom_hudMpRegister();
+ doom_modesMpRegister();
 }
 
 /* a player with nothing to carry: the next doom_playerInit gives it Doom's starting kit */
@@ -273,6 +274,10 @@ static void doomMoveTic(void)
     side=doomForwardMove[1];
  if (side<-doomForwardMove[1])
     side=-doomForwardMove[1];
+ if (doomRoleMt[mpCur])                         /* GCC14: a monster moves at its share (DOOM_MODES.C) */
+    {forward=forward*doom_roleSpeed()/100;
+     side=side*doom_roleSpeed()/100;
+    }
  /* P_PlayerThink: MF_JUSTATTACKED, set by the chainsaw on a hit -- this tic no turn, no strafe,
     forwardmove 0xc800/512 = 100 (twice the run): the saw pulls the player into what it cuts */
  if (doomSawPull)
@@ -457,6 +462,8 @@ void doom_playerGodOff(void)
    death, movement, sector damage, fire button, psprites, counters, flash. */
 void doom_playerTic(void)
 {doom_sectorDamageTic();                       /* doomLevelTime++, OT_DOOM_DAMAGE */
+ if (mpCur==0)
+    doom_modesTic();                           /* GCC14: limits, the boss's crown (DOOM_MODES.C) */
  if (!camera)
     return;
  doom_wlineTic();                              /* P_CrossSpecialLine: the move since the last tic */
@@ -467,11 +474,15 @@ void doom_playerTic(void)
  doom_muzzleTic();                             /* before the psprites: the flash lives two tics */
  if (currentState.health<=0)
     {doomDeathTic();
-     doom_psprTic();                            /* P_DeathThink calls P_MovePsprites: A_Lower */
+     if (!doomRoleMt[mpCur])
+	doom_psprTic();                         /* P_DeathThink calls P_MovePsprites: A_Lower */
      return;
     }
  doomMoveTic();
- doom_psprTic();
+ if (doomRoleMt[mpCur])
+    doom_roleTic();                             /* GCC14: a monster's attack, not a weapon */
+ else
+    doom_psprTic();
  if (doomPlayer.damageCount)
     doomPlayer.damageCount--;
  if (doomPlayer.bonusCount)
@@ -492,6 +503,8 @@ void doom_playerDamage(int damage,Object *source)
     return;
  if (doomCheatGod)
     return;
+ if (mpSkill==0)
+    damage>>=1;                                  /* GCC14: sk_baby (P_DamageMobj), MPLAYER.H mpSkill */
  if (doomPlayer.armorType)
     {saved=(doomPlayer.armorType==1)?damage/3:damage/2;
      if (doomPlayer.armorPoints<=saved)
@@ -515,9 +528,12 @@ void doom_playerDamage(int damage,Object *source)
 	`tics -= P_Random()&3` of the death state is drawn for the RNG order only. */
      doom_setPsprite(DOOM_PS_WEAPON,doomWeaponInfo[(int)doomPlayer.readyWeapon].downstate);
      (void)P_Random();
+     doom_playerKilled(source);                 /* GCC14: frags, the crown (DOOM_MODES.C) */
      return;
     }
- if (P_Random()<255)
+ if (doomRoleMt[mpCur])
+    doom_rolePain();                            /* GCC14: the monster's painchance and sound */
+ else if (P_Random()<255)
     doom_playerSound(sfx_plpain);               /* S_PLAY_PAIN -> A_Pain */
 }
 
@@ -571,6 +587,10 @@ static int doomWeaponSelectable(int w)
    P_PlayerThink's BT_CHANGE rule (p_user.c:276-306): owned and different => pending */
 void doom_weaponNext(int dir)
 {int start,i,idx,w;
+ if (doomRoleMt[mpCur])
+    {doom_roleHop();                            /* GCC14: a monster's player changes monster */
+     return;
+    }
  if (currentState.health<=0)
     return;
  start=(doomPlayer.pendingWeapon==DOOM_WP_NOCHANGE)?doomPlayer.readyWeapon:doomPlayer.pendingWeapon;
@@ -608,6 +628,8 @@ static int doomGiveAmmo(int ammo,int num)
     num*=doomClipAmmo[ammo];
  else
     num=doomClipAmmo[ammo]/2;
+ if (mpSkill==0)
+    num<<=1;                                     /* GCC14: sk_baby gives twice the ammo */
  oldammo=doomPlayer.ammo[ammo];
  doomPlayer.ammo[ammo]+=num;
  if (doomPlayer.ammo[ammo]>doomPlayer.maxAmmo[ammo])
@@ -647,10 +669,25 @@ static int doomGiveAmmo(int ammo,int num)
  return 1;
 }
 
+/* GCC14: set by a pickup given but left on the floor for the others (doom_playerGetObject 2) */
+static char doomStays;
+
 /* P_GiveWeapon :162-215 (single player): one clip dropped, two found; new => pending */
 static int doomGiveWeapon(int weapon,int dropped)
 {int gaveammo,gaveweapon;
  assert(weapon>=0 && weapon<NUMWEAPONS);
+ if (mpPlayers>1 && !dropped)
+    {/* GCC14: several players (netgame, deathmatch 1): the weapon stays for the others --
+	refused when owned, else given with 5 clips in a fight, 2 in co-op */
+     if (doomPlayer.weaponOwned & (1<<weapon))
+	return 0;
+     doomPlayer.weaponOwned|=(unsigned char)(1<<weapon);
+     doomPlayer.pendingWeapon=(signed char)weapon;
+     if (doomWeaponInfo[weapon].ammo!=am_noammo)
+	doomGiveAmmo(doomWeaponInfo[weapon].ammo,mpCompetitive()? 5: 2);
+     doomStays=1;
+     return 1;
+    }
  if (doomWeaponInfo[weapon].ammo!=am_noammo)
     gaveammo=doomGiveAmmo(doomWeaponInfo[weapon].ammo,dropped?1:2);
  else
@@ -686,9 +723,11 @@ static int doomGiveArmor(int armortype)
  return 1;
 }
 
-/* P_GiveCard :266-276: 1 when the card was new (message), the item is consumed either way */
+/* P_GiveCard :266-276: 1 when the card was new (message), the item is consumed either way --
+   GCC14: but for several players, where it stays for the others (P_TouchSpecialThing netgame) */
 static int doomGiveCard(int card)
-{if (doomPlayer.keys & (1<<card))
+{doomStays=(mpPlayers>1);
+ if (doomPlayer.keys & (1<<card))
     return 0;
  doomPlayer.bonusCount=DOOM_BONUSADD;
  doomPlayer.keys|=(unsigned char)(1<<card);
@@ -704,6 +743,7 @@ int doom_playerGetObject(int mt,int dropped)
  assert(mt>=0 && mt<NUMMOBJTYPES);
  if (currentState.health<=0)
     return 0;
+ doomStays=0;
  spr=doomStates[doomMobjInfo[mt].spawnstate].sprite;
  sound=sfx_itemup;
  msg=NULL;
@@ -744,26 +784,38 @@ int doom_playerGetObject(int mt,int dropped)
      case SPR_BKEY:
 	if (doomGiveCard(0))
 	   msg=GOTBLUECARD;
+	else if (doomStays)
+	   return 0;                           /* GCC14: owned, left for the others: nothing happens */
 	break;
      case SPR_YKEY:
 	if (doomGiveCard(1))
 	   msg=GOTYELWCARD;
+	else if (doomStays)
+	   return 0;                           /* GCC14: owned, left for the others: nothing happens */
 	break;
      case SPR_RKEY:
 	if (doomGiveCard(2))
 	   msg=GOTREDCARD;
+	else if (doomStays)
+	   return 0;                           /* GCC14: owned, left for the others: nothing happens */
 	break;
      case SPR_BSKU:
 	if (doomGiveCard(3))
 	   msg=GOTBLUESKUL;
+	else if (doomStays)
+	   return 0;                           /* GCC14: owned, left for the others: nothing happens */
 	break;
      case SPR_YSKU:
 	if (doomGiveCard(4))
 	   msg=GOTYELWSKUL;
+	else if (doomStays)
+	   return 0;                           /* GCC14: owned, left for the others: nothing happens */
 	break;
      case SPR_RSKU:
 	if (doomGiveCard(5))
 	   msg=GOTREDSKULL;
+	else if (doomStays)
+	   return 0;                           /* GCC14: owned, left for the others: nothing happens */
 	break;
      case SPR_STIM:
 	if (!doomGiveBody(10))
@@ -879,7 +931,7 @@ int doom_playerGetObject(int mt,int dropped)
     doom_setMessage(msg);
  doomPlayer.bonusCount+=DOOM_BONUSADD;
  doom_sound(NULL,sound);
- return 1;
+ return doomStays? 2: 1;
 }
 
 /* GCC14: the other players' colours, Doom's own (R_InitTranslationTables, r_draw.c): the green
@@ -889,13 +941,16 @@ int doom_playerGetObject(int mt,int dropped)
 const unsigned char *doom_playerTranslation(int k)
 {static unsigned char table[MPMAX][256];
  static const unsigned char ramp[MPMAX]={0x70,0x60,0x40,0x20};
- int i;
- if (k<=0 || k>=MPMAX)
+ int i,t;
+ if (k<0 || k>=MPMAX)
     return NULL;
- if (!table[k][1])
+ t=(mpMode==MP_TEAM)? (mpTeam[k]? 3: 0): k;   /* team play: the green team and the red */
+ if (!t)
+    return NULL;
+ if (!table[t][1])
     for (i=0;i<256;i++)
-       table[k][i]=(unsigned char)((i>=0x70 && i<=0x7f)? ramp[k]+(i&15): i);
- return table[k];
+       table[t][i]=(unsigned char)((i>=0x70 && i<=0x7f)? ramp[t]+(i&15): i);
+ return table[t];
 }
 
 /* GCC14: a player's body as another player sees it (MPLAYER.H, SRUINS.C mpShowBodies).  Doom's
@@ -904,10 +959,13 @@ const unsigned char *doom_playerTranslation(int k)
    carries the camera yaw, 90 degrees less (AI.C constructPlayer).  -1 = not drawn, which is
    also the answer when the level has no PLAY frames at all (-2 from doom_seq). */
 short doom_playerBodySeq(Sprite *body,Sprite *viewer,int health)
-{int frame,view,saved,seq;
+{int frame,view,saved,seq,k;
  const DoomState *st;
  body->scale=65536;                    /* 1 texel per unit, as every Doom thing */
  body->flags|=SPRITEFLAG_NOSHADOW;
+ k=mpIndexOfSprite(body);
+ if (doom_isMonsterPlayer(k))
+    return doom_roleBodySeq(k,body,viewer,health);   /* GCC14: the monster it wears */
  if (health<=0)
     st=&doomStates[S_PLAY_DIE7];
  else if (body->vel.x || body->vel.z)

@@ -215,6 +215,47 @@ void        doom_setMessage(const char *msg);  /* replaces changeMessage        
 void        doom_drawMessage(void);            /* replaces drawMessage                           */
 
 /* ============================================================================================ */
+/* DOOM_MODES.C -- the multiplayer modes (MPLAYER.H mpMode): roles, frags, limits, the score    */
+/* ============================================================================================ */
+/* The loaded player's monster, when it wears one (doomRoleMt[mpCur] != 0).  Per player. */
+typedef struct
+{short maxHealth;                       /* what the split HUD's percent is of                   */
+ short cool;                            /* tics before the next attack                          */
+ short atk;                             /* tics into the attack's frames, -1 = none              */
+ short hurt;                            /* tics of the pain frame                               */
+ short dash;                            /* the lost soul's charge, tics left                    */
+ short melee;                           /* the attack running is a blow (its frames)            */
+ short dieTic;                          /* doomLevelTime of the death (the death frames)        */
+ short pad;
+} DoomRole;
+extern DoomRole doomRole;
+extern short doomRoleMt[];                     /* [MPMAX] the monster each player wears, 0 = marine */
+void        doom_modesMpRegister(void);
+int         doom_isMonsterPlayer(int k);
+int         doom_roleSpeed(void);              /* percent of the marine's thrust                 */
+void        doom_roleTic(void);                /* 35 Hz instead of the psprites                  */
+void        doom_roleHop(void);                /* DEMONS: the weapon buttons change monster      */
+void        doom_rolePain(void);
+short       doom_roleBodySeq(int k,Sprite *body,Sprite *viewer,int health);
+void        doom_playerKilled(Object *source); /* the loaded player died: frags, the crown        */
+void        doom_modesTic(void);               /* 35 Hz, once: limits, the crown                 */
+int         doom_modePlace(int mt,int sector,MthXyz *pos,int angle,int flags);   /* 1 = not placed in this mode or skill */
+const char *doom_skillName(int s);
+void        doom_modesLevelReset(void);        /* a level's placement begins                     */
+int         doom_levelOpenChannel(int i);      /* BOSS BATTLE: the channels that open the arena, -1 = end */
+void        doom_mpLevelStart(void);
+void        doom_mpRespawned(int k);
+void        doom_levelEnd(int action);
+/* DOOM_GAME.C, for the modes */
+int         doom_exiting(void);                /* the level is over                              */
+void        doom_endRound(void);               /* a fighting game's limit: the next round        */
+const char *doom_levelLabel(int l);            /* "E1M1"                                         */
+int         doom_bossLevel(int l);             /* 1 = a level with a boss                        */
+int         doom_levelBossMt(void);            /* this level's boss type, -1 = none               */
+/* DOOM_WEAPON.C: what doom_aimSlope aimed at (a monster, or a player not on our side) */
+extern Sprite *doomAimed;
+
+/* ============================================================================================ */
 /* DOOM_SOUND.C -- sfx -> sound index (contract section 3; SPEC_PLAYER 4.1) -- ONE definition  */
 /* ============================================================================================ */
 int         doom_sfxIndex(int sfx);            /* static: staticSoundMap[ST_JOHN]+n; else objectSoundMap[sfx]; <0 absent */

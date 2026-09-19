@@ -3775,7 +3775,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
       /* another player's body wears its own colours (MPLAYER.C mpSetBanks): one bank, no fog */
       if (mpPlayers>1)
 	 {int k=mpIndexOfSprite(o);
-	  if (k>0 && mpBank[k])
+	  if (k>=0 && mpBank[k])
 	     spriteBank=mpBank[k];
 	 }
      }

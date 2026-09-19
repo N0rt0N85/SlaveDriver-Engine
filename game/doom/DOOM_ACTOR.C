@@ -410,8 +410,12 @@ void doom_damage(Sprite *target,Object *inflictor,Object *source,int damage)
  if ((k=mpIndexOfSprite(target))>=0)
     {/* P_DamageMobj pushes the player away from the inflictor before the armour maths.  The hit
 	player's state is loaded for the damage, whoever was loaded when it came (MPLAYER.H). */
-     int prev=mpBegin(k);
-     Sprite *is=doom_targetSprite(inflictor);
+     int prev;
+     Sprite *is;
+     if (mpSpares(mpIndexOfObject(source),k))
+	return;                                 /* GCC14: team play spares an ally (MPLAYER.H) */
+     prev=mpBegin(k);
+     is=doom_targetSprite(inflictor);
      if (is && is!=camera)
 	doom_playerThrust(is,damage);
      doom_playerDamage(damage,source);
@@ -425,8 +429,9 @@ void doom_damage(Sprite *target,Object *inflictor,Object *source,int damage)
    drops (CLIP, SHOTGUN, CHAINGUN) at floor + item radius (SPEC_RUNTIME section 6) */
 static void doomKill(DoomActor *this,Object *source)
 {const DoomMobjInfo *info=&doomMobjInfo[this->mt];
- int item;
- (void)source;
+ int item,k;
+ if ((k=mpIndexOfObject(source))>=0 && (info->flags & MF_COUNTKILL))
+    mpStat[k].kills++;                          /* GCC14: the level's score (MPLAYER.H) */
  this->mflags&=~DF_SHOOTABLE;
  this->mflags|=DF_CORPSE;
  /* Doom: a dying thing is no longer MF_SHOOTABLE -- the autoaim (PTR_AimTraverse) and the

@@ -1958,6 +1958,21 @@ static void mpPlaceNear(Sprite *s,int k)
  initProfiler();
 }
 
+/* GCC14: a fighting game (MPLAYER.H mpCompetitive) puts a player on the spawn spot farthest from
+   the others, standing on its floor, eye at its height; 0 = the level gave no spot */
+static int mpPlaceFar(Sprite *s,int k)
+{MthXyz pos;
+ int sector,yaw;
+ if (!mpCompetitive() || !mpSpotFar(k,&sector,&pos,&yaw))
+    return 0;
+ pos.y+=F(GP_PLAYER_RADIUS+GP_PLAYER_EYE_HOVER);
+ moveSpriteTo(s,sector,&pos);
+ s->vel.x=s->vel.y=s->vel.z=0;
+ playerAngle.yaw=yaw;
+ s->angle=yaw;
+ return 1;
+}
+
 /* The per-player part of the level start, the same calls in the same order as for player 1. */
 static void mpPlayerLevelInit(void)
 {autoTarget=NULL;               /* a carried slot holds last level's pointer */
@@ -1993,9 +2008,10 @@ static void mpBuild(int k)
  mpBody[k]=camera;
  mpObj[k]=(Object *)player;
  mpInLevel[k]=1;
- mpPlaceNear(camera,k);
  mpPeek(0,&playerAngle,sizeof(playerAngle),&playerAngle);
  camera->angle=playerAngle.yaw;
+ if (!mpPlaceFar(camera,k))
+    mpPlaceNear(camera,k);
  mpSpawnPos[k]=camera->pos;
  mpSpawnSector[k]=camera->s;
  mpSpawnAngle[k]=playerAngle;
@@ -2037,19 +2053,15 @@ static void mpNewGame(void)
 /* A dead player back at its spawn point with the starting kit (Doom co-op: G_DoReborn). */
 static void mpRespawn(int k)
 {removeLight(camera);           /* died firing: doom_playerInit zeroes muzzleTics, not the light */
- moveSpriteTo(camera,mpSpawnSector[k],&mpSpawnPos[k]);
- camera->vel.x=camera->vel.y=camera->vel.z=0;
  playerAngle=mpSpawnAngle[k];
- camera->angle=playerAngle.yaw;
+ if (!mpPlaceFar(camera,k))     /* GCC14: a fighting game respawns away from the others */
+    {moveSpriteTo(camera,mpSpawnSector[k],&mpSpawnPos[k]);
+     camera->vel.x=camera->vel.y=camera->vel.z=0;
+     camera->angle=playerAngle.yaw;
+    }
  CFG_MP_NEWPLAYER();
  mpPlayerLevelInit();
-}
-
-/* A player who leaves keeps its body, parked: invisible, untouchable, never iterated.  Freeing
-   it would leave every monster that targets it holding a dangling pointer. */
-static void mpPark(int k)
-{mpBody[k]->flags|=SPRITEFLAG_INVISIBLE|SPRITEFLAG_NOSPRCOLLISION;
- mpBody[k]->sequence=-1;
+ CFG_MP_RESPAWNED(k);           /* GCC14: the game's roles (a monster to take over, the boss) */
 }
 
 /* The loaded player's view matrix, pushed on viewTransform (the caller pops it) -- as the view
@@ -2075,37 +2087,35 @@ static void mpShowBodies(int viewer)
     mpBody[k]->sequence=(k==viewer)? -1: CFG_MP_BODYSEQ(mpBody[k],mpBody[viewer],mpPeekInt(k,&currentState.health));
 }
 
-static void mpFogOut(void);
 
 /* START on pad 2, in a level: one more player, and from 4 back to 1.  The traversal started in
    the last image's tail was made for the old view 0, whose window changes with the count. */
 static void mpPollStart(void)
-{static char held=1;
- int down=!(lastInputSampleP[1] & PER_DGT_S);
- if (down && !held && mpPadsPresent>=2 && !playerIsDead)
-    {wallsPipeDiscard();
-     mpSwitch(0);
-     if (mpPlayers<MPMAX)
-	{mpPlayers++;
-	 mpBuild(mpPlayers-1);
+{static char held[MPMAX]={1,1,1,1};
+ int j,k,down,n;
+ for (j=1;j<MPMAX;j++)
+    {down=!(lastInputSampleP[j] & PER_DGT_S);
+     if (down && !held[j] && j==mpPlayers && j<mpPadsPresent)
+	{wallsPipeDiscard();
+	 mpSwitch(0);
+	 if (mpMode==MP_TEAM)           /* the smaller team */
+	    {for (k=0,n=0;k<mpPlayers;k++)
+		n+=mpTeam[k]? 1: -1;
+	     mpTeam[j]=(n<0);
+	    }
+	 mpRole[j]=0;                   /* a newcomer is the normal player */
+	 mpPlayers++;
+	 mpBuild(j);
 	 wallsSplitAlloc();
+	 mpArmed=mpPlayers;
+	 mpSetBanks();
+	 mpSetViewport(0,0);
+	 {static char *msg[MPMAX]={"","PLAYER 2 JOINS","PLAYER 3 JOINS","PLAYER 4 JOINS"};
+	  changeMessage(msg[j]);
+	 }
 	}
-     else
-	{int k;
-	 for (k=1;k<mpPlayers;k++)
-	    mpPark(k);
-	 mpPlayers=1;
-	 mpFogOut();
-	 setFog(mpFogCap);
-	}
-     mpArmed=mpPlayers;
-     mpSetBanks();
-     mpSetViewport(0,0);
-     {static char *msg[MPMAX]={"1 PLAYER","2 PLAYERS","3 PLAYERS","4 PLAYERS"};
-      changeMessage(msg[mpPlayers-1]);
-     }
+     held[j]=(char)down;
     }
- held=down;
 }
 
 /* --- adaptive LOD in split screen -------------------------------------------------------------
@@ -2153,13 +2163,6 @@ static void mpSetViewFog(int k)
 static void mpViewDone(int k)
 {mpCells[k]=nmPolys+nmSlavePolys;
  mpQuads[k]=nmSlavePolys;
-}
-
-/* back to one player: solo starts without fog */
-static void mpFogOut(void)
-{int k;
- for (k=0;k<MPMAX;k++)
-    mpFog[k]=MPFOGMAX;
 }
 
 /* once per image, after the VDP1 is done */
@@ -2352,6 +2355,7 @@ int runLevel(char *filename,int levelNm)
     }
  playerAngle.pitch=0;
  playerAngle.yaw=F(0);
+ mpLevelReset();                   /* GCC14: the score and the spawn spots the placement adds */
  placeObjects();
  if (!player)
     player=constructPlayer(0,0);
@@ -2425,12 +2429,16 @@ int runLevel(char *filename,int levelNm)
  setFog(fogDist);   /* fills the table; fogDist survives from one level to the next */
  setPlaxFade(skyFadeFor(fogDist));  /* initPlax restored the original palette on load */
  mpLevelBuild();                    /* players 2..: player 1 is fully set up by now */
+ CFG_MP_LEVELSTART();              /* GCC14: the game's roles, every player built */
  crashInstall();                    /* the vectors again: a level load may have re-registered */
 
  while(1)
     {htimer=0;
      crashBeat();                   /* freeze report: armed while the loop turns (CRASH.H) */
-     mpPollStart();                 /* START on pad 2: one more player (or back to one) */
+     mpPollStart();                 /* START on the next pad: that player joins, once */
+     soundNmEars=(mpPlayers>1)? mpPlayers: 0;   /* GCC14: every player hears (SOUND.C) */
+     for (i=0;i<soundNmEars;i++)
+	soundEar[i]=mpBody[i];
      {/* GCC14: hold L+R+X together -- or X+Y+Z, for pads whose triggers report only
 	 analog values -- to flip runtime mipmapping (mipEnable, WALLS.C) */
       static char mipChord=0;
@@ -2824,6 +2832,13 @@ int runLevel(char *filename,int levelNm)
 	 pic_flush();
 	 SCL_DisplayFrame();
 	 crashDisarm();
+	 wallsPipeDiscard();
+	 if (CFG_LEVEL_END_SHOWN(hitTeleport))
+	    {stopAllLoopedSounds();     /* GCC14: the game's end-of-level screen, the level still */
+	     enablePlax(0);             /* loaded -- over a black screen, lifts and sky gone     */
+	     dontDisplayVDP2Pic();
+	     CFG_LEVEL_END(hitTeleport);
+	    }
 	 return hitTeleport?hitTeleport:3;
 	}
      /* used to be here */
@@ -3088,7 +3103,7 @@ void main(void)
 
 #ifndef TESTCODE
 #ifdef GP_GAME_DOOM
- level=0; /* Doom: straight into doomLevelNames[0], no map screen (SPEC_RUNTIME section 9) */
+ level=mpStartLevel; /* Doom: straight into doomLevelNames[], no map screen (SPEC_RUNTIME section 9) */
 #else
  if ((currentState.gameFlags & GAMEFLAG_JUSTTELEPORTED) &&
      !(currentState.inventory & INV_MUMMY))
@@ -3112,6 +3127,7 @@ void main(void)
      levelFile=CFG_LEVEL_NAME(level);
 
      action=runLevel(levelFile,level);
+     soundNmEars=0;                 /* GCC14: the title and the map hear as one player again */
 
      {extern int SclRotateTableAddress;
       SclRotateTableAddress=0;

@@ -50,6 +50,8 @@ void posMakeSound(int source,MthXyz *pos,int sndNm);
 void posAdjustSound(int source,MthXyz *pos);
 #endif
 void sound_nextFrame(void);
+extern struct __sprite *soundEar[4];   /* GCC14: split screen's listeners (SOUND.C) */
+extern int soundNmEars;
 void setMasterVolume(int vol);
 
 

@@ -7,6 +7,7 @@
  * teleporters, the doors and the moving floors are built here, and the few engine objects doom2ps
  * emits (switches, W triggers, lifts) are built as the engine switch built them.  doom_item_func
  * is the pickup collision; doom_sectorDamageTic is the 35 Hz level clock plus the nukage damage. */
+#include <string.h>
 #include "util.h"
 #include "level.h"
 #include "sprite.h"
@@ -131,25 +132,47 @@ static int doomWallSector(int w)
    P_TryMove's dropoff); nothing in the engine touches them when an elevator moves --
    setDoorBlockBits is doors only -- so a lift that came down left an invisible wall (E1M1: the
    shotgun room behind sector 59, 8 u open while it is up).  Re-read here from the vertices. */
+static void doomPortalBits(int w,int s)
+{int bot,own,next;
+ if (level_wall[w].nextSector==-1 || level_wall[w].normal[1]!=0)
+    return;
+ own=doomFloorY(s);
+ next=doomFloorY(level_wall[w].nextSector);
+ bot=level_vertex[level_wall[w].v[2]].y;
+ if (level_vertex[level_wall[w].v[1]].y-bot<CFG_DOOR_FIT || bot-own>GP_PLAYER_STEP)
+    level_wall[w].flags|=WALLFLAG_SHORTOPENING;
+ else
+    level_wall[w].flags&=~WALLFLAG_SHORTOPENING;
+ if (own-next>GP_PLAYER_STEP)
+    level_wall[w].flags|=WALLFLAG_CLIFFBNDRY;
+ else
+    level_wall[w].flags&=~WALLFLAG_CLIFFBNDRY;
+}
+
+/* GCC14: not only the walls that move -- a portal whose edge stays put (the lift's side facing a
+   higher floor: E1M8's lift to the stimpacks) changes too when the floor beside it moves, from
+   both sides.  Those kept the flags of the level as loaded: an invisible wall at the top of the
+   lift (seen on console 09-19; 1 to 34 such portals on each E1 level). */
 void doom_pbBlockBits(int pb)
-{int i,w,s,bot,own,next;
+{short sec[16];
+ int i,j,w,s,n=0,f;
  for (i=level_pushBlock[pb].startWall;i<=level_pushBlock[pb].endWall;i++)
     {w=level_PBWall[i];
-     if (level_wall[w].nextSector==-1 || level_wall[w].normal[1]!=0)
-	continue;
      s=doomWallSector(w);
-     own=doomFloorY(s);
-     next=doomFloorY(level_wall[w].nextSector);
-     bot=level_vertex[level_wall[w].v[2]].y;
-     if (level_vertex[level_wall[w].v[1]].y-bot<CFG_DOOR_FIT || bot-own>GP_PLAYER_STEP)
-	level_wall[w].flags|=WALLFLAG_SHORTOPENING;
-     else
-	level_wall[w].flags&=~WALLFLAG_SHORTOPENING;
-     if (own-next>GP_PLAYER_STEP)
-	level_wall[w].flags|=WALLFLAG_CLIFFBNDRY;
-     else
-	level_wall[w].flags&=~WALLFLAG_CLIFFBNDRY;
+     for (j=0;j<n && sec[j]!=s;j++)
+	;
+     if (j==n && n<16)
+	sec[n++]=(short)s;
     }
+ for (j=0;j<n;j++)
+    for (w=level_sector[sec[j]].firstWall;w<=level_sector[sec[j]].lastWall;w++)
+       {doomPortalBits(w,sec[j]);
+	s=level_wall[w].nextSector;
+	if (s!=-1 && level_wall[w].normal[1]==0)
+	   for (f=level_sector[s].firstWall;f<=level_sector[s].lastWall;f++)
+	      if (level_wall[f].nextSector==sec[j])
+		 doomPortalBits(f,s);
+       }
 }
 
 /* A floor that is shut when the level loads (floor = ceiling in the WAD: E1M8's tag 666 wall)
@@ -679,7 +702,9 @@ int game_placeObject(int ot)
  if (!doomInitDone)
     doom_init();
  if (doomPlaceIdx==0)
-    doomLevelStart();
+    {doomLevelStart();
+     doom_modesLevelReset();                    /* GCC14: DOOM_MODES.C, before the first thing */
+    }
  doomPlaceIdx++;
  if (doomPlaceIdx>=level_nmObjects)
     doomPlaceIdx=0;
@@ -824,6 +849,7 @@ int game_placeObject(int ot)
 	 if (o->throw>0)
 	    {pbObject_moveTo((PushBlockObject *)o,-o->throw);
 	     updatePushBlockPositions();
+	     doom_pbBlockBits(pb);               /* GCC14: the portals of the floor as it now is */
 	    }
 	 return 1;
 	}
@@ -892,6 +918,8 @@ int game_placeObject(int ot)
   pos.x=F(x);
   pos.y=F(y);
   pos.z=F(z);
+  if (doom_modePlace(mt,sector,&pos,angle*5760,flags))   /* GCC14: not in this mode, or this skill (DOOM_MODES.C) */
+     return 1;
   a=doom_spawn(mt,sector,&pos,angle*5760,flags);   /* OBJECT.C:194: 360/4096 degree steps */
   /* P_SpawnMapThing: `if (mobj->tics > 0) mobj->tics = 1 + (P_Random () % mobj->tics)` --
      placed things start out of phase (after the lastlook draw of doom_spawn, as Doom) */
@@ -929,14 +957,18 @@ void doom_item_func(Object *_this,int message,int param1,int param2)
      delta=(s->pos.y-s->radius)-(c->pos.y-F(GP_PLAYER_RADIUS+GP_PLAYER_EYE_HOVER));
      if (delta>F(56) || delta<F(-8))
 	continue;
-     if (mpPeekInt(k,&currentState.health)<=0)
-	continue;
+     if (mpPeekInt(k,&currentState.health)<=0 || doom_isMonsterPlayer(k))
+	continue;                               /* GCC14: a monster picks nothing up */
      prev=mpBegin(k);
      got=doom_playerGetObject(this->mt,(this->mflags & DF_DROPPED)?1:0);
      mpEnd(prev);
+     if (got==1)                                 /* 2: given, and left for the others */
+	{if (doomMobjInfo[this->mt].flags & MF_COUNTITEM)
+	    mpStat[k].items++;
+	 delayKill(_this);
+	}
      if (got)
-	delayKill(_this);
-     return;
+	return;
     }
 }
 
@@ -948,6 +980,10 @@ static void doomExitLevel(int secret)
 {int lNm=currentState.currentLevel;
  int next;
  assert(lNm>=0 && lNm<DOOM_NMLEVELS);
+ if (mpCompetitive())
+    {doom_endRound();                           /* GCC14: a fighting game's exit is the round's */
+     return;
+    }
  if (doomExiting)
     return;
  doomExiting=1;
@@ -965,6 +1001,8 @@ void exit_func(Object *_this,int message,int param1,int param2)
  (void)param2;
  if (message!=SIGNAL_SWITCH || param1!=this->channel)
     return;
+ if (doom_isMonsterPlayer(mpCur))
+    return;                                     /* GCC14: a monster's player never ends the level */
  doomExitLevel(this->type==OT_DOOM_SECRETEXIT);
 }
 
@@ -988,7 +1026,8 @@ void doom_sectorDamageTic(void)
     doom_playerGodOff();                        /* case 11: cheats &= ~CF_GODMODE */
  if (!(doomLevelTime & 0x1f))
     doom_playerDamage(doomSectorDamage[s],NULL);
- if ((doomSectorExit[s>>3] & (1<<(s&7))) && currentState.health<=10)
+ if ((doomSectorExit[s>>3] & (1<<(s&7))) && currentState.health<=10 && !mpCompetitive() &&
+     !doom_isMonsterPlayer(mpCur))
     doomExitLevel(0);
 }
 
@@ -1013,4 +1052,53 @@ void doom_bossDeath(DoomActor *mo)
 	   ((DoomActor *)o)->health>0)
 	  return;                               /* other boss not dead */
  signalAllObjects(SIGNAL_SWITCH,DOOM_BOSS_TAG,0);
+}
+
+/* --- GCC14: for the game modes (DOOM_MODES.C, MPLAYER.H) ------------------------------------ */
+
+int doom_exiting(void)
+{return doomExiting;
+}
+
+/* A fighting game's round is over (its limit, or the exit): the next level -- the same one for
+   the boss battle, the first after the last -- and nobody carries anything into it */
+void doom_endRound(void)
+{int lNm=currentState.currentLevel,next;
+ assert(lNm>=0 && lNm<DOOM_NMLEVELS);
+ if (doomExiting)
+    return;
+ doomExiting=1;
+ next=(mpMode==MP_BOSS)? lNm: doomLevelNext[lNm];
+ if (next<0)
+    next=0;
+ playerHitTeleport(next);
+}
+
+const char *doom_levelLabel(int l)
+{static char label[5];
+ if (l<0 || l>=DOOM_NMLEVELS)
+    return "";
+ memcpy(label,doomLevelNames[l]+1,4);           /* "+E1M1.LEV" -> "E1M1" */
+ label[4]=0;
+ return label;
+}
+
+int doom_bossLevel(int l)
+{return l>=0 && l<DOOM_NMLEVELS && doomBossMt[l]>=0;
+}
+
+/* BOSS BATTLE: what opens a boss level's arena from the start -- E1M8: the block in front of the
+   start (tag 1) and the Barons' two closets (tag 5).  The boss floor (666) stays up: behind it,
+   the teleporter to the last room, which hurts and ends the level. */
+int doom_levelOpenChannel(int i)
+{static const short e1m8[]={1,5,-1};
+ if (currentState.currentLevel!=7)
+    return -1;
+ return e1m8[(i<2)? i: 2];
+}
+
+/* the mobj type whose death opens this level's way out, -1 = none */
+int doom_levelBossMt(void)
+{int l=currentState.currentLevel;
+ return (l>=0 && l<DOOM_NMLEVELS)? doomBossMt[l]: -1;
 }

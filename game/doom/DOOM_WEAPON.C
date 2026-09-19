@@ -112,6 +112,8 @@ void doom_psprTic(void)
    PowerSlave sequences; ours have one frame per state, clocked by the tic). */
 void doom_weaponDraw(int nmFrames)
 {(void)nmFrames;
+ if (doomRoleMt[mpCur])
+    return;                             /* GCC14: a monster holds no gun (DOOM_MODES.C) */
  advanceWeaponSequence(0,0,0);
 }
 
@@ -209,19 +211,51 @@ void doom_muzzleTic(void)
 /* P_BulletSlope: the renderer's autoTarget (CLASS_MONSTER whose feet fall within +-20 px of the
    screen centre, WALLS.C:2724-2733 -- a live monster or a barrel; corpses are CLASS_SPRITE) gives
    the pitch from the shot origin to the centre of its sphere; 0 otherwise.  1 = a target. */
+Sprite *doomAimed;
+
+/* GCC14: a player not on our side, within 8 degrees of the aim and in sight, the nearest --
+   Doom's P_AimLineAttack takes any MF_SHOOTABLE thing, players too, and the renderer's
+   autoTarget only elects monsters */
+static Sprite *doomAimPlayer(void)
+{Sprite *b,*best=NULL;
+ Fixed32 d,bd=F(2048);
+ int j,an;
+ for (j=0;j<mpPlayers;j++)
+    {if (j==mpCur || mpAllies(mpCur,j) || !(b=mpBody[j]) || mpPeekInt(j,&currentState.health)<=0)
+	continue;
+     d=doom_approxDist2(b->pos.x-camera->pos.x,b->pos.z-camera->pos.z);
+     if (d>=bd)
+	continue;
+     an=normalizeAngle(getAngle(b->pos.x-camera->pos.x,b->pos.z-camera->pos.z)-F(90)-playerAngle.yaw);
+     if (an>F(8) || an<F(-8) || !canSee(camera,b))
+	continue;
+     best=b;
+     bd=d;
+    }
+ return best;
+}
+
 int doom_aimSlope(Fixed32 *outPitch)
-{Sprite *t=autoTarget;
+{Sprite *t=autoTarget,*p;
  int du;
+ Fixed32 ty;
  assert(outPitch);
  *outPitch=0;
  if (!t || !t->owner || !doom_targetAlive(t->owner))
+    t=NULL;
+ /* GCC14: an enemy player when no monster is in the sights; first, for a monster's player */
+ if (mpPlayers>1 && (!t || doomRoleMt[mpCur]) && (p=doomAimPlayer()))
+    t=p;
+ doomAimed=t;
+ if (!t)
     return 0;
  du=dist(t->pos.x-camera->pos.x,0,t->pos.z-camera->pos.z);   /* integer units (UTIL.C) */
  if (du<=0)
     return 0;
  if (du>32767)
     du=32767;
- *outPitch=getAngle(F(du),t->pos.y-(camera->pos.y-DOOM_SHOOTZ));
+ ty=mpIsPlayer(t)? t->pos.y-F(41-28): t->pos.y;              /* a player's pos is its eye */
+ *outPitch=getAngle(F(du),ty-(camera->pos.y-DOOM_SHOOTZ));
  return 1;
 }
 

@@ -19,6 +19,18 @@ struct soundSaveData
  short pan,vol;
 } soundSave[32];
 
+/* GCC14: split screen.  Every player is an ear (SRUINS.C sets them each image): a positioned
+   sound is heard by the nearest one, not by whoever the engine had loaded when it was made.  The
+   voices then have a budget: at most SOUND_MPBUDGET one-shots start in an image, the loudest, a
+   frame late (sound_nextFrame) -- four players firing, their monsters answering, in one room,
+   were a wall of noise on the 32 voices.  And a level that lowers with the number of players, all
+   of them mixed into one pair of speakers.  soundNmEars < 2: the engine as it was. */
+#define SOUND_MPBUDGET 4
+struct __sprite *soundEar[4];
+int soundNmEars;
+static struct {int source; short sNm,vol,pan;} soundPending[SOUND_MPBUDGET];
+static int soundNmPending;
+
 static int slotOwner[32]; /* -1 if empty */
 static short slotSound[32];
 static char slotDirty[32];
@@ -163,6 +175,7 @@ void initSound(void)
 
  soundTop=0;
  nmSounds=0;
+ soundNmPending=0;
 
  setMasterVolume(15);
  /* initialize slots */
@@ -186,8 +199,13 @@ void initSound(void)
  silenceVoice();
 }
 
+static void playSoundNow(int source,int sNm,int vol,int pan);
+
 void sound_nextFrame(void)
 {int i;
+ for (i=0;soundNmEars>1 && i<soundNmPending;i++)   /* the level gone: dropped */
+    playSoundNow(soundPending[i].source,soundPending[i].sNm,soundPending[i].vol,soundPending[i].pan);
+ soundNmPending=0;
  soundFrame++;
  if (!soundFrame)
     {soundFrame=1;
@@ -309,11 +327,11 @@ struct soundSlotRegister *playSoundMegaE(int source,
 }
 
 void playSoundE(int source,int sNm,int vol,int pan)
-{int slot,i;
- unsigned short zeroReg;
- int base;
+{int i;
  assert(sNm<nmSounds);
  assert(sNm>=0);
+ if (soundNmEars>1)
+    vol+=(soundNmEars>2)? 16: 8;        /* 6 or 3 dB under: everyone shares the speakers */
  if (vol>255) return;
  /* if sound is a looping sound, make sure that no other copies of it are
     playing */
@@ -326,8 +344,32 @@ void playSoundE(int source,int sNm,int vol,int pan)
     {if (sounds[sNm].lastFrameUsed==soundFrame)
 	return;
      sounds[sNm].lastFrameUsed=soundFrame;
+     if (soundNmEars>1)
+	{/* the image's budget: a free place, or the quietest waiting sound if this is louder */
+	 int q=soundNmPending;
+	 if (q==SOUND_MPBUDGET)
+	    {for (q=0,i=1;i<SOUND_MPBUDGET;i++)
+		if (soundPending[i].vol>soundPending[q].vol)
+		   q=i;
+	     if (vol>=soundPending[q].vol)
+		return;
+	    }
+	 else
+	    soundNmPending++;
+	 soundPending[q].source=source;
+	 soundPending[q].sNm=(short)sNm;
+	 soundPending[q].vol=(short)vol;
+	 soundPending[q].pan=(short)pan;
+	 return;
+	}
     }
+ playSoundNow(source,sNm,vol,pan);
+}
 
+static void playSoundNow(int source,int sNm,int vol,int pan)
+{int slot;
+ unsigned short zeroReg;
+ int base;
  if (!enable_stereo)
     pan=0;
 
@@ -390,17 +432,25 @@ void playCDTrackForLevel(int lev)
 }
 
 void posGetSoundParams(MthXyz *pos,int *vol,int *pan)
-{int angle;
+{int angle,k,d;
+ Sprite *ear=camera;
  *vol=f(approxDist(pos->x-camera->pos.x,
 		   pos->y-camera->pos.y,
 		   pos->z-camera->pos.z));
+ for (k=0;k<soundNmEars;k++)     /* GCC14: the nearest player hears it */
+    if (soundEar[k] && soundEar[k]!=camera &&
+	(d=f(approxDist(pos->x-soundEar[k]->pos.x,pos->y-soundEar[k]->pos.y,
+			pos->z-soundEar[k]->pos.z)))<*vol)
+       {*vol=d;
+	ear=soundEar[k];
+       }
  *vol=(*vol>>5)-15;
  if (*vol>255) return;
  if (*vol<0) *vol=0;
 
- angle=getAngle(camera->pos.x-pos->x,
-		camera->pos.z-pos->z);
- angle=-normalizeAngle(F(90)+angle-camera->angle);
+ angle=getAngle(ear->pos.x-pos->x,
+		ear->pos.z-pos->z);
+ angle=-normalizeAngle(F(90)+angle-ear->angle);
  /* fold back half onto front half */
  if (angle>F(90))
     angle=F(180)-angle;
@@ -429,6 +479,10 @@ void posAdjustSound(int source,MthXyz *pos)
 
 void adjustSounds(int source,int vol,int pan)
 {int s,base;
+ if (soundNmEars>1)
+    vol+=(soundNmEars>2)? 16: 8;        /* GCC14: the same cut as playSoundE */
+ if (vol>255)
+    vol=255;
  for (s=0;s<32;s++)
     if (slotOwner[s]==source)
        {base=0x20*s+SNDBASE+0x100000;

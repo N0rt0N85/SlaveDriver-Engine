@@ -18,7 +18,7 @@
 #define MPMAX 4
 
 extern int mpPlayers;      /* players in the current level, 1..MPMAX                      */
-extern int mpArmed;        /* count chosen for the NEXT game (START on pad 2, at the menu) */
+extern int mpArmed;        /* count chosen for the NEXT game (the title's NEW GAME / MULTIPLAYER screens) */
 extern int mpCur;          /* the player whose copies the registered globals hold          */
 
 /* A global that belongs to ONE player.  Idempotent (same address = same block), and made
@@ -54,5 +54,38 @@ void mpSetBanks(void);
 extern volatile unsigned short inputQP[MPMAX][16];
 extern volatile unsigned short lastInputSampleP[MPMAX];
 extern int mpPadsPresent;               /* pads found at the last poll */
-void mpMenuFrame(void);                 /* the title menu's player count line (MENU.C) */
+
+/* Rules of the game, chosen on the title's multiplayer screen (mpMenu) and frozen for the whole
+   game: nothing in a level writes them.  The engine knows sides, spawn spots and the score; what
+   a role IS (a monster the player drives, the boss) belongs to the game (CFG_MP_* hooks). */
+enum {MP_COOP,MP_DM,MP_TEAM,MP_MONSTERS,MP_BOSS,MP_NMMODES};
+extern int mpMode;
+extern unsigned char mpTeam[MPMAX];     /* MP_TEAM: 0 or 1 */
+extern unsigned char mpRole[MPMAX];     /* MP_MONSTERS: 1 = drives a monster, 0 = the normal player */
+extern int mpFragLimit,mpTimeLimit;     /* 0 = none; the time in minutes */
+extern int mpStartLevel;                /* the level a new game starts on */
+#define mpCompetitive() (mpMode==MP_DM || mpMode==MP_TEAM || mpMode==MP_BOSS)
+int  mpAllies(int a,int b);             /* same side: killing an ally costs a frag */
+#define mpSpares(a,b) ((mpMode==MP_TEAM || mpMode==MP_MONSTERS) && (a)!=(b) && mpAllies(a,b))
+                                        /* no damage between them (co-op keeps Doom's friendly fire) */
+int  mpSide(int k);                     /* the side that scores k's frags: k itself, or its team */
+
+/* The score of the level.  kills/items/secrets out of mpTotal[0..2] (counted by the game when it
+   places the level), frags as Doom counts them: +1 an enemy, -1 an ally or oneself. */
+typedef struct {short kills,items,secrets,frags,deaths;} MpStat;
+extern MpStat mpStat[MPMAX];
+extern short mpTotal[3];
+void mpScoreDeath(int victim,int killer);   /* killer -1 = the world, -2 = a monster */
+
+/* Spawn spots of the level (competitive modes): the game adds the places its monsters would
+   have stood; a player is (re)born on the one farthest from the others. */
+void mpSpotAdd(int sector,MthXyz *feet,int yaw);
+int  mpSpotFar(int k,int *sector,MthXyz *feet,int *yaw);   /* 0 = no spot; never on a floor the game calls unsafe (CFG_MP_SPOTSAFE) while a safe one is left */
+void mpLevelReset(void);                /* runLevel, before the level's objects are placed */
+
+int  mpMenu(void);                      /* the title's multiplayer screen: 1 = start that game */
+int  mpNewGameMenu(void);               /* the title's NEW GAME screen (skill, players): 1 = start */
+extern int mpSkill;                     /* the game's difficulty, 0..CFG_MP_NMSKILLS-1 */
+void mpSoloRules(void);                 /* the title's own new game: co-op rules, first level */
+void mpIntermission(const char *title,int seconds,int tics);   /* in a level: the score until a button */
 #endif

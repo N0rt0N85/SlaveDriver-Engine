@@ -289,6 +289,29 @@ short doom_playerBodySeq(Sprite *body,Sprite *viewer,int health);
 #define CFG_MP_BODYSEQ(b,v,h) doom_playerBodySeq(b,v,h)       /* SRUINS.C mpShowBodies: the frame of a player's body seen from a view */
 const unsigned char *doom_playerTranslation(int k);
 #define CFG_MP_TRANSLATION(k) doom_playerTranslation(k)          /* MPLAYER.C mpSetBanks: player k's palette remap, NULL = none */
+/* GCC14: game modes (MPLAYER.H mpMode; the rules in game/doom/DOOM_MODES.C) */
+const char *doom_levelLabel(int l);
+int  doom_bossLevel(int l);
+void doom_mpLevelStart(void);
+void doom_mpRespawned(int k);
+void doom_levelEnd(int action);
+#define CFG_MP_MENU            1                                 /* INTRO.C: the title's MULTIPLAYER button */
+#define CFG_MENU_PITCH         24                                /* INTRO.C: four title buttons fit the screen */
+#define CFG_MP_NMLEVELS        9                                 /* MPLAYER.C mpMenu: DOOM_NMLEVELS */
+#define CFG_MP_LEVELLABEL(l)   doom_levelLabel(l)
+#define CFG_MP_BOSSLEVEL(l)    doom_bossLevel(l)                 /* a level with a boss: the boss battle's */
+#define CFG_MP_MONSTERS_NAME   "DEMONS"
+#define CFG_MP_MONSTER_ROLE    "DEMON"
+const char *doom_skillName(int s);
+extern unsigned char doomSectorDamage[];
+#define CFG_MP_NMSKILLS        4                                 /* Doom's but NIGHTMARE */
+#define CFG_MP_SKILLDEFAULT    2                                 /* HURT ME PLENTY, Doom's own */
+#define CFG_MP_SKILLNAME(s)    doom_skillName(s)
+#define CFG_MP_SPOTSAFE(s)     (!doomSectorDamage[s])            /* no spawn on nukage or E1M8's last room */
+#define CFG_MP_LEVELSTART()    doom_mpLevelStart()               /* SRUINS.C runLevel, after mpLevelBuild */
+#define CFG_MP_RESPAWNED(k)    doom_mpRespawned(k)               /* SRUINS.C mpRespawn, player k loaded */
+#define CFG_LEVEL_END(a)       doom_levelEnd(a)                  /* SRUINS.C runLevel, before an exit returns */
+#define CFG_LEVEL_END_SHOWN(a) ((a)>=200 || (a)==2)              /* ... a level's exit, or the episode's end */
 #define CFG_DRAW_AIRMETER(f)                                     /* SRUINS.C:2214: no air meter   */
 #define CFG_AIR_PICS(x)                                          /* SRUINS.C:1978-1979: nor its two pics -- meter_bubble/back, 16 KB, leave the link */
 /* PowerSlave paths a Doom level never takes, compiled out so their code leaves the link: water
@@ -322,6 +345,21 @@ const unsigned char *doom_playerTranslation(int k);
 #define CFG_DRAW_SPLITHUD(k,n)
 #define CFG_MP_BODYSEQ(b,v,h) (-1)                              /* PowerSlave has no body to show */
 #define CFG_MP_TRANSLATION(k) ((const unsigned char *)0)
+#define CFG_MP_MENU            0                                 /* PowerSlave has no multiplayer game */
+#define CFG_MENU_PITCH         30
+#define CFG_MP_NMLEVELS        1
+#define CFG_MP_LEVELLABEL(l)   ""
+#define CFG_MP_BOSSLEVEL(l)    0
+#define CFG_MP_MONSTERS_NAME   "MONSTERS"
+#define CFG_MP_MONSTER_ROLE    "MONSTER"
+#define CFG_MP_NMSKILLS        1
+#define CFG_MP_SKILLDEFAULT    0
+#define CFG_MP_SKILLNAME(s)    ""
+#define CFG_MP_SPOTSAFE(s)     1
+#define CFG_MP_LEVELSTART()
+#define CFG_MP_RESPAWNED(k)
+#define CFG_LEVEL_END(a)
+#define CFG_LEVEL_END_SHOWN(a) 0
 #define CFG_DRAW_AIRMETER(f)   drawAirMeter(f)
 #define CFG_AIR_PICS(x)        x
 #define CFG_WATER              1

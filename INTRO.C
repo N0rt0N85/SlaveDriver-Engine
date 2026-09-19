@@ -28,6 +28,8 @@
 #include "bup.h"
 #include "spr.h"
 #include "mov.h"
+#include "sprite.h"
+#include "mplayer.h"
 
 #define MAXNMPICS 20
 static unsigned short *picPals[MAXNMPICS];
@@ -486,13 +488,17 @@ void playIntro(void)
 	     }
 #ifndef JAPAN
 	  len=getStringWidth(2,getText(LB_MAINMENU,i));
-	  dlg_addBigWavyButton(i,-len>>1,20+30*i,getText(LB_MAINMENU,i));
+	  /* GCC14: MULTIPLAYER goes under NEW GAME, the whole column a line higher (CFG_MP_MENU) */
+	  dlg_addBigWavyButton(i,-len>>1,20+CFG_MENU_PITCH*((i && CFG_MP_MENU)? i: i-CFG_MP_MENU),
+			       getText(LB_MAINMENU,i));
 #else
 	  len=getStringWidth(3,getText(LB_MAINMENU,i));
 	  dlg_addBigWavyJapaneseButton(i,-len>>1,20+30*i,
 				       getText(LB_MAINMENU,i));
 #endif
 	 }
+      if (CFG_MP_MENU)        /* GCC14: the multiplayer screen (MPLAYER.C mpMenu) */
+	 dlg_addBigWavyButton(3,-getStringWidth(2,"MULTIPLAYER")>>1,20,"MULTIPLAYER");
 
       {SaveState *s;
        int i,power;
@@ -525,6 +531,15 @@ void playIntro(void)
       fadeDir=-5;
       switch (menuSel)
 	 {case 0:
+	     mpSoloRules();
+	     if (CFG_MP_MENU)       /* GCC14: skill and players (MPRULES.C); a Doom level never saves */
+		{if (mpNewGameMenu())
+		    {bup_initCurrentGame();
+		     EZ_clearScreen();
+		     return;
+		    }
+		 break;
+		}
 	     if (!bup_canSaveGame())
 		{bup_initCurrentGame();
 		 EZ_clearScreen();
@@ -540,6 +555,7 @@ void playIntro(void)
 		}
 	     break;
 	  case 1:
+	     mpSoloRules();
 	     dlgItem[1].x2=dlgItem[1].x1;
 	     dlgItem[1].y2=-84;
 	     dlg_runSlideIn();
@@ -555,6 +571,13 @@ void playIntro(void)
 	     dlg_runSlideIn();
 	     optionMenu(dlgItem[2].x2,dlgItem[2].y2,
 			dlgItem[2].x1,dlgItem[2].y1);
+	     break;
+	  case 3:
+	     if (mpMenu())
+		{bup_initCurrentGame();
+		 EZ_clearScreen();
+		 return;
+		}
 	     break;
 	  case 69:
 	     if (lastInputSample==((~(PER_DGT_S|PER_DGT_C))&0xffff))

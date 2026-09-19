@@ -19,7 +19,7 @@ Object *mpObj[MPMAX];
 /* The registry.  Sizes measured at the first build: the engine's player (SRUINS.C) and the
    Doom player (game/doom) come to a few hundred bytes; MPSTORE leaves room for another game's
    player without being a pool anyone could fill by accident -- mpRegister asserts. */
-#define MPMAXBLOCKS 64
+#define MPMAXBLOCKS 80
 #define MPSTORE     1024
 static struct {void *addr; short size,offs;} mpBlock[MPMAXBLOCKS];
 static int mpNmBlocks,mpUsed;
@@ -159,34 +159,24 @@ int mpIndexOfObject(Object *o)
 unsigned char mpBank[MPMAX];
 
 void mpSetBanks(void)
-{static const unsigned char take[MPMAX]={0,7,5,4};
+{static const unsigned char take[MPMAX-1]={7,5,4};
  static char tookSky;           /* PowerSlave loads weapon palettes into bank 7 (SEQUENCE.C):
 				   only give back what was taken */
  int k,extra=0;
  for (k=0;k<MPMAX;k++)
     mpBank[k]=0;
- for (k=1;k<mpPlayers;k++)
-    if (CFG_MP_TRANSLATION(k))
-       extra=k;
+ /* GCC14: any player may wear a remap (player 1 too, on a team's colours): the banks go to
+    those that do, in order, three at most */
+ for (k=0;k<mpPlayers;k++)
+    if (CFG_MP_TRANSLATION(k) && extra<MPMAX-1)
+       extra++;
  buildObjectFogBanks(extra>=3? 4: extra==2? 5: NMOBJECTPALLETES);
- for (k=1;k<=extra;k++)
-    {buildRemappedBank(take[k],CFG_MP_TRANSLATION(k));
-     mpBank[k]=take[k];
-    }
+ for (k=0,extra=0;k<mpPlayers && extra<MPMAX-1;k++)
+    if (CFG_MP_TRANSLATION(k))
+       {buildRemappedBank(take[extra],CFG_MP_TRANSLATION(k));
+	mpBank[k]=take[extra++];
+       }
  if (!extra && tookSky)
     retryPlaxPal();             /* bank 7 is the sky's again */
  tookSky=(extra>0);
-}
-
-/* The count for the next game, at the title menu: START on pad 2 cycles 1-2-3-4, and the line
-   says so.  Once per menu frame, inside the open command list (MENU.C dlg_run).  In a level the
-   same press adds a player (SRUINS.C mpPollStart), which also keeps mpArmed current. */
-void mpMenuFrame(void)
-{static char held=1;
- int down=!(lastInputSampleP[1] & PER_DGT_S);
- if (down && !held && mpPadsPresent>=2)
-    mpArmed=mpArmed%MPMAX+1;
- held=(char)down;
- if (mpPadsPresent>=2 || mpArmed>1)
-    drawStringf(-150,100,1,"%d PLAYER%s - START ON PAD 2",mpArmed,(mpArmed>1)?"S":"");
 }
