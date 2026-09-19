@@ -3865,10 +3865,15 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		 pos[1].x=f(shadowWidth);
 		 pos[1].y=f(shadowHeight);
 		 assert(getPicClass(0)!=TILEVDP);
-		 /* centred: past the range it is wholly off the view (<= 240 px wide) */
-		 if (abs(pos[0].x)+(pos[1].x>>1)<=VDP1LIM &&
+		 /* GCC14: UCLPIN_ENABLE -- without it the VDP1 ignores the user clip, and in split
+		    screen a shadow belonging to one view was painted across another.  The view test
+		    drops it before the command exists: what the traversal kept is the thing, not
+		    the ground under it.  Centred, so past VDP1LIM it is wholly off (<= 240 wide). */
+		 if (pos[0].x+(pos[1].x>>1)>=viewXmin && pos[0].x-(pos[1].x>>1)<=viewXmax &&
+		     pos[0].y+(pos[1].y>>1)>=viewYmin && pos[0].y-(pos[1].y>>1)<=viewYmax &&
+		     abs(pos[0].x)+(pos[1].x>>1)<=VDP1LIM &&
 		     abs(pos[0].y)+(pos[1].y>>1)<=VDP1LIM)
-		    EZ_scaleSpr(ZOOM_MM,COLOR_4|COMPO_SHADOW,
+		    EZ_scaleSpr(ZOOM_MM,UCLPIN_ENABLE|COLOR_4|COMPO_SHADOW,
 				0,mapPic(0),pos,NULL);
 		}
 	    }

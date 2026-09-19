@@ -232,8 +232,9 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
 	       }
 	   }
 	/* Muzzle flash and explosion fade, then go out -- before doom_setState, which can move the
-	   actor to S_NULL and free the sprite under the light. */
-	if (this->flashTics)
+	   actor to S_NULL and free the sprite under the light.  Only on a tic an image was drawn
+	   for: a flash between two images is a flash nobody sees (DOOM_LIGHTS.C). */
+	if (this->flashTics && doom_lightStep())
 	   {this->flashTics--;
 	    if (this->sprite)
 	       {if (!this->flashTics)

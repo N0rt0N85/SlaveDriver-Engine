@@ -91,6 +91,27 @@ void doom_explosionLight(DoomActor *this)
  this->flashTics=doomLightFx[DLF_EXPLODE].tics;
 }
 
+/* A flash lasts two tics.  Solo draws an image every tic or two and that is a flash; in split
+   screen three or four tics run between two images, so a flash could be lit and put out inside
+   one logic block, with no view ever drawing it -- players 2 to 4 lost theirs most often, their
+   views being drawn at the END of that block.  So the flashes advance at most once per image:
+   an image marks itself (doom_lightImage, DOOM_PLAYER.C at 60 Hz), the tic consumes the mark
+   (doom_lightTicStart), and every fade asks doom_lightStep whether this tic counts. */
+static char lightImageSeen,lightStepNow;
+
+void doom_lightImage(void)
+{lightImageSeen=1;
+}
+
+void doom_lightTicStart(void)
+{lightStepNow=lightImageSeen;
+ lightImageSeen=0;
+}
+
+int doom_lightStep(void)
+{return lightStepNow;
+}
+
 /* --- the tuner's rows ------------------------------------------------------------------------ */
 
 enum {LR_EFFECT,LR_ON,LR_INT,LR_RAD,LR_RED,LR_GREEN,LR_BLUE,LR_TICS,LR_RESET,LR_BACK,LR_NM};

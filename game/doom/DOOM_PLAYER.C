@@ -206,6 +206,8 @@ void doom_playerInit(void)
    and weaponPlayerMove (:1043) are inert. */
 void doom_playerFrame(unsigned short input,unsigned short pushed)
 {assert(camera);
+ if (mpCur==0)
+    doom_lightImage();                  /* GCC14: a flash must be drawn once (DOOM_LIGHTS.C) */
  if (doom_lightTuner(input))            /* GCC14: the light tuner has the d-pad (DOOM_LIGHTS.C) */
     {input|=LIGHT_TUNER_KEYS;           /* pad bits are active low: released */
      pushed&=~LIGHT_TUNER_KEYS;
@@ -472,7 +474,9 @@ void doom_playerGodOff(void)
 void doom_playerTic(void)
 {doom_sectorDamageTic();                       /* doomLevelTime++, OT_DOOM_DAMAGE */
  if (mpCur==0)
-    doom_modesTic();                           /* GCC14: limits, the boss's crown (DOOM_MODES.C) */
+    {doom_lightTicStart();                     /* GCC14: does this tic advance the flashes? */
+     doom_modesTic();                          /* limits, the boss's crown (DOOM_MODES.C) */
+    }
  if (!camera)
     return;
  doom_wlineTic();                              /* P_CrossSpecialLine: the move since the last tic */

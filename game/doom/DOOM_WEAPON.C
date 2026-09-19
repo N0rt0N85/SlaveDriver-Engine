@@ -196,9 +196,11 @@ void doom_muzzleFlash(void)
  doomPlayer.muzzleTics=doomLightFx[DLF_MUZZLE_PLAYER].tics;
 }
 
-/* Called by doom_playerTic before the psprites: full on tic N, half on N+1, off at N+2. */
+/* Called by doom_playerTic before the psprites: full on tic N, half on N+1, off at N+2 -- but
+   only on a tic that an image was drawn for, or in split screen the flash could pass between
+   two images and no view would ever draw it (DOOM_LIGHTS.C doom_lightStep). */
 void doom_muzzleTic(void)
-{if (!doomPlayer.muzzleTics || !camera)
+{if (!doomPlayer.muzzleTics || !camera || !doom_lightStep())
     return;
  if (!--doomPlayer.muzzleTics)
     removeLight(camera);

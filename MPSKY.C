@@ -27,15 +27,15 @@
    density), so what moves is thickness, not a pattern.
    The CRAM is full in split screen (the players' colours took the sky's bank, MPLAYER.C), so
    every layer is RGB, and NBG0/NBG1 at 32768 colours evict NBG2/NBG3 (VDP2 p.61): three
-   textured layers is the ceiling.  Plus, per view, a sun or a moon on the VDP1 (mpSkySun).
+   textured layers is the ceiling.  Plus, per view, a moon on the VDP1 (mpSkyMoon).
 
    Everything comes from the level's own sky (PLAX.C): its palette, and its panorama read back
    from A1 before the vault overwrites it -- colours by luminance percentile, and the brightest
-   azimuth for the sun.  A new seed at every build: the same level
+   azimuth, where the moon goes.  A new seed at every build: the same level
    never gets the same clouds twice.  Built when the level starts in split screen or when a
    second player joins (~0.3 s of CPU); a third or fourth player only re-lays the maps.
-   The sun (mpSkySun) is two fans of VDP1 triangles per view, not a character: the level's tiles
-   leave no room in the VDP1's character VRAM (PIC.C initPicSystem takes what is left of it).
+   The moon (mpSkyMoon) is two fans of VDP1 triangles per view, not a character: the level's
+   tiles leave no room in the VDP1's character VRAM (PIC.C initPicSystem takes what is left).
 
    Only when the level loaded no VDP2 picture: B0-B1 then hold nothing (Doom's STATIC.DAT
    sheet is zeros); a solo level load takes everything back (mpSkyOff, then setVDP2/initPlax). */
@@ -95,11 +95,11 @@ typedef struct {short r,g,b;} C3;               /* 0..255 */
 static unsigned int seed;
 static unsigned char perm[256];
 static C3 cZen,cHor,cDark,cMid,cLight,cTop,cTint,cVeil;
-static int stormy,night,sunAz,layout;
+static int stormy,brightAz,layout;
 static Fixed32 windDeck,windCloud,windHaze;
 static int windDir,fogDim,ccRate,lastB[3];
 static unsigned int now,evNext,gustStart,gustEnd;
-static int evType,evT,evBand,evCol,evBoltNm,flash;
+static int evType,evT,evBand,evBoltNm,flash;
 static short savedPri[2];
 
 /* 0..15 from the pixel.  The ordered 4x4 matrix repeats its dots over a slow gradient and the
@@ -174,7 +174,7 @@ static void analyse(void)
 	}
      if (cnt && sum/cnt>best)
 	{best=sum/cnt;
-	 sunAz=yb;
+	 brightAz=yb;
 	}
     }
  if (zs[3]) {cZen.r=zs[0]/zs[3]; cZen.g=zs[1]/zs[3]; cZen.b=zs[2]/zs[3];}
@@ -196,7 +196,7 @@ static void analyse(void)
       out[k]->r=hist[i][0]/n; out[k]->g=hist[i][1]/n; out[k]->b=hist[i][2]/n;
      }
  }
- /* a grey, dull sky is a stormy one; a dark zenith is night */
+ /* a grey, dull sky is a stormy one */
  {int mx=cMid.r,mn=cMid.r,s;
   if (cMid.g>mx) mx=cMid.g;
   if (cMid.b>mx) mx=cMid.b;
@@ -205,7 +205,6 @@ static void analyse(void)
   s=255-(mx-mn)*5;
   if (lum(&cMid)<90) s+=60;
   stormy=clamp8(s);
-  night=lum(&cZen)<48;
  }
  /* lightning's tint: the brightest sky colour pushed to full, halfway to white */
  {int mx=cTop.r;
@@ -348,10 +347,12 @@ static void cloudPixel(int k,int x,int y,Uint16 p)
 
 /* the clouds, 512x40 on NBG1: sheets rather than puffs -- a slow field under an envelope, with
    its own density, lit from above (bright where the sheet three lines up is thin), and kept
-   near the sky's own tone so the layer does not stand out.  Its edge is walked into the sky
-   over 64 levels instead of being cut with a dither, and the layer itself is half mixed with
-   what is behind it (registers: N1CCEN).  The lit copy is the same mask pushed toward
-   lightning's tint. */
+   near the sky's own tone so the layer does not stand out.  Over its last CLOUD_EDGE levels it
+   takes the colour of the vault behind it AND thins out in a dithered pattern, so its edge is
+   the layer behind showing through and not an outline; the layer itself is mixed with what is
+   behind it as well (registers: N1CCEN).  The lit copy is the same mask pushed toward
+   lightning's tint; only the bolts use it now. */
+#define CLOUD_EDGE 96
 static void makeClouds(void)
 {unsigned char above[4][512];
  int x,y,n,a,t,k,env,thr=120-(stormy>>3);   /* soft() sits around 130: the cover of a sheet */
@@ -363,7 +364,10 @@ static void makeClouds(void)
  fieldStart(&fDens,213,2,1);
  for (y=0;y<40;y++)
     {env=256-(((y-20)*(y-20))<<8)/440;
-     mix(&bg,&cZen,&cHor,(y*256)/40);   /* the vault behind, near enough for an edge */
+     /* the vault behind these lines.  One sheet serves both layouts, whose cloud bands do not
+	sit at the same height, so this takes the middle of the two. */
+     t=24+((y*3)>>2);
+     mix(&bg,&cZen,&cHor,(t*t*256)/(56*56));
      fieldRow(&fShape,y);
      fieldRow(&fDens,y);
      for (x=0;x<512;x++)
@@ -372,8 +376,8 @@ static void makeClouds(void)
 	 a=(((n*env)>>8)-thr)*3;
 	 a=(a*fieldAt(&fDens,x,y))>>8;
 	 above[y&3][x]=clamp8(a);
-	 if (a<=1+(hash2(x,y)>>3))
-	    {cloudPixel(1+k,x,y,0);
+	 if (a<CLOUD_EDGE && (a<<4)/CLOUD_EDGE<=hash2(x,y))
+	    {cloudPixel(1+k,x,y,0);      /* the edge dissolves into what is behind it */
 	     cloudPixel(CLOUD_LIT+k,x,y,0);
 	     continue;
 	    }
@@ -383,8 +387,8 @@ static void makeClouds(void)
 	 else
 	    mix(&c,&cLight,&cTop,(t-128)<<1);
 	 mix(&c,&bg,&c,150);            /* toward the sky: little contrast with the vault */
-	 if (a<64)                      /* and the edge dissolves into it */
-	    mix(&c,&bg,&c,(a*256)>>6);
+	 if (a<CLOUD_EDGE)              /* and its edge is the vault's own colour */
+	    mix(&c,&bg,&c,(a*256)/CLOUD_EDGE);
 	 mix(&lit,&c,&cTint,160);
 	 cloudPixel(1+k,x,y,pack(&c,x,y));
 	 cloudPixel(CLOUD_LIT+k,x,y,pack(&lit,x,y));
@@ -495,59 +499,59 @@ static void mapRows(int players)
     }
 }
 
-/* lightning's cells: lit around column col (+-4, a dithered ring at 5-6), the bolt's 3x5
-   cells over bolt b's columns; on=0 puts the plain cells back */
-static void mapLight(int band,int col,int bolt,int on)
-{int row=cloudRow[layout-2][band],r,dc,cc,k;
+/* The bolt's own 3x5 cells, swapped in over its columns; on=0 puts the plain ones back.  The
+   ring of lit cells around it is gone: a cell is 8 pixels wide, so it lit square patches of
+   white over layers that were not moving.  The sheet of light is the colour offset's work
+   (mpSkyFrame): it brightens all three layers together, and fades. */
+static void mapBolt(int band,int bolt,int on)
+{int row=cloudRow[layout-2][band],r,c,cc,k;
  volatile Uint32 *cm=VL(CLOUD_MAP);
  Uint32 cb=CHARNM(CLOUD_CHARS,0);
- if (row<0)
+ if (row<0 || bolt<0)
     return;
  for (r=0;r<5;r++)
-    for (dc=-6;dc<=6;dc++)
-       {cc=(col+dc)&63;
-	k=1+(r<<6)+cc;
-	if (on && (abs(dc)<=4 || !((r+cc)&1)))
-	   k+=CLOUD_LIT-1;
-	if (on && bolt>=0 && cc>=6+(bolt<<4) && cc<=8+(bolt<<4))
-	   k=CLOUD_BOLT+bolt*15+r*3+cc-6-(bolt<<4);
+    for (c=0;c<3;c++)
+       {cc=(6+(bolt<<4)+c)&63;
+	k=on? CLOUD_BOLT+bolt*15+r*3+c: 1+(r<<6)+cc;
 	cm[((row+r)<<6)+cc]=cb+(k<<2);
        }
 }
 
-/* ---- the sun (VDP1, per view) ----
-   Not a character: a level's tiles take what the VDP1's character VRAM has (PIC.C
-   initPicSystem), leaving no room to allocate one.  Two fans of triangles instead, round enough
-   at this size, and drawn IN THE SKY'S OWN COLOUR at the line where it lands, brightened toward
-   the middle by gouraud: the rim is then exactly what was behind it, so there is no edge -- the
-   VDP1 has no additive mode, and adding light to the sky's colour is the closest thing to one.
-   The outer fan is meshed, so the clouds it crosses still show through half of it. ---- */
-#define SUN_SEGS 12
-static int sunOk,sunNight;
-static Fixed32 sunDir[3];
-static short sunBB[MPMAX][4];
-static char sunBBok[MPMAX];
+/* ---- the moon (VDP1, per view) ----
+   A dark disc, high in the sky.  Not a character: a level's tiles take what the VDP1's
+   character VRAM has (PIC.C initPicSystem), leaving no room to allocate one.  Two fans of
+   triangles, round enough at this size, both drawn IN THE SKY'S OWN COLOUR at the line where
+   the moon lands and darkened by gouraud -- the outer fan walks that darkening back to 16 (the
+   sky untouched) at its rim, which is the few pixels of edge that fade into the sky; the inner
+   fan is flat, and is the disc.  No mesh: a halftone glow read as dirt. ---- */
+#define MOON_SEGS 12
+#define MOON_R    9                     /* the disc; its edge is MOON_EDGE pixels around it */
+#define MOON_EDGE 4
+#define MOON_DARK 9                     /* the disc's gouraud level; 16 is the sky untouched */
+static int moonOk;
+static Fixed32 moonDir[3];
+static short skyBB[MPMAX][4];
+static char skyBBok[MPMAX];
 /* 12 unit vectors, 256 = 1 */
-static const short sunUnit[SUN_SEGS+1][2]=
+static const short moonUnit[MOON_SEGS+1][2]=
    {{256,0},{221,128},{128,221},{0,256},{-128,221},{-221,128},{-256,0},
     {-221,-128},{-128,-221},{0,-256},{128,-221},{221,-128},{256,0}};
 
-static void makeSun(void)
+static void makeMoon(void)
 {int i;
  static const Fixed32 sin16[16]={0,25080,46341,60547,65536,60547,46341,25080,
 				 0,-25080,-46341,-60547,-65536,-60547,-46341,-25080};
- sunNight=night;
- /* where: the panorama's brightest azimuth, one of its four turns, 14 degrees up */
- i=((sunAz>>6)+((rnd()&3)<<2))&15;
- sunDir[0]=MTH_Mul(sin16[i],63587);
- sunDir[1]=15854;
- sunDir[2]=MTH_Mul(sin16[(i+4)&15],63587);
- sunOk=1;
+ /* where: the panorama's brightest azimuth, one of its four turns, 32 degrees up */
+ i=((brightAz>>6)+((rnd()&3)<<2))&15;
+ moonDir[0]=MTH_Mul(sin16[i],55706);
+ moonDir[1]=34734;
+ moonDir[2]=MTH_Mul(sin16[(i+4)&15],55706);
+ moonOk=1;
 }
 
-/* a fan of triangles around (cx,cy): `mid` at the centre, `edge` at the rim, both gouraud
-   levels (16 = the colour as given) */
-static void sunFan(int cx,int cy,int r,int mode,Uint16 color,int mid,int edge)
+/* a fan of triangles around (cx,cy): gouraud `mid` at the centre, `edge` at the rim (16 = the
+   colour as given, less is darker) */
+static void moonFan(int cx,int cy,int r,Uint16 color,int mid,int edge)
 {struct gourTable g;
  XyInt q[4];
  int i;
@@ -557,10 +561,10 @@ static void sunFan(int cx,int cy,int r,int mode,Uint16 color,int mid,int edge)
  g.entry[3]=greyTable[mid];
  q[0].x=cx; q[0].y=cy;
  q[3].x=cx; q[3].y=cy;
- for (i=0;i<SUN_SEGS;i++)
-    {q[1].x=cx+((sunUnit[i][0]*r)>>8);   q[1].y=cy+((sunUnit[i][1]*r)>>8);
-     q[2].x=cx+((sunUnit[i+1][0]*r)>>8); q[2].y=cy+((sunUnit[i+1][1]*r)>>8);
-     EZ_polygon(mode,color,q,&g);
+ for (i=0;i<MOON_SEGS;i++)
+    {q[1].x=cx+((moonUnit[i][0]*r)>>8);   q[1].y=cy+((moonUnit[i][1]*r)>>8);
+     q[2].x=cx+((moonUnit[i+1][0]*r)>>8); q[2].y=cy+((moonUnit[i+1][1]*r)>>8);
+     EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|DRAW_GOURAU|COLOR_5,color,q,&g);
     }
 }
 
@@ -626,7 +630,7 @@ static void registers(void)
  SCL_SET_N0CCEN(1);
  SCL_SET_N1CCEN(1);             /* the clouds are mixed in too: one layer less to pick out */
  SCL_SET_R0CCEN(0);
- SCL_SetColMixRate(SCL_NBG1,10);
+ SCL_SetColMixRate(SCL_NBG1,16);   /* half of it: the clouds are a veil, not a picture */
  ccRate=-1;
  lastB[0]=lastB[1]=lastB[2]=1000;
 }
@@ -659,7 +663,7 @@ void mpSkyPlayers(int players)
      makeBolts();
      for (i=0;i<64*64;i++)
 	VL(CLOUD_MAP)[i]=VL(HAZE_MAP)[i]=0;
-     makeSun();
+     makeMoon();
      windDir=(rnd()&1)? 1: -1;
      windDeck=windCloud=windHaze=0;
      fogDim=0;
@@ -668,7 +672,7 @@ void mpSkyPlayers(int players)
      evNext=240+rnd()%240;
      gustEnd=0;
      for (i=0;i<MPMAX;i++)
-	sunBBok[i]=0;
+	skyBBok[i]=0;
      registers();
      mpSkyOn=1;
     }
@@ -687,7 +691,7 @@ void mpSkyOff(void)
 {if (!mpSkyOn)
     return;
  mpSkyOn=0;
- sunOk=0;
+ moonOk=0;
  Scl_s_reg.dispenbl&=~0x0013;
  Scl_w_reg.wincontrl[0]=0;
  Scl_w_reg.wincontrl[2]&=0xff00;
@@ -708,10 +712,15 @@ void mpSkyShow(int on)
 }
 
 /* the events: a bolt, a sheet of lightning, a gust.  Stormy skies strike more often. */
+/* One ramp up, one long fall.  It used to flicker in three steps, which with the lit cells read
+   as squares blinking; a bolt is brighter and lasts a little longer than a sheet. */
 static int flashCurve(int t,int bolt)
-{if (bolt)
-    return t<3? 256: t<6? 60: t<9? 220: t<24? (220*(24-t))/15: 0;
- return t<2? 150: t<5? 30: t<8? 130: t<20? (130*(20-t))/12: 0;
+{int peak=bolt? 230: 140,n=bolt? 26: 20;
+ if (t>=n)
+    return 0;
+ if (t<2)
+    return (peak*(t+1))>>1;
+ return (peak*(n-t))/(n-2);
 }
 
 static void events(int ticks)
@@ -722,13 +731,10 @@ static void events(int ticks)
      evBand=layout>2? rnd()&1: 0;
      if (evType==1)
 	{evBoltNm=rnd()&3;
-	 evCol=7+(evBoltNm<<4);
-	 mapLight(evBand,evCol,evBoltNm,1);
+	 mapBolt(evBand,evBoltNm,1);
 	}
      else if (evType==2)
-	{evCol=rnd()&63;
-	 mapLight(evBand,evCol,-1,1);
-	}
+	evBoltNm=-1;                      /* a sheet: light alone, nothing swapped */
      else
 	{gustStart=now;
 	 gustEnd=now+240+rnd()%240;
@@ -744,10 +750,8 @@ static void events(int ticks)
  else
     {flash=flashCurve(evT,evType==1);
      if (evType==1 && evT>=9 && evT-ticks<9)
-	mapLight(evBand,evCol,-1,1);      /* the bolt is gone, the clouds still glow */
-     if (evT>=16 && evT-ticks<16)
-	mapLight(evBand,evCol,-1,0);
-     if (evT>=24)
+	mapBolt(evBand,evBoltNm,0);       /* the bolt is gone; its light goes on fading */
+     if (evT>=26)
 	{evType=0;
 	 flash=0;
 	}
@@ -786,7 +790,7 @@ void mpSkyFrame(int fog,const int *offA,int ticks)
  t=fog>=4096? 0: fog<=512? 256: ((4096-fog)<<8)/3584;
  fogDim+=(t-fogDim)>>3;         /* and it closes in as smoothly as the budget's own fog */
  Scl_n_reg.n0_move_y=0;
- rate=16-((fogDim*13)>>8);
+ rate=20-((fogDim*17)>>8);      /* a breath of mist with no fog, nearly solid at its worst */
  if (rate!=ccRate)
     {SCL_SetColMixRate(SCL_NBG0,rate);
      ccRate=rate;
@@ -808,40 +812,41 @@ void mpSkyFrame(int fog,const int *offA,int ticks)
     SclProcess=1;
 }
 
-/* the view's sky box (WALLS.C plaxBB, local), for its next sun */
+/* the view's sky box (WALLS.C plaxBB, local), for its next moon */
 void mpSkyViewDone(int view)
 {if (!mpSkyOn)
     return;
- sunBBok[view]=plaxBBxmin<plaxBBxmax && plaxBBymin<plaxBBymax;
- sunBB[view][0]=plaxBBxmin; sunBB[view][1]=plaxBBymin;
- sunBB[view][2]=plaxBBxmax; sunBB[view][3]=plaxBBymax;
+ skyBBok[view]=plaxBBxmin<plaxBBxmax && plaxBBymin<plaxBBymax;
+ skyBB[view][0]=plaxBBxmin; skyBB[view][1]=plaxBBymin;
+ skyBB[view][2]=plaxBBxmax; skyBB[view][3]=plaxBBymax;
 }
 
 /* Emitted first in the view's list, so every wall and thing covers it; clipped to where the
-   view saw sky in its last image, so the fog's cut-off holes never show it. */
-void mpSkySun(int view,MthMatrix *m)
+   view saw sky in its last image, so the fog's cut-off holes never show it.  p is already in
+   the view's local coordinates (mpSetViewport), as the fans are. */
+void mpSkyMoon(int view,MthMatrix *m)
 {MthXyz w,t;
  XyInt p,r[2];
- if (!mpSkyOn || !sunOk || !sunBBok[view])
+ if (!mpSkyOn || !moonOk || !skyBBok[view])
     return;
- w.x=camera->pos.x+(sunDir[0]<<11);
- w.y=camera->pos.y+(sunDir[1]<<11);
- w.z=camera->pos.z+(sunDir[2]<<11);
+ w.x=camera->pos.x+(moonDir[0]<<11);
+ w.y=camera->pos.y+(moonDir[1]<<11);
+ w.z=camera->pos.z+(moonDir[2]<<11);
  MTH_CoordTrans(m,&w,&t);
  if (t.z<F(64))
     return;
  project_point(&t,&p);
- if (p.x+16<sunBB[view][0] || p.x-16>sunBB[view][2] ||
-     p.y+16<sunBB[view][1] || p.y-16>sunBB[view][3])
+ if (p.x+16<skyBB[view][0] || p.x-16>skyBB[view][2] ||
+     p.y+16<skyBB[view][1] || p.y-16>skyBB[view][3])
     return;
- r[0].x=viewCx+sunBB[view][0]; r[0].y=viewCy+sunBB[view][1];
- r[1].x=viewCx+sunBB[view][2]; r[1].y=viewCy+sunBB[view][3];
+ r[0].x=viewCx+skyBB[view][0]; r[0].y=viewCy+skyBB[view][1];
+ r[1].x=viewCx+skyBB[view][2]; r[1].y=viewCy+skyBB[view][3];
  if (r[1].x>viewCx+viewXmax-1) r[1].x=viewCx+viewXmax-1;
  if (r[1].y>viewCy+viewYmax-1) r[1].y=viewCy+viewYmax-1;
  EZ_userClip(r);
- /* the sky at the line it lands on, so its rim is invisible; the middle is that colour with
-    light added (gouraud), which is as near to additive as the VDP1 goes */
- {int line=viewCy+p.y,rad=sunNight? 7: 10;
+ /* the sky's own colour at the line it lands on, darkened; the outer fan walks that darkening
+    back to nothing at its rim, so the moon ends in the sky and not on an edge */
+ {int line=viewCy+p.y;
   C3 sky;
   Uint16 c;
   if (layout>2 && line>=112)
@@ -850,10 +855,8 @@ void mpSkySun(int view,MthMatrix *m)
   if (line>=vaultRows) line=vaultRows-1;
   vaultBase(line,&sky);
   c=pack(&sky,0,0);
-  sunFan(p.x,p.y,rad+8,UCLPIN_ENABLE|ECDSPD_DISABLE|DRAW_MESH|DRAW_GOURAU|COLOR_5,c,
-	 sunNight? 20: 23,16);
-  sunFan(p.x,p.y,rad,UCLPIN_ENABLE|ECDSPD_DISABLE|DRAW_GOURAU|COLOR_5,c,
-	 sunNight? 27: 31,sunNight? 19: 22);
+  moonFan(p.x,p.y,MOON_R+MOON_EDGE,c,MOON_DARK,16);
+  moonFan(p.x,p.y,MOON_R,c,MOON_DARK,MOON_DARK);
  }
  r[0].x=viewCx+viewXmin;   r[0].y=viewCy+viewYmin;
  r[1].x=viewCx+viewXmax-1; r[1].y=viewCy+viewYmax-1;

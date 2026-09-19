@@ -2572,7 +2572,7 @@ int runLevel(char *filename,int levelNm)
 	 mpSetViewFog(mpView);
 	 mpShowBodies(mpView);
 	 if (mpPlayers>1)
-	    mpSkySun(mpView,viewTransform.current);
+	    mpSkyMoon(mpView,viewTransform.current);
 	 drawWalls(mpView,viewTransform.current);
 	 popProfile();
 

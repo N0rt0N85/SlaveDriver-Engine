@@ -12,7 +12,7 @@ void mpSkyShow(int on);         /* enablePlax's split-screen half */
 /* once an image: fog = the densest view's fog distance, offA = colour offset A (the damage
    flash, the fades), ticks = vblanks since the last image */
 void mpSkyFrame(int fog,const int *offA,int ticks);
-void mpSkySun(int view,MthMatrix *m);   /* before view's walls: its sun, under everything */
+void mpSkyMoon(int view,MthMatrix *m);  /* before view's walls: its moon, under everything */
 void mpSkyViewDone(int view);           /* after view's walls: its sky box, for the next sun */
 
 /* Colour offset A's layers.  In split screen the sky's layers take offset B, which follows A

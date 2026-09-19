@@ -26,6 +26,11 @@ void doom_lightChange(Sprite *s,int fx);       /* ... on a light s already carri
 void doom_lightFade(Sprite *s,int fx,int left);/* intensity * left/tics; tint and radius kept */
 void doom_explosionLight(DoomActor *this);     /* A_Explode */
 
+/* A flash may not be put out in the same image it was lit in (DOOM_LIGHTS.C) */
+void doom_lightImage(void);                    /* an image was drawn (60 Hz, player 1) */
+void doom_lightTicStart(void);                 /* the tic takes the mark (35 Hz, player 1) */
+int  doom_lightStep(void);                     /* 1 = the flashes advance this tic */
+
 /* The tuner: the same values edited from the title (OPTIONS, LIGHTS) or in the level, where the
    effects are there to be judged (L+R+RIGHT, or C+X+Y). */
 /* what it eats while it is open: pad bits, active low (DOOM_PLAYER.C doom_playerFrame) */
