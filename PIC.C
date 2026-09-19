@@ -590,6 +590,11 @@ int picFirstColour(int picNm)
 
 static int vxmin,vymin,vxmax,vymax,vx,vy;
 
+/* GCC14: VDP2 pictures the level loaded; 0 = VRAM B0-B1 hold nothing (MPSKY.C) */
+int vdp2PicCount(void)
+{return nmVDP2Pics;
+}
+
 void updateVDP2Pic(void)
 {SCL_Open(SCL_NBG0);
  SCL_MoveTo(vx<<16,vy<<16,0);

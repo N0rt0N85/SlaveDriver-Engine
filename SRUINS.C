@@ -67,6 +67,7 @@
 #include "intro.h"
 #include "mov.h"
 #include "plax.h"
+#include "mpsky.h"
 #include "airbub.c"
 #include "initmain.h"
 #include "aicommon.h"
@@ -140,7 +141,7 @@ void stepColorOffset(void)
 	    colorStepRate=3;
 	   }
     }
- SCL_SetColOffset(SCL_OFFSET_A,SCL_SP0|SCL_NBG0|SCL_RBG0,
+ SCL_SetColOffset(SCL_OFFSET_A,SKY_OFFSET_A,
 		  colorOffset[0],colorOffset[1],colorOffset[2]);
 }
 
@@ -1925,7 +1926,6 @@ static void mpSetViewport(int k,int emit)
 static MthXyz mpSpawnPos[MPMAX];
 static int mpSpawnSector[MPMAX];
 static Orient mpSpawnAngle[MPMAX];
-static int mpFogCap=4096;       /* the L+R+Z toggle's fog: a ceiling on every view's (mpSetViewFog) */
 static char mpBuilt[MPMAX];     /* slot k holds a player whose state goes on to the next level */
 static char mpInLevel[MPMAX];   /* ... and whose body exists in THIS level */
 
@@ -2037,6 +2037,7 @@ static void mpLevelBuild(void)
  for (k=1;k<mpPlayers;k++)
     mpBuild(k);
  mpSetBanks();                  /* loadPalletes and initPlax just rebuilt banks 1..7 */
+ mpSkyPlayers(mpPlayers);       /* split screen's sky (MPSKY.C), from the sky initPlax loaded */
  wallsSplitReset();             /* the level's low RAM was reset with it */
  if (mpPlayers>1)
     wallsSplitAlloc();
@@ -2103,12 +2104,14 @@ static void mpPollStart(void)
 		n+=mpTeam[k]? 1: -1;
 	     mpTeam[j]=(n<0);
 	    }
-	 mpRole[j]=0;                   /* a newcomer is the normal player */
+	 mpRole[j]=0;                   /* a newcomer is the normal player -- unless the game says */
 	 mpPlayers++;
 	 mpBuild(j);
+	 CFG_MP_JOINED(j);              /* GCC14: its role (a boss, when two marines are in already) */
 	 wallsSplitAlloc();
 	 mpArmed=mpPlayers;
 	 mpSetBanks();
+	 mpSkyPlayers(mpPlayers);
 	 mpSetViewport(0,0);
 	 {static char *msg[MPMAX]={"","PLAYER 2 JOINS","PLAYER 3 JOINS","PLAYER 4 JOINS"};
 	  changeMessage(msg[j]);
@@ -2150,8 +2153,8 @@ static void mpSetViewFog(int k)
  if (mpPlayers==1)
     f=MPFOGMAX;                 /* solo's fog is the toggle's alone */
 #endif
- if (f>mpFogCap)
-    f=mpFogCap;
+ if (f>fogCap)                  /* the player's fog (options, L+R+Z): a ceiling on every view's */
+    f=fogCap;
  if (f!=fogDist)
     {setFog(f);
      if (mpPlayers==1)          /* split screen has no sky: it lends the sky's bank to a player */
@@ -2230,6 +2233,7 @@ int runLevel(char *filename,int levelNm)
  /* do hardware initialization */
  dPrint("A!\n");
  plaxOff();
+ mpSkyOff();                    /* the solo set-up below takes the VDP2 back */
  dPrint("A1!\n");
  setVDP2();
  dPrint("B!\n");
@@ -2426,7 +2430,8 @@ int runLevel(char *filename,int levelNm)
 #endif
 
  mipBase=createMippedPics();
- setFog(fogDist);   /* fills the table; fogDist survives from one level to the next */
+ setFog((fogDist<fogCap)? fogDist: fogCap);   /* fills the table; fogDist survives from one level
+						  to the next, under the options' ceiling */
  setPlaxFade(skyFadeFor(fogDist));  /* initPlax restored the original palette on load */
  mpLevelBuild();                    /* players 2..: player 1 is fully set up by now */
  CFG_MP_LEVELSTART();              /* GCC14: the game's roles, every player built */
@@ -2477,20 +2482,18 @@ int runLevel(char *filename,int levelNm)
 	  from Doom, which never darkens a fully lit sector: the point is to judge it on screen.
 	  It is a ceiling: the budget may bring a view's fog nearer (mpSetViewFog). */
       static char fogChord=0;
-      static char fogIndex=0;
       if (((((~lastInputSample)&(PER_DGT_TL|PER_DGT_TR|PER_DGT_Z)))==
 	   (PER_DGT_TL|PER_DGT_TR|PER_DGT_Z)) ||
 	  ((((~lastInputSample)&(PER_DGT_A|PER_DGT_C|PER_DGT_Z)))==
 	   (PER_DGT_A|PER_DGT_C|PER_DGT_Z)))
 	 {if (!fogChord)
-	     {static char *fogName[4]={"FOG OFF (4096)","FOG 2048","FOG 1024","FOG 512"};
-	      static short fogVal[4]={4096,2048,1024,512};
-	      fogIndex=(fogIndex+1)&3;
-	      mpFogCap=fogVal[(int)fogIndex];
-	      setFog(fogVal[(int)fogIndex]);
+	     {static char *fogName[4]={"FOG OFF","FOG LOW (2048)","FOG MEDIUM (1024)","FOG HIGH (512)"};
+	      int fogIndex=(fogLevel()+1)&3;   /* the options' level, one step on */
+	      fogCap=fogLevels[fogIndex];
+	      setFog(fogCap);
 	      if (mpPlayers==1)   /* split screen lends bank 7 to a player (MPLAYER.C) */
-	         setPlaxFade(skyFadeFor(fogVal[(int)fogIndex]));
-	      changeMessage(fogName[(int)fogIndex]);
+	         setPlaxFade(skyFadeFor(fogCap));
+	      changeMessage(fogName[fogIndex]);
 	      fogChord=1;
 	     }
 	 }
@@ -2568,6 +2571,8 @@ int runLevel(char *filename,int levelNm)
 #endif
 	 mpSetViewFog(mpView);
 	 mpShowBodies(mpView);
+	 if (mpPlayers>1)
+	    mpSkySun(mpView,viewTransform.current);
 	 drawWalls(mpView,viewTransform.current);
 	 popProfile();
 
@@ -2658,6 +2663,7 @@ int runLevel(char *filename,int levelNm)
 	 drawWallsFinish();
 	 popProfile();
 	 mpViewDone(mpView);            /* the slave's cells are only counted once it has joined */
+	 mpSkyViewDone(mpView);
 
 	 if (mpView==0)
 	    {wallsQueueJoin();          /* the slave reads the walls Post is about to move */
@@ -2903,17 +2909,26 @@ int runLevel(char *filename,int levelNm)
      vtimer=0;
      ENABLE;
 
-     movePlax(lastYaw,lastPitch);
-     if (currentState.currentLevel==18)
-	{plaxBBxmin=-160;
-	 plaxBBymin=-110;
-	 plaxBBxmax=160;
-	 plaxBBymax=90;
+     if (mpSkyOn)
+	{int k,f=MPFOGMAX;             /* the split sky takes the densest view's fog */
+	 for (k=0;k<mpPlayers;k++)
+	    if (mpFog[k]<f)
+	       f=mpFog[k];
+	 mpSkyFrame(f<fogCap? f: fogCap,colorOffset,framesElapsed);
 	}
-     SCL_SetWindow(SCL_W1,0,SCL_RBG0,0xfffffff,
-		   plaxBBxmin+160,plaxBBymin+CFG_YCENTER,
-		   plaxBBxmax+160,plaxBBymax+CFG_YCENTER);
-     updateVDP2Pic();
+     else
+	{movePlax(lastYaw,lastPitch);
+	 if (currentState.currentLevel==18)
+	    {plaxBBxmin=-160;
+	     plaxBBymin=-110;
+	     plaxBBxmax=160;
+	     plaxBBymax=90;
+	    }
+	 SCL_SetWindow(SCL_W1,0,SCL_RBG0,0xfffffff,
+		       plaxBBxmin+160,plaxBBymin+CFG_YCENTER,
+		       plaxBBxmax+160,plaxBBymax+CFG_YCENTER);
+	 updateVDP2Pic();
+	}
      lastYaw=playerAngle.yaw; lastPitch=playerAngle.pitch;
 
      if (playerIsDead && colorOffset[0]==-255)
@@ -2922,7 +2937,7 @@ int runLevel(char *filename,int levelNm)
 	 return 1;
 	}
 
-     enablePlax(mpPlayers==1);      /* one sky for four yaws does not exist: off in split screen */
+     enablePlax(mpPlayers==1 || mpSkyOn);   /* split screen: the sky of no view (MPSKY.C) */
      if (CFG_CAMEL && hitCamel)
 	{/* the travel question hands control elsewhere, or later: what the
 	    slave is traversing will be worthless */

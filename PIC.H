@@ -25,6 +25,7 @@ int loadWeaponTiles(int fd);
 int getPicClass(int p);
 void displayVDP2Pic(int picNm,int xo,int yo);
 void updateVDP2Pic(void);
+int vdp2PicCount(void);         /* GCC14: 0 = VRAM B0-B1 unused (MPSKY.C) */
 void dontDisplayVDP2Pic(void);
 void delay_dontDisplayVDP2Pic(void);
 void resetPics(void);

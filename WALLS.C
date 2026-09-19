@@ -557,6 +557,9 @@ void addLightEx(Sprite *s,int r,int g,int b,int radius,int peak)
 {assert(radius>=16 && radius<=1024);
  assert(peak>=0 && peak<=31);
  assert(r>=0 && r<=16 && g>=0 && g<=16 && b>=0 && b<=16);
+ peak=peak*lightLevel/3;        /* the player's strength: none at all is no light to light */
+ if (!peak)
+    return;
  lightPut(s,r*peak,g*peak,b*peak,radius,1);
 }
 
@@ -578,7 +581,7 @@ void changeLightEx(Sprite *s,int r,int g,int b,int radius,int peak)
  if (i<0)
     return;
  assert(!lMode[i] || (peak>=0 && peak<=31));
- m=lMode[i]? peak: 1;
+ m=lMode[i]? peak*lightLevel/3: 1;
  delayColor[i][0]=r*m;
  delayColor[i][1]=g*m;
  delayColor[i][2]=b*m;
@@ -2678,6 +2681,16 @@ volatile int slaveDrawStart;
    darkens a fully lit sector: the setting exists to judge it on screen. */
 unsigned char fogTable[256];
 int fogDist=4096;      /* distance at which a fully lit sector (16) reaches black */
+const short fogLevels[4]={4096,2048,1024,512};
+int fogCap=4096;
+int lightLevel=3;
+
+int fogLevel(void)
+{int i;
+ for (i=3;i>0 && fogLevels[i]!=fogCap;i--)
+    ;
+ return i;
+}
 
 /* GCC14: called once per view per image in split screen (SRUINS.C mpSetViewFog), so no divide
    per entry: one reciprocal, then entries until the table saturates at 31 -- 32 at most. */

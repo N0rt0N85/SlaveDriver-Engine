@@ -294,12 +294,18 @@ const char *doom_levelLabel(int l);
 int  doom_bossLevel(int l);
 void doom_mpLevelStart(void);
 void doom_mpRespawned(int k);
+void doom_mpJoined(int k);
+int  doom_bossCount(int l);
+const char *doom_bossName(int l);
 void doom_levelEnd(int action);
 #define CFG_MP_MENU            1                                 /* INTRO.C: the title's MULTIPLAYER button */
+#define CFG_GFX_OPTIONS        1                                 /* INTRO.C optionMenu: FOG and LIGHTS (WALLS.H) */
 #define CFG_MENU_PITCH         24                                /* INTRO.C: four title buttons fit the screen */
 #define CFG_MP_NMLEVELS        9                                 /* MPLAYER.C mpMenu: DOOM_NMLEVELS */
 #define CFG_MP_LEVELLABEL(l)   doom_levelLabel(l)
 #define CFG_MP_BOSSLEVEL(l)    doom_bossLevel(l)                 /* a level with a boss: the boss battle's */
+#define CFG_MP_BOSSCOUNT(l)    doom_bossCount(l)                 /* ... how many: at most that many boss players */
+#define CFG_MP_BOSSNAME(l)     doom_bossName(l)                  /* ... and what they are (bigFont's letters) */
 #define CFG_MP_MONSTERS_NAME   "DEMONS"
 #define CFG_MP_MONSTER_ROLE    "DEMON"
 const char *doom_skillName(int s);
@@ -310,6 +316,7 @@ extern unsigned char doomSectorDamage[];
 #define CFG_MP_SPOTSAFE(s)     (!doomSectorDamage[s])            /* no spawn on nukage or E1M8's last room */
 #define CFG_MP_LEVELSTART()    doom_mpLevelStart()               /* SRUINS.C runLevel, after mpLevelBuild */
 #define CFG_MP_RESPAWNED(k)    doom_mpRespawned(k)               /* SRUINS.C mpRespawn, player k loaded */
+#define CFG_MP_JOINED(k)       doom_mpJoined(k)                  /* SRUINS.C mpPollStart: player k came in */
 #define CFG_LEVEL_END(a)       doom_levelEnd(a)                  /* SRUINS.C runLevel, before an exit returns */
 #define CFG_LEVEL_END_SHOWN(a) ((a)>=200 || (a)==2)              /* ... a level's exit, or the episode's end */
 #define CFG_DRAW_AIRMETER(f)                                     /* SRUINS.C:2214: no air meter   */
@@ -346,10 +353,13 @@ extern unsigned char doomSectorDamage[];
 #define CFG_MP_BODYSEQ(b,v,h) (-1)                              /* PowerSlave has no body to show */
 #define CFG_MP_TRANSLATION(k) ((const unsigned char *)0)
 #define CFG_MP_MENU            0                                 /* PowerSlave has no multiplayer game */
+#define CFG_GFX_OPTIONS        0                                 /* PowerSlave's options as they were */
 #define CFG_MENU_PITCH         30
 #define CFG_MP_NMLEVELS        1
 #define CFG_MP_LEVELLABEL(l)   ""
 #define CFG_MP_BOSSLEVEL(l)    0
+#define CFG_MP_BOSSCOUNT(l)    0
+#define CFG_MP_BOSSNAME(l)     ""
 #define CFG_MP_MONSTERS_NAME   "MONSTERS"
 #define CFG_MP_MONSTER_ROLE    "MONSTER"
 #define CFG_MP_NMSKILLS        1
@@ -358,6 +368,7 @@ extern unsigned char doomSectorDamage[];
 #define CFG_MP_SPOTSAFE(s)     1
 #define CFG_MP_LEVELSTART()
 #define CFG_MP_RESPAWNED(k)
+#define CFG_MP_JOINED(k)
 #define CFG_LEVEL_END(a)
 #define CFG_LEVEL_END_SHOWN(a) 0
 #define CFG_DRAW_AIRMETER(f)   drawAirMeter(f)

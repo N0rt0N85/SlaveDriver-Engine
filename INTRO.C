@@ -30,6 +30,7 @@
 #include "mov.h"
 #include "sprite.h"
 #include "mplayer.h"
+#include "walls.h"
 
 #define MAXNMPICS 20
 static unsigned short *picPals[MAXNMPICS];
@@ -187,6 +188,24 @@ static void remapMenu(int hx,int hy,int lx,int ly)
  dlg_runSlideIn();
 }
 
+#if CFG_GFX_OPTIONS
+/* GCC14: the fog and the lights (WALLS.H fogCap, lightLevel), two more lines under MUSIC: items 7
+   and 8 (codes 4 and 5), after the title, the sliding text and the rule PowerSlave's code counts
+   on as items 4-6.  bigFont: capitals and spaces. */
+static char *optFogText(void)
+{static char *const t[4]={"FOG OFF","FOG LOW","FOG MEDIUM","FOG HIGH"};
+ return t[fogLevel()];
+}
+
+static char *optLightText(void)
+{static char *const t[4]={"LIGHTS OFF","LIGHTS LOW","LIGHTS MEDIUM","LIGHTS FULL"};
+ return t[lightLevel&3];
+}
+#define OPT_DONE_Y (-24+130)
+#else
+#define OPT_DONE_Y (-24+90)
+#endif
+
 static void optionMenu(int hx,int hy,int lx,int ly)
 {int menuSel=-1;
  enable_stereo=!(systemMemory & PER_MSK_STEREO);
@@ -197,7 +216,7 @@ static void optionMenu(int hx,int hy,int lx,int ly)
  dlg_addBigWavyButton(0,0,-24+30,getText(LB_OPTIONMENU,4));
  dlg_addBigWavyButton(1,0,-24+50,getText(LB_OPTIONMENU,0+!enable_stereo));
  dlg_addBigWavyButton(2,0,-24+70,getText(LB_OPTIONMENU,2+!enable_music));
- dlg_addBigWavyButton(3,0,-24+90,getText(LB_OPTIONMENU,5));
+ dlg_addBigWavyButton(3,0,OPT_DONE_Y,getText(LB_OPTIONMENU,5));
 #else
  dlg_addBigWavyJapaneseButton(0,0,-24+30,
 			      getText(LB_OPTIONMENU,4));
@@ -213,6 +232,11 @@ static void optionMenu(int hx,int hy,int lx,int ly)
  dlg_addFontText(hx,hy,100,2,getText(LB_MAINMENU,2));
  dlg_addFontText(0,400,320,2,"");
  dlg_addRect(-60,-7,120,1,RGB(31,31,31));
+#if CFG_GFX_OPTIONS
+ dlg_addBigWavyButton(4,0,-24+90,optFogText());
+ dlg_addBigWavyButton(5,0,-24+110,optLightText());
+ dlg_centerStuff();
+#endif
 #else
  dlg_addFontText(hx,hy,300,3,getText(LB_MAINMENU,2));
  dlg_addFontText(0,400,320,3,"");
@@ -270,6 +294,25 @@ static void optionMenu(int hx,int hy,int lx,int ly)
 	    dlgItem[2].x1+=300;
 	    dlg_runSlideIn();
 	    break;
+#if CFG_GFX_OPTIONS
+	 case 4:
+	 case 5:
+	    {int it=menuSel+3;          /* items 7 and 8 */
+	     if (menuSel==4)
+		fogCap=fogLevels[(fogLevel()+1)&3];
+	     else
+		lightLevel=(lightLevel+1)&3;
+	     dlgItem[5].text=dlgItem[it].text;
+	     dlgItem[it].text=(menuSel==4)? optFogText(): optLightText();
+	     dlgItem[5].xp=dlgItem[it].xp; dlgItem[5].yp=dlgItem[it].yp;
+	     dlg_centerStuff();
+	     dlg_setupNoSlide();
+	     dlgItem[5].x2+=(menuSel==4)? 250: -300;
+	     dlgItem[it].x1+=(menuSel==4)? -250: 300;
+	     dlg_runSlideIn();
+	    }
+	    break;
+#endif
 	   }
      if (menuSel==3)
 	break;

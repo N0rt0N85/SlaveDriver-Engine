@@ -196,7 +196,7 @@ LIBS     := -Wl,-b,coff-sh $(LIBDIR)/SEGA_SAT.A -Wl,-b,elf32-sh
 COMMON4      := LEVEL MEGAINIT SCL_FUNC SCL_VBLV V_BLANK
 INIT_C       := DMA FILE INITMAIN LOCAL MOV PICSET PRINT SOUND SPR UTIL $(COMMON4)
 MAIN_C       := AI AI2 AICOMMON ART BIGMAP BUP DMA FILE HITSCAN INTRO LOCAL MAP MENU OBJECT PIC \
-                PICSET PLAX PRINT PROFILE ROUTE SEQUENCE SOUND SPR SPRITE SRUINS UTIL WEAPON $(COMMON4) WALLS MPLAYER MPRULES         CRASH $(PLAYER_C)
+                PICSET PLAX PRINT PROFILE ROUTE SEQUENCE SOUND SPR SPRITE SRUINS UTIL WEAPON $(COMMON4) WALLS MPLAYER MPRULES MPSKY   CRASH $(PLAYER_C)
 KEYGEN_C     := DMA FILE KEYGEN LOCAL MOV PICSET PRINT SOUND SPR UTIL LEVEL SCL_FUNC SCL_VBLV V_BLANK
 MAIN_C       += $(GAME_C)              # game/doom/*.C when GAME = doom (empty otherwise)
 vpath %.C game/doom
@@ -272,7 +272,7 @@ $(OBJDIR)/%.o: %.C | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 # GCC14: the multiplayer rules, menu and score run a few times a level or at the title: built for
 # size -- every byte of MAIN is a byte less for the level's tiles (tools/doom2ps/make_e1m1.py)
-$(OBJDIR)/MPRULES.o $(OBJDIR)/DOOM_MODES.o: CFLAGS += -Os
+$(OBJDIR)/MPRULES.o $(OBJDIR)/DOOM_MODES.o $(OBJDIR)/MPSKY.o: CFLAGS += -Os
 
 # --- shim (lower-case .c, keeps the same flags) -----------------------------------------------
 $(SNSTUBS_OBJ): shim/sn_stubs.c | $(OBJDIR)

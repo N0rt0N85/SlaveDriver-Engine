@@ -120,6 +120,11 @@ void EZ_setChar(int charNm,int colorMode,int width,int height,BYTE *data)
     }
 }
 
+/* GCC14: bytes of VRAM left above the characters (EZ_setChar asserts only in debug) */
+int EZ_charRoom(void)
+{return 1024*512-(int)charStart;
+}
+
 void EZ_setLookupTbl(int tblNm,struct sprLookupTbl *tbl)
 {assert(tblNm>=0);
  assert(tblNm<=10);

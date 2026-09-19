@@ -1087,6 +1087,20 @@ int doom_bossLevel(int l)
 {return l>=0 && l<DOOM_NMLEVELS && doomBossMt[l]>=0;
 }
 
+/* BOSS BATTLE's screen, before the level is loaded: how many bosses the level holds (E1M8: its
+   two Barons, at every skill -- things 3003, flags 7) and what they are */
+int doom_bossCount(int l)
+{static const unsigned char count[DOOM_NMLEVELS]={0,0,0,0,0,0,0,2,0};
+ return (l>=0 && l<DOOM_NMLEVELS)? count[l]: 0;
+}
+
+const char *doom_bossName(int l)
+{switch ((l>=0 && l<DOOM_NMLEVELS)? doomBossMt[l]: -1)
+    {case MT_BRUISER: return "BARON OF HELL";
+     default:         return "";
+    }
+}
+
 /* BOSS BATTLE: what opens a boss level's arena from the start -- E1M8: the block in front of the
    start (tag 1) and the Barons' two closets (tag 5).  The boss floor (666) stays up: behind it,
    the teleporter to the last room, which hurts and ends the level. */

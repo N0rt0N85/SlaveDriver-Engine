@@ -26,6 +26,7 @@
 #include "sequence.h"
 #include "aicommon.h"
 #include "mplayer.h"
+#include "walls.h"
 
 DoomPlayer doomPlayer;
 int doomViewBob;                        /* P_CalcHeight's bob, added to the view (CFG_VIEW_BOB)    */
@@ -386,9 +387,9 @@ static void doomFlashTic(void)
     bonus=4;
  if (red)
     bonus=0;                                    /* ST_doPaletteStuff: the bonus only when no red */
- r=red*8+bonus*12+doomPlayer.extralight*12;
- g=-red*8+bonus*12+doomPlayer.extralight*12;
- b=-red*8+doomPlayer.extralight*12;
+ r=red*8+bonus*12+doomPlayer.extralight*4*lightLevel;      /* GCC14: 12 a step at full strength */
+ g=-red*8+bonus*12+doomPlayer.extralight*4*lightLevel;     /* (WALLS.H lightLevel, the options) */
+ b=-red*8+doomPlayer.extralight*4*lightLevel;
  if (r>63) r=63;
  if (r<-63) r=-63;
  if (g>63) g=63;
@@ -588,7 +589,10 @@ static int doomWeaponSelectable(int w)
 void doom_weaponNext(int dir)
 {int start,i,idx,w;
  if (doomRoleMt[mpCur])
-    {doom_roleHop();                            /* GCC14: a monster's player changes monster */
+    {if (dir>0)                                 /* GCC14: a monster's player -- next weapon (Z): */
+	doom_roleNextAttack();                  /* its other attack; previous (Y): another monster */
+     else
+	doom_roleHop();
      return;
     }
  if (currentState.health<=0)

@@ -102,6 +102,7 @@ void EZ_initSprSystem(int nmCommands,int nmCluts,int nmGour,
 void EZ_setErase(int eraseWriteEndLine,unsigned short eraseWriteColor);
 void EZ_setChar(int charNm,int colorMode,int width,int height,BYTE *data);
 void EZ_setLookupTbl(int tblNm,struct sprLookupTbl *tbl);
+int EZ_charRoom(void);          /* GCC14: VRAM bytes left for characters */
 void EZ_openCommand(void);
 void EZ_normSpr(short dir,short drawMode,short color,short charNm,XyInt *pos,
 		struct gourTable *gTable);

@@ -56,17 +56,20 @@ extern volatile unsigned short lastInputSampleP[MPMAX];
 extern int mpPadsPresent;               /* pads found at the last poll */
 
 /* Rules of the game, chosen on the title's multiplayer screen (mpMenu) and frozen for the whole
-   game: nothing in a level writes them.  The engine knows sides, spawn spots and the score; what
-   a role IS (a monster the player drives, the boss) belongs to the game (CFG_MP_* hooks). */
+   game: nothing in a level writes them but the boss battle's mpRole.  The engine knows sides,
+   spawn spots and the score; what a role IS (a monster the player drives, the boss) belongs to
+   the game (CFG_MP_* hooks). */
 enum {MP_COOP,MP_DM,MP_TEAM,MP_MONSTERS,MP_BOSS,MP_NMMODES};
 extern int mpMode;
 extern unsigned char mpTeam[MPMAX];     /* MP_TEAM: 0 or 1 */
-extern unsigned char mpRole[MPMAX];     /* MP_MONSTERS: 1 = drives a monster, 0 = the normal player */
+extern unsigned char mpRole[MPMAX];     /* MP_MONSTERS: 1 = drives a monster, 0 = the normal player;
+					   MP_BOSS: 1 = a boss -- the one role a level writes: the
+					   crown moves it, a newcomer may take it */
 extern int mpFragLimit,mpTimeLimit;     /* 0 = none; the time in minutes */
 extern int mpStartLevel;                /* the level a new game starts on */
 #define mpCompetitive() (mpMode==MP_DM || mpMode==MP_TEAM || mpMode==MP_BOSS)
 int  mpAllies(int a,int b);             /* same side: killing an ally costs a frag */
-#define mpSpares(a,b) ((mpMode==MP_TEAM || mpMode==MP_MONSTERS) && (a)!=(b) && mpAllies(a,b))
+#define mpSpares(a,b) ((mpMode==MP_TEAM || mpMode==MP_MONSTERS || mpMode==MP_BOSS) && (a)!=(b) && mpAllies(a,b))
                                         /* no damage between them (co-op keeps Doom's friendly fire) */
 int  mpSide(int k);                     /* the side that scores k's frags: k itself, or its team */
 

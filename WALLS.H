@@ -19,6 +19,12 @@ extern int pipeSpin;          /* spins at the join; -1 = nothing in flight */
    lit sector reaches black at d units.  4096 gives the original behaviour (no fog). */
 extern int fogDist;
 void setFog(int dist);
+/* GCC14: the player's settings (the title's OPTIONS, CFG_GFX_OPTIONS): fogCap, the fog's ceiling
+   -- one of fogLevels, off to heavy; every view's fog is at most that (SRUINS.C mpSetViewFog) --
+   and lightLevel, the dynamic lights' strength (addLightEx), 0 off .. 3 full. */
+extern int fogCap,lightLevel;
+extern const short fogLevels[4];
+int fogLevel(void);                     /* fogCap's index in fogLevels */
 
 /* GCC14: light LOD (WALLS.C, top of drawRectWall): a wall the fog has turned black
    everywhere becomes ONE flat quad.  0 = never, 1 = fuse, 2 = fuse painted blue.

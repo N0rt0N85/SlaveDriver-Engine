@@ -20,6 +20,7 @@
 #include "util.h"
 #include "spr.h"
 #include "plax.h"
+#include "mpsky.h"
 
 #define PLAXPERSCREEN 128
 void movePlax(Fixed32 yaw,Fixed32 pitch)
@@ -53,7 +54,11 @@ void movePlax(Fixed32 yaw,Fixed32 pitch)
 }
 
 void enablePlax(int setting)
-{if (setting)
+{if (mpSkyOn)                  /* GCC14: split screen's sky (MPSKY.C) */
+    {mpSkyShow(setting);
+     return;
+    }
+ if (setting)
     Scl_s_reg.dispenbl|=0x10;
  else
     Scl_s_reg.dispenbl&=~0x10;
@@ -84,6 +89,11 @@ void setPlaxFade(int f)
 void retryPlaxPal(void)
 {setPlaxFade(plaxFade);
  /* SCL_SetColRam(0,256*7,256,plaxPal); */
+}
+
+/* GCC14: the sky's palette as loaded, for the split-screen sky (MPSKY.C) */
+const unsigned short *plaxPalette(void)
+{return plaxPal;
 }
 
 void plaxOff(void)

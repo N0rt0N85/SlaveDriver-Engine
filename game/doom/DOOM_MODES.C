@@ -1,8 +1,8 @@
 /* DOOM_MODES.C -- the multiplayer modes (MPLAYER.H mpMode) on the Doom runtime: the monster a
- * player drives (DEMONS: one of the level's, taken over; BOSS BATTLE: the Baron), its attack and
- * its body as the others see it; frags, the frag and time limits, the boss's crown; the level's
- * placement per mode and the end-of-level score.  The engine keeps the sides, the spawn spots
- * and the table (MPLAYER.C); this file says what a role is.
+ * player drives (DEMONS: one of the level's, taken over; BOSS BATTLE: the level's boss, as many
+ * as it holds), its attacks and its body as the others see it; frags, the frag and time limits,
+ * the boss's crown; the level's placement per mode and the end-of-level score.  The engine keeps
+ * the sides, the spawn spots and the table (MPLAYER.C); this file says what a role is.
  *
  * A role is not a possessed DoomActor.  The player stays the engine's camera -- its movement,
  * collision, input and per-player swap untouched -- and wears the monster: its frames, its
@@ -38,9 +38,8 @@ short doomRoleMt[MPMAX];               /* the monster each player wears, 0 = the
 #define DOOM_MELEE          F(64)      /* MELEERANGE */
 #define DOOM_SKULLSPEED     F(20)
 #define DOOM_SKULLDASH      12         /* tics of a lost soul's charge */
-#define DOOM_BOSS_HP        1000       /* the Baron's, + 700 per marine past the first */
-#define DOOM_BOSS_HP_ADD    700
-#define DOOM_CROWN_TICS     70         /* 2 s between the boss's death and the next boss */
+#define DOOM_BOSS_HP_ADD    700        /* a lone boss: + 700 per marine past the first */
+#define DOOM_CROWN_TICS     70         /* 2 s between a boss's death and the next boss */
 #define DOOM_VEL_SCALE      38229      /* DOOM_PLAYER.C: u/tic -> u/frame */
 
 /* A monster a player can wear.  melee: (P_Random()%mod+1)*mul, 0 = none; missile -1 = none;
@@ -65,7 +64,9 @@ static const DoomRoleInfo doomRoles[]=
 };
 #define DOOM_NMROLES ((int)(sizeof(doomRoles)/sizeof(doomRoles[0])))
 
-static int doomCrownTics,doomCrownHeir;
+/* BOSS BATTLE: a fallen boss (mpRole still 1) hands its crown on after DOOM_CROWN_TICS */
+static short doomCrownTics[MPMAX];
+static signed char doomCrownHeir[MPMAX];
 /* BOSS BATTLE: where the level's bosses stand (doom_modePlace), the boss comes in there */
 #define DOOM_MAXBOSSSPOTS 4
 static struct {MthXyz feet; short sector,yaw;} doomBossSpot[DOOM_MAXBOSSSPOTS];
@@ -170,9 +171,9 @@ static int doomTakeOver(DoomActor *skip)
  return 1;
 }
 
-/* The weapon buttons of a player wearing a monster (doom_weaponNext): the monster it leaves goes
-   back to its own mind where it stands, with the health it has, and the player takes over the
-   next one by the same rule -- never straight back into the one it left. */
+/* The previous-weapon button (Y) of a player wearing a monster (doom_weaponNext): the monster it
+   leaves goes back to its own mind where it stands, with the health it has, and the player takes
+   over the next one by the same rule -- never straight back into the one it left. */
 void doom_roleHop(void)
 {int mt=doomRoleMt[mpCur],hp=currentState.health;
  DoomActor *left;
@@ -193,19 +194,68 @@ void doom_roleHop(void)
  left->sprite->flags&=~SPRITEFLAG_NOSPRCOLLISION;
 }
 
-static void doomBossMorph(void)
-{int marines=mpPlayers-1;
- doomBecome(MT_BRUISER,DOOM_BOSS_HP+DOOM_BOSS_HP_ADD*(marines>1? marines-1: 0));
- doom_setMessage("YOU ARE THE BOSS");
+/* The next-weapon button (Z) of a player wearing a monster with two attacks -- the imp, the
+   cacodemon, the baron: a blow and a missile.  Doom picks by range (A_Chase: melee in reach,
+   else the missile); a player picks, and keeps it until the button again. */
+void doom_roleNextAttack(void)
+{const DoomRoleInfo *ri=doomRoleInfo(doomRoleMt[mpCur]);
+ if (!ri || !ri->meleeMod || ri->missile<0 || currentState.health<=0)
+    return;
+ doomRole.alt^=1;
+ doom_setMessage(!doomRole.alt? "FIREBALL": ri->hitSfx==sfx_claw? "CLAW": "BITE");
 }
 
-/* The first boss of a round comes in where one of the level's bosses stands, in its arena */
+/* BOSS BATTLE: the players who are a boss, or are about to be one again (a crown on its way) */
+static int doomBosses(void)
+{int k,n=0;
+ for (k=0;k<mpPlayers;k++)
+    n+=(mpRole[k]!=0);
+ return n;
+}
+
+/* the most bosses at once: as many as the level holds, one at least */
+static int doomBossCap(void)
+{int n=doom_bossCount(currentState.currentLevel);
+ return (n>1)? n: 1;
+}
+
+/* The loaded player becomes the level's boss (mpRole already set).  A lone boss grows with the
+   marines it faces; several bosses keep the monster's own health. */
+static void doomBossMorph(void)
+{int mt=doom_levelBossMt(),bosses=doomBosses(),marines=mpPlayers-bosses,hp;
+ if (!doomRoleInfo(mt))
+    mt=MT_BRUISER;
+ hp=doomMobjInfo[mt].spawnhealth;
+ if (bosses<=1 && marines>1)
+    hp+=DOOM_BOSS_HP_ADD*(marines-1);
+ doomBecome(mt,hp);
+ doom_setMessage(bosses>1? "YOU ARE A BOSS": "YOU ARE THE BOSS");
+}
+
+/* A boss comes in where one of the level's bosses stands, in its arena: the stand farthest from
+   the other bosses (the first: one at random) */
 static void doomBossPlace(void)
 {MthXyz pos;
- int i;
+ int n,i,j,start,best=0;
+ Fixed32 d,nearest,far=-1;
  if (!doomNmBossSpots)
     return;
- i=getNextRand()%doomNmBossSpots;
+ start=getNextRand()%doomNmBossSpots;
+ for (n=0;n<doomNmBossSpots;n++)
+    {i=(start+n)%doomNmBossSpots;
+     nearest=0x7fffffff;
+     for (j=0;j<mpPlayers;j++)
+	if (j!=mpCur && mpRole[j] && mpBody[j])
+	   {d=abs(mpBody[j]->pos.x-doomBossSpot[i].feet.x)+abs(mpBody[j]->pos.z-doomBossSpot[i].feet.z);
+	    if (d<nearest)
+	       nearest=d;
+	   }
+     if (nearest>far)
+	{far=nearest;
+	 best=i;
+	}
+    }
+ i=best;
  pos=doomBossSpot[i].feet;
  pos.y+=F(GP_PLAYER_RADIUS+GP_PLAYER_EYE_HOVER);
  moveSpriteTo(camera,doomBossSpot[i].sector,&pos);
@@ -215,11 +265,11 @@ static void doomBossPlace(void)
  camera->angle=playerAngle.yaw;
 }
 
-/* every player's message but one's */
-static void doomTellOthers(int but,const char *msg)
+/* the message of every player who is no boss */
+static void doomTellMarines(const char *msg)
 {int k,prev=mpCur;
  for (k=0;k<mpPlayers;k++)
-    if (k!=but)
+    if (!mpRole[k])
        {mpSwitch(k);
 	doom_setMessage(msg);
        }
@@ -228,11 +278,27 @@ static void doomTellOthers(int but,const char *msg)
 
 /* --- level start, respawn, placement -------------------------------------------------------- */
 
+/* "PLAYER 2 IS THE BOSS", "PLAYERS 2 AND 4 ARE THE BOSSES" */
+static void doomNameBosses(char *msg)
+{int k,i,n=0,last=0;
+ for (k=0;k<mpPlayers;k++)
+    if (mpRole[k])
+       {n++;
+	last=k;
+       }
+ strcpy(msg,(n>1)? "PLAYERS": "PLAYER");
+ for (k=0,i=0;k<mpPlayers;k++)
+    if (mpRole[k])
+       sprintf(msg+strlen(msg),"%s %d",!i++? "": (k==last)? " AND": ",",k+1);
+ strcat(msg,(n>1)? " ARE THE BOSSES": " IS THE BOSS");
+}
+
 /* SRUINS.C runLevel, every player built (CFG_MP_LEVELSTART): the roles of the mode */
 void doom_mpLevelStart(void)
-{int k,prev=mpCur;
- char msg[32];
- doomCrownTics=0;
+{int k,n,prev=mpCur;
+ char msg[40];
+ for (k=0;k<MPMAX;k++)
+    doomCrownTics[k]=0;                  /* a crown on its way stays with its boss: mpRole */
  for (k=0;k<MPMAX;k++)
     doomRoleMt[k]=0;
  for (k=0;k<mpPlayers;k++)
@@ -244,19 +310,28 @@ void doom_mpLevelStart(void)
  if (mpMode==MP_BOSS && mpPlayers>1)
     {for (k=0;doom_levelOpenChannel(k)>=0;k++)
 	signalAllObjects(SIGNAL_SWITCH,doom_levelOpenChannel(k),0);   /* the arena, open */
-     k=getNextRand()%mpPlayers;
-     mpSwitch(k);
-     doomBossMorph();
-     doomBossPlace();
-     sprintf(msg,"PLAYER %d IS THE BOSS",k+1);
-     doomTellOthers(k,msg);
+     /* the bosses chosen on the title's screen (MPRULES.C), a crown's moves since; nobody: one
+	at random; never more than the level holds, never nobody left to fight them */
+     for (k=0,n=0;k<mpPlayers;k++)
+	if (mpRole[k] && (++n>doomBossCap() || n==mpPlayers))
+	   mpRole[k]=0;
+     if (!doomBosses())
+	mpRole[getNextRand()%mpPlayers]=1;
+     for (k=0;k<mpPlayers;k++)
+	if (mpRole[k])
+	   {mpSwitch(k);
+	    doomBossMorph();
+	    doomBossPlace();
+	   }
+     doomNameBosses(msg);
+     doomTellMarines(msg);
     }
  mpSwitch(prev);
 }
 
 /* SRUINS.C mpRespawn (CFG_MP_RESPAWNED), player k loaded, the marine's kit given: a demon takes
    another monster (none left: it stays down, and fire asks again); a fallen boss comes back as
-   a marine -- the crown went to its killer */
+   a marine -- its crown goes to its killer */
 void doom_mpRespawned(int k)
 {doomBecome(0,0);
  if (mpMode==MP_MONSTERS && mpRole[k] && !doomTakeOver(NULL))
@@ -264,6 +339,27 @@ void doom_mpRespawned(int k)
      doomPlayer.health=0;
      doom_setMessage("NO MONSTER LEFT TO TAKE OVER");
     }
+}
+
+/* SRUINS.C mpPollStart (CFG_MP_JOINED), a newcomer built as a marine: in the boss battle it is
+   a boss if two marines are in already and the level holds one more boss than are played */
+void doom_mpJoined(int k)
+{int j,marines=0,prev=mpCur;
+ char msg[40];
+ if (mpMode!=MP_BOSS)
+    return;
+ for (j=0;j<mpPlayers;j++)
+    if (j!=k && !mpRole[j])
+       marines++;
+ if (marines<2 || doomBosses()>=doomBossCap())
+    return;
+ mpRole[k]=1;
+ mpSwitch(k);
+ doomBossMorph();
+ doomBossPlace();
+ mpSwitch(prev);
+ sprintf(msg,"PLAYER %d IS A BOSS",k+1);
+ doomTellMarines(msg);
 }
 
 /* DOOM_GAME.C game_placeObject, before a mobj is spawned: 1 = this mode does not place it.  A
@@ -300,13 +396,9 @@ int doom_modePlace(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
 
 static void doomRoleAttack(const DoomRoleInfo *ri)
 {const DoomMobjInfo *info=&doomMobjInfo[ri->mt];
- Fixed32 pitch,d=0x7fffffff;
- Sprite *t;
+ Fixed32 pitch;
  int yaw=playerAngle.yaw,i,damage;
  doom_aimSlope(&pitch);
- t=doomAimed;
- if (t)
-    d=doom_approxDist2(t->pos.x-camera->pos.x,t->pos.z-camera->pos.z);
  doomRole.melee=0;
  if (ri->mt==MT_SKULL)
     {/* A_SkullAttack: a charge at SKULLSPEED; the hit is looked for along the way */
@@ -316,9 +408,9 @@ static void doomRoleAttack(const DoomRoleInfo *ri)
 	doom_sound(camera,info->attacksound);
      return;
     }
- if (ri->meleeMod && (ri->missile<0 || (t && d<=DOOM_MELEE+t->radius)))
-    {/* in reach, or a monster that only bites: its attacksound (A_Chase plays it on the way
-	into the melee state), then the blow */
+ if (ri->meleeMod && (ri->missile<0 || doomRole.alt))
+    {/* the blow chosen (doom_roleNextAttack), or a monster that only bites: its attacksound
+	(A_Chase plays it on the way into the melee state), then the blow */
      doomRole.melee=1;
      if (info->attacksound)
 	doom_sound(camera,info->attacksound);
@@ -459,8 +551,8 @@ void doom_playerKilled(Object *source)
      doom_setMessage(msg);
     }
  if (mpMode==MP_BOSS && mt)
-    {doomCrownHeir=(killer>=0 && killer!=victim)? killer: -1;
-     doomCrownTics=DOOM_CROWN_TICS;
+    {doomCrownHeir[victim]=(signed char)((killer>=0 && killer!=victim && !mpRole[killer])? killer: -1);
+     doomCrownTics[victim]=DOOM_CROWN_TICS;
     }
 }
 
@@ -477,9 +569,34 @@ static int doomBestFrags(void)
  return best;
 }
 
-/* 35 Hz, once (doom_playerTic of player 1): the round's limits, the crown */
+/* The crown of the fallen boss v: to its killer, if it is a marine still standing; else to a
+   living marine at random -- v itself (up again) only when nobody else is */
+static void doomCrown(int v)
+{int k,pass,heir=doomCrownHeir[v],prev=mpCur,n=0;
+ char msg[40];
+ if (heir<0 || mpRole[heir] || mpPeekInt(heir,&currentState.health)<=0)
+    for (heir=-1,pass=0;pass<2 && heir<0;pass++)
+       for (k=0;k<mpPlayers;k++)
+	  if ((pass || k!=v) && (k==v || !mpRole[k]) && !doomRoleMt[k] &&
+	      mpPeekInt(k,&currentState.health)>0 && !(getNextRand()%(++n)))
+	     heir=k;
+ if (heir<0)
+    {doomCrownTics[v]=1;                /* everybody down: the next tic asks again */
+     return;
+    }
+ mpRole[v]=0;
+ mpRole[heir]=1;
+ mpSwitch(heir);
+ doomBossMorph();
+ mpSwitch(prev);
+ sprintf(msg,"PLAYER %d IS %s BOSS",heir+1,(doomBosses()>1)? "A": "THE");
+ doomTellMarines(msg);
+}
+
+/* 35 Hz, once (doom_playerTic of player 1): the round's limits, the crowns */
 void doom_modesTic(void)
-{if (mpPlayers<2 || doom_exiting())
+{int k;
+ if (mpPlayers<2 || doom_exiting())
     return;
  if (mpCompetitive() &&
      ((mpTimeLimit && doomLevelTime>=mpTimeLimit*60*35) ||
@@ -487,23 +604,9 @@ void doom_modesTic(void)
     {doom_endRound();
      return;
     }
- if (doomCrownTics && !--doomCrownTics)
-    {int k,heir=doomCrownHeir,prev=mpCur,n=0;
-     char msg[32];
-     if (heir<0 || mpPeekInt(heir,&currentState.health)<=0)
-	for (heir=-1,k=0;k<mpPlayers;k++)  /* no killer standing: a living player at random */
-	   if (!doomRoleMt[k] && mpPeekInt(k,&currentState.health)>0 && !(getNextRand()%(++n)))
-	      heir=k;
-     if (heir<0)
-	{doomCrownTics=1;               /* everybody down: the next tic asks again */
-	 return;
-	}
-     mpSwitch(heir);
-     doomBossMorph();
-     mpSwitch(prev);
-     sprintf(msg,"PLAYER %d IS THE BOSS",heir+1);
-     doomTellOthers(heir,msg);
-    }
+ for (k=0;k<mpPlayers;k++)
+    if (doomCrownTics[k] && !--doomCrownTics[k])
+       doomCrown(k);
 }
 
 /* --- the end of the level ------------------------------------------------------------------- */

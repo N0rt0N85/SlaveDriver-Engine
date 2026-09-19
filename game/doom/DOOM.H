@@ -226,7 +226,7 @@ typedef struct
  short dash;                            /* the lost soul's charge, tics left                    */
  short melee;                           /* the attack running is a blow (its frames)            */
  short dieTic;                          /* doomLevelTime of the death (the death frames)        */
- short pad;
+ short alt;                             /* the attack chosen: 0 its missile, 1 its blow (Z)      */
 } DoomRole;
 extern DoomRole doomRole;
 extern short doomRoleMt[];                     /* [MPMAX] the monster each player wears, 0 = marine */
@@ -234,7 +234,8 @@ void        doom_modesMpRegister(void);
 int         doom_isMonsterPlayer(int k);
 int         doom_roleSpeed(void);              /* percent of the marine's thrust                 */
 void        doom_roleTic(void);                /* 35 Hz instead of the psprites                  */
-void        doom_roleHop(void);                /* DEMONS: the weapon buttons change monster      */
+void        doom_roleHop(void);                /* DEMONS: previous weapon (Y) changes monster    */
+void        doom_roleNextAttack(void);         /* next weapon (Z): the monster's other attack     */
 void        doom_rolePain(void);
 short       doom_roleBodySeq(int k,Sprite *body,Sprite *viewer,int health);
 void        doom_playerKilled(Object *source); /* the loaded player died: frags, the crown        */
@@ -245,6 +246,7 @@ void        doom_modesLevelReset(void);        /* a level's placement begins    
 int         doom_levelOpenChannel(int i);      /* BOSS BATTLE: the channels that open the arena, -1 = end */
 void        doom_mpLevelStart(void);
 void        doom_mpRespawned(int k);
+void        doom_mpJoined(int k);
 void        doom_levelEnd(int action);
 /* DOOM_GAME.C, for the modes */
 int         doom_exiting(void);                /* the level is over                              */
@@ -252,6 +254,8 @@ void        doom_endRound(void);               /* a fighting game's limit: the n
 const char *doom_levelLabel(int l);            /* "E1M1"                                         */
 int         doom_bossLevel(int l);             /* 1 = a level with a boss                        */
 int         doom_levelBossMt(void);            /* this level's boss type, -1 = none               */
+int         doom_bossCount(int l);             /* the bosses level l holds                        */
+const char *doom_bossName(int l);              /* what they are, "" = none                        */
 /* DOOM_WEAPON.C: what doom_aimSlope aimed at (a monster, or a player not on our side) */
 extern Sprite *doomAimed;
 

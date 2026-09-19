@@ -35,7 +35,8 @@ int mpAllies(int a,int b)
     {case MP_COOP:     return 1;
      case MP_TEAM:     return mpTeam[a]==mpTeam[b];
      case MP_MONSTERS: return mpRole[a]==mpRole[b];
-     default:          return 0;           /* deathmatch and boss: every player for themself */
+     case MP_BOSS:     return mpRole[a] && mpRole[b];   /* the bosses stand together */
+     default:          return 0;           /* deathmatch, the boss battle's marines: every player for themself */
     }
 }
 
@@ -113,28 +114,74 @@ void mpLevelReset(void)
 /* --- the title's game screens ------------------------------------------------------------
    NEW GAME (co-op rules, 1 to 4 players) and MULTIPLAYER (every mode, 2 to 4).  Their own loop
    rather than a dialog: dlg_run answers only a press, and every line here is a value the d-pad
-   turns.  bigFont (2), like the title's buttons: capitals, digits, spaces and '-' only. */
-enum {MR_MODE,MR_SKILL,MR_PLAYERS,MR_MAP,MR_FRAGS,MR_TIME,MR_P1,MR_START=MR_P1+MPMAX,MR_BACK,MR_NM};
+   turns -- but MR_BOSS, which only says what the boss battle's map holds.  bigFont (2), like the
+   title's buttons: capitals, digits, spaces and '-' only. */
+enum {MR_MAP,MR_BOSS,MR_MODE,MR_SKILL,MR_PLAYERS,MR_FRAGS,MR_TIME,MR_P1,MR_START=MR_P1+MPMAX,MR_BACK,MR_NM};
 static const char *const mpModeName[MP_NMMODES]=
    {"COOPERATIVE","DEATHMATCH","TEAM DEATHMATCH",CFG_MP_MONSTERS_NAME,"BOSS BATTLE"};
 static const unsigned char mpFragChoice[5]={0,10,20,30,50};
 static const unsigned char mpTimeChoice[5]={0,5,10,15,20};
 /* what the screen shows, kept from one visit to the next: players 2 and 4 start on the other
-   side -- the red team, the monsters */
+   side -- the red team, the monsters, the bosses */
 static unsigned char mpMenuTeam[MPMAX]={0,1,0,1};
 static unsigned char mpMenuRole[MPMAX]={0,1,0,1};
+static unsigned char mpMenuBoss[MPMAX]={0,1,0,1};
 int mpSkill=CFG_MP_SKILLDEFAULT;
 
 static int mpRowShown(int r,int players,int multi)
 {if (!multi)
     return r==MR_SKILL || r==MR_PLAYERS || r==MR_START || r==MR_BACK;
+ if (r==MR_BOSS)
+    return mpMode==MP_BOSS;
  if (r==MR_SKILL)
     return mpMode==MP_COOP || mpMode==MP_MONSTERS;   /* the modes with monsters */
  if (r==MR_FRAGS || r==MR_TIME)
     return mpCompetitive();
  if (r>=MR_P1 && r<MR_P1+MPMAX)
-    return (mpMode==MP_TEAM || mpMode==MP_MONSTERS) && r-MR_P1<players;
+    return (mpMode==MP_TEAM || mpMode==MP_MONSTERS || mpMode==MP_BOSS) && r-MR_P1<players;
  return 1;
+}
+
+/* BOSS BATTLE: as many bosses as the map holds, and one marine at least */
+static int mpBossCap(int players,int level)
+{int n=CFG_MP_BOSSCOUNT(level);
+ if (n<1)
+    n=1;
+ return (n<players)? n: players-1;
+}
+
+/* player k is a boss: marked, and among the first mpBossCap marked (the map, or the player
+   count, may have changed since the marks were set) */
+static int mpIsBoss(int k,int players,int level)
+{int j,n=0;
+ if (!mpMenuBoss[k] || k>=players)
+    return 0;
+ for (j=0;j<k;j++)
+    n+=mpMenuBoss[j];
+ return n<mpBossCap(players,level);
+}
+
+/* the d-pad on player k's line: a marine takes a boss -- from the first other boss when all
+   the map's are taken; a boss gives it up, unless it is the last one */
+static void mpToggleBoss(int k,int players,int level)
+{unsigned char boss[MPMAX];
+ int j,n=0;
+ for (j=0;j<MPMAX;j++)
+    n+=(boss[j]=(unsigned char)mpIsBoss(j,players,level));
+ if (boss[k])
+    {if (n>1)
+	mpMenuBoss[k]=0;
+     return;
+    }
+ for (j=0;j<players;j++)
+    mpMenuBoss[j]=boss[j];
+ if (n>=mpBossCap(players,level))
+    for (j=0;j<players;j++)
+       if (mpMenuBoss[j])
+	  {mpMenuBoss[j]=0;
+	   break;
+	  }
+ mpMenuBoss[k]=1;
 }
 
 static int mpCycle(int v,int n,int d)
@@ -167,6 +214,10 @@ static void mpMenuLine(int r,int players,int level,char *text)
      case MR_SKILL:   sprintf(text,"SKILL  %s",CFG_MP_SKILLNAME(mpSkill)); break;
      case MR_PLAYERS: sprintf(text,"PLAYERS  %d",players); break;
      case MR_MAP:     sprintf(text,"MAP  %s",CFG_MP_LEVELLABEL(level)); break;
+     case MR_BOSS:
+	k=CFG_MP_BOSSCOUNT(level);
+	sprintf(text,(k>1)? "BOSS  %s X%d": "BOSS  %s",CFG_MP_BOSSNAME(level),k);
+	break;
      case MR_FRAGS:
 	if (mpFragLimit)
 	   sprintf(text,"FRAG LIMIT  %d",mpFragLimit);
@@ -185,6 +236,8 @@ static void mpMenuLine(int r,int players,int level,char *text)
 	k=r-MR_P1;
 	if (mpMode==MP_TEAM)
 	   sprintf(text,"PLAYER %d  %s TEAM",k+1,mpMenuTeam[k]? "RED": "GREEN");
+	else if (mpMode==MP_BOSS)
+	   sprintf(text,"PLAYER %d  %s",k+1,mpIsBoss(k,players,level)? "BOSS": "MARINE");
 	else
 	   sprintf(text,"PLAYER %d  %s",k+1,mpMenuRole[k]? CFG_MP_MONSTER_ROLE: "MARINE");
 	break;
@@ -196,7 +249,7 @@ static void mpMenuLine(int r,int players,int level,char *text)
 static int mpGameMenu(int multi)
 {static Fixed32 wave;
  const char *title=multi? "MULTIPLAYER": "NEW GAME";
- int lo=multi? 2: 1,players,level,row,data,last,edge,r,d,y,k,color;
+ int lo=multi? 2: 1,players,level,row,data,last,edge,r,d,y,k,color,shown,pitch;
  char text[40];
  if (!multi)
     mpMode=MP_COOP;
@@ -204,7 +257,7 @@ static int mpGameMenu(int multi)
  if (players>MPMAX)
     players=MPMAX;
  level=multi? mpStartLevel: 0;
- row=multi? MR_MODE: MR_SKILL;
+ row=multi? MR_MAP: MR_SKILL;
  fadeEnd=-150;                  /* the title picture dims behind the lines, as for a submenu */
  fadeDir=-5;
  SCL_SetFrameInterval(0xfffe);
@@ -220,6 +273,9 @@ static int mpGameMenu(int multi)
      wave+=F(8);
      if (wave>F(180))
 	wave-=F(360);
+     for (r=0,shown=0;r<MR_NM;r++)
+	shown+=mpRowShown(r,players,multi);
+     pitch=(shown>11)? 16: 18;  /* the boss battle, 4 players: 12 lines */
      for (r=0,y=multi? -84: -40;r<MR_NM;r++)
 	{if (!mpRowShown(r,players,multi))
 	    continue;
@@ -231,7 +287,7 @@ static int mpGameMenu(int multi)
 			    greyTable[16+color],greyTable[16-color],(unsigned char *)text);
 	 else
 	    drawString(-getStringWidth(2,(unsigned char *)text)/2,y,2,(unsigned char *)text);
-	 y+=18;
+	 y+=pitch;
 	}
      SPR_WaitDrawEnd();
      EZ_closeCommand();
@@ -246,7 +302,7 @@ static int mpGameMenu(int multi)
 	{int step=(edge & PER_DGT_U)? -1: 1;
 	 do
 	    row=mpCycle(row,MR_NM,step);
-	 while (!mpRowShown(row,players,multi));
+	 while (!mpRowShown(row,players,multi) || row==MR_BOSS);
 	 playSound(0,0);
 	}
      if (edge & PER_DGT_L)
@@ -277,6 +333,8 @@ static int mpGameMenu(int multi)
 	    k=row-MR_P1;
 	    if (mpMode==MP_TEAM)
 	       mpMenuTeam[k]^=1;
+	    else if (mpMode==MP_BOSS)
+	       mpToggleBoss(k,players,level);
 	    else
 	       mpMenuRole[k]^=1;
 	    break;
@@ -287,7 +345,8 @@ static int mpGameMenu(int multi)
     keeps at least one normal player -- the monsters need someone to hunt */
  for (k=0;k<MPMAX;k++)
     {mpTeam[k]=(mpMode==MP_TEAM && k<players)? mpMenuTeam[k]: 0;
-     mpRole[k]=(mpMode==MP_MONSTERS && k<players)? mpMenuRole[k]: 0;
+     mpRole[k]=(mpMode==MP_MONSTERS && k<players)? mpMenuRole[k]:
+	       (mpMode==MP_BOSS)? (unsigned char)mpIsBoss(k,players,level): 0;
     }
  for (k=0;k<players && mpRole[k];k++)
     ;
