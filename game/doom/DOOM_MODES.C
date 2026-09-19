@@ -120,14 +120,13 @@ static void doomBecome(int mt,int health)
  doomPlayer.pendingWeapon=DOOM_WP_NOCHANGE;
 }
 
-/* DEMONS: the loaded player takes over one of the level's monsters, of a kind it can wear -- the
-   nearest at full health, or else the one with the most health left (the nearest of those).
-   Never the level's boss (its death opens the way out), never one standing on a floor that hurts
-   (E1M8's last room, which also ends the level), never `skip` (the one just left).  1 = done. */
-static int doomTakeOver(DoomActor *skip)
+/* DEMONS: the monster the loaded player would take over -- the nearest at full health, or else
+   the one with the most health left (the nearest of those).  Never the level's boss (its death
+   opens the way out), never one standing on a floor that hurts (E1M8's last room, which also ends
+   the level), never `skip` (the one just left).  NULL = the level has none left. */
+static DoomActor *doomPickMonster(DoomActor *skip)
 {Object *o;
  DoomActor *a,*pick=NULL;
- MthXyz pos;
  Fixed32 d,bestD=0;
  int l,full,bestFull=-1,bestHp=0;
  for (l=0;l<2;l++)
@@ -149,6 +148,13 @@ static int doomTakeOver(DoomActor *skip)
 	bestHp=a->health;
 	bestD=d;
        }
+ return pick;
+}
+
+/* Takes it over: the camera moves to where it stood and the monster goes.  1 = done. */
+static int doomTakeOver(DoomActor *skip)
+{DoomActor *pick=doomPickMonster(skip);
+ MthXyz pos;
  if (!pick)
     return 0;
  doomBecome(pick->mt,pick->health);
@@ -332,6 +338,16 @@ void doom_mpLevelStart(void)
 /* SRUINS.C mpRespawn (CFG_MP_RESPAWNED), player k loaded, the marine's kit given: a demon takes
    another monster (none left: it stays down, and fire asks again); a fallen boss comes back as
    a marine -- its crown goes to its killer */
+/* CFG_MP_RESPAWN_HOLD (SRUINS.C mpRespawn), BEFORE the player is moved: 1 = leave it where it
+   fell.  A demon with no monster left to take over stays dead on the corpse -- respawning it
+   would stand its body at a spawn spot with nothing to wear. */
+int doom_mpRespawnHold(int k)
+{if (mpMode!=MP_MONSTERS || !mpRole[k] || doomPickMonster(NULL))
+    return 0;
+ doom_setMessage("NO MONSTER LEFT TO TAKE OVER");
+ return 1;
+}
+
 void doom_mpRespawned(int k)
 {doomBecome(0,0);
  if (mpMode==MP_MONSTERS && mpRole[k] && !doomTakeOver(NULL))

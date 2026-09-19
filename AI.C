@@ -43,15 +43,32 @@ void player_func(Object *o,int message,int param1,int param2)
 }
 
 unsigned short playerSeqList[]={-1};
+/* GCC14: NULL when the level's objects filled the pool, or its sprites did -- the caller decides
+   what to do without a body (SRUINS.C mpBuild drops that player).  A refused player still reads
+   its params: the stream is positional (OBJECT.C objectPPos). */
 PlayerObject *constructPlayer(int sector,int suckParams)
 {PlayerObject *this=(PlayerObject *)getFreeObject(player_func,OT_PLAYER,
 						  CLASS_MONSTER);
+ Sprite *s;
  assert(sizeof(*this)<sizeof(Object));
+ if (!this)
+    {if (suckParams)
+	suckSpriteParams(NULL);            /* its 4 remaining params: the caller took the sector */
+     return NULL;
+    }
  moveObject((Object *)this,objectIdleList);
  dPrint("player in sector %d\n",sector);
- this->sprite=newSprite(sector,PLAYER_RADIUS,0.90*65536.0,GRAVITY,
-			-1,SPRITEFLAG_BSHORT,
-			(Object *)this); CFG_PLAYER_INIT(this->sprite);
+ s=newSprite(sector,PLAYER_RADIUS,0.90*65536.0,GRAVITY,
+		     -1,SPRITEFLAG_BSHORT,
+		     (Object *)this);
+ if (!s)
+    {this->type=OT_DEAD;                    /* give the object back: the level has no sprite left */
+     moveObject((Object *)this,objectFreeList);
+     if (suckParams)
+	suckSpriteParams(NULL);            /* its 4 remaining params: the caller took the sector */
+     return NULL;
+    }
+ this->sprite=s; CFG_PLAYER_INIT(this->sprite);
  if (suckParams)
     {suckSpriteParams(this->sprite);
      this->sprite->angle=normalizeAngle(this->sprite->angle-F(90));

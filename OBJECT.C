@@ -6,9 +6,22 @@
 #include "sruins.h"
 #include "sound.h"
 
-#define MAXOBJECTS 350
-
 Object objects[MAXOBJECTS];
+
+/* GCC14: what the pool could not give.  A level that asks for more objects than MAXOBJECTS used
+   to be a silent memory fault: getFreeObject returned NULL, and moveObject read o->prev from
+   address 8 -- the boot ROM -- and stored through what it read, anywhere in memory.  Refused and
+   counted now; the overlay shows obj: and lost: (SRUINS.C). */
+int objectsRefused;
+
+/* the pool's free entries; walked, so only for the overlay */
+int objectsFree(void)
+{Object *o;
+ int n=0;
+ for (o=objectFreeList->next;o;o=o->next)
+    n++;
+ return n;
+}
 
 Object *objectRunList; /* these lists have head nodes */
 Object *objectIdleList;
@@ -18,14 +31,17 @@ Object *objectFreeList;
 static struct {Object *o,*toList;} objMove[MAXNMMOVES];
 static int nmMoves;
 void delay_moveObject(Object *o,Object *toList)
-{assert(nmMoves<MAXNMMOVES);
+{if (!o)                        /* GCC14: a refused object (getFreeObject) reaches no list */
+    return;
+ assert(nmMoves<MAXNMMOVES);
  objMove[nmMoves].o=o;
  objMove[nmMoves].toList=toList;
  nmMoves++;
 }
 
 void moveObject(Object *o,Object *toList)
-{assert(o);
+{if (!o)                        /* GCC14: NEVER dereference a refused object -- o->prev would be
+    return;                        read from the boot ROM and stored through */
  assert(o!=objectRunList);
  assert(o!=objectIdleList);
  assert(o!=objectFreeList);
@@ -79,7 +95,9 @@ void initObjects(void)
 
 Object *getFreeObject(messHandler handler,int type,int class)
 {if (!objectFreeList->next)
-    return NULL;
+    {objectsRefused++;          /* GCC14: the level wants more than MAXOBJECTS (overlay lost:) */
+     return NULL;
+    }
  assert(objectFreeList->next);
  /* assert(objectFreeList->next->type==OT_DEAD); */
  objectFreeList->next->type=type;

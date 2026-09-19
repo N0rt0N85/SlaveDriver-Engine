@@ -110,10 +110,26 @@ void doom_psprTic(void)
 /* CFG_RUN_WEAPON (SRUINS.C:2207): the engine's runWeapon replaced by the draw of the pinned
    entry, once per rendered frame (runWeapon called it once per elapsed 60 Hz frame to clock the
    PowerSlave sequences; ours have one frame per state, clocked by the tic). */
+/* GCC14: the two monsters that carry one show their gun -- the zombie its pistol, the sergeant
+   its shotgun (DOOM_MODES.C doomRoles gives them the same bullets).  A role has no psprite
+   machine (doom_psprTic is the marine's), so the frame is pinned here from its attack counter:
+   the fire frame and its flash while the attack runs, the ready frame otherwise.  No bob --
+   pspSx/pspSy belong to the psprites, which are not being clocked. */
+static const short doomRoleGun[2][2]={{MT_POSSESSED,wp_pistol},{MT_SHOTGUY,wp_shotgun}};
+
 void doom_weaponDraw(int nmFrames)
 {(void)nmFrames;
  if (doomRoleMt[mpCur])
-    return;                             /* GCC14: a monster holds no gun (DOOM_MODES.C) */
+    {int i,wp=-1,st;
+     for (i=0;i<2;i++)
+	if (doomRoleGun[i][0]==doomRoleMt[mpCur])
+	   wp=doomRoleGun[i][1];
+     if (wp<0)
+	return;                         /* the others hold no gun (DOOM_MODES.C) */
+     st=(doomRole.atk>=0)? doomWeaponInfo[wp].atkstate: doomWeaponInfo[wp].readystate;
+     setWeaponSequence(st-1,0,DOOM_PSP_Y0+f(DOOM_WEAPONTOP));
+     addWeaponSequence((doomRole.atk>=0)? doomWeaponInfo[wp].flashstate-1: -1);
+    }
  advanceWeaponSequence(0,0,0);
 }
 

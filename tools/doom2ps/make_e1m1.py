@@ -383,6 +383,32 @@ def resident_pool():
     return 1024 * 1024 + 0x06100000 - end, "%s (_end = 0x%08x)" % (rel, end)
 
 
+# Les deux reserves du moteur, a garder egales a OBJECT.H MAXOBJECTS - 3 (trois tetes de liste)
+# et SPRITE.H MAXNMSPRITES. MARGE_OBJETS : ce que la partie doit pouvoir creer en plus de ce que
+# le niveau pose (tirs, impacts, sang, brouillard de teleporteur, corps des joueurs 2-4).
+MAX_OBJETS = 544 - 3
+MAX_SPRITES = 480
+MARGE_OBJETS = 40
+
+# Types qui ne prennent RIEN au moteur (DOOM_GAME.C game_placeObject : ils remplissent une table)
+OT_SANS_OBJET = (178, 179, 180)
+
+
+def objets_du_moteur(objects):
+    """(objets, sprites) que le moteur construira pour cette liste d'objets .LEV.
+    Un mobj (type < 168, hors specials) prend un objet ET un sprite ; un special ou un
+    interrupteur prend un objet seul."""
+    n_obj = n_spr = 0
+    for o in objects:
+        t = o["type"]
+        if t in OT_SANS_OBJET:
+            continue
+        n_obj += 1
+        if t < 168:                     # joueur et mobjs : ils ont un corps
+            n_spr += 1
+    return n_obj, n_spr
+
+
 def pool_ou_arret():
     """resident_pool, ou la conversion s'arrete en disant quoi construire."""
     pool, src = resident_pool()
@@ -527,6 +553,24 @@ def main(argv=None):
         log("    NOTE : %s x%d" % (k, v))
     if sp.expected_param_bytes(objects) != len(params):
         fails.append("params : %d attendus vs %d" % (sp.expected_param_bytes(objects), len(params)))
+
+    # Budget des deux reserves du moteur (OBJECT.H MAXOBJECTS, SPRITE.H MAXNMSPRITES). Chaque chose
+    # placee prend UN objet ; un mobj prend en plus UN sprite. Les specials qui n'allouent rien :
+    # OT_DOOM_LIGHT (jamais emis), OT_DOOM_DAMAGE et OT_DOOM_SECRETWALL (tables). Il faut garder de
+    # la place pour ce que la partie cree ensuite : balles, impacts, sang, brouillard, et le corps
+    # des joueurs 2-4 en ecran partage (SRUINS.C mpBuild). MESURE 2026-09-19 : E1M3 en demandait
+    # 437 pour 347 -- au-dela, getFreeObject rendait NULL et moveObject ecrivait a travers, ce qui
+    # ecrasait la memoire au hasard (crash console a l'arrivee sur E1M3 en cooperatif).
+    n_obj, n_spr = objets_du_moteur(objects)
+    log("  reserves du moteur : %d objets sur %d (marge %d), %d sprites sur %d (marge %d) -- "
+        "il en reste pour la partie : tirs, sang, brouillard, corps des joueurs 2-4"
+        % (n_obj, MAX_OBJETS, MAX_OBJETS - n_obj, n_spr, MAX_SPRITES, MAX_SPRITES - n_spr))
+    if n_obj > MAX_OBJETS - MARGE_OBJETS:
+        fails.append("objets : %d places, reserve %d (marge de jeu visee %d)"
+                     % (n_obj, MAX_OBJETS, MARGE_OBJETS))
+    if n_spr > MAX_SPRITES - MARGE_OBJETS:
+        fails.append("sprites : %d places, reserve %d (marge de jeu visee %d)"
+                     % (n_spr, MAX_SPRITES, MARGE_OBJETS))
 
     log("== 5. assemblage -> %s" % os.path.relpath(lev_path, ROOT))
     switches = (G.get("mobile") or {}).get("switches") or []

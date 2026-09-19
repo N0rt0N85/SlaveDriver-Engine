@@ -61,6 +61,9 @@ struct __sprite
 extern Sprite sprites[];
 
 void freeSprite(Sprite *o);
+#define MAXNMSPRITES 480        /* GCC14: the pool, in SPRITE.H so the overlay can show it */
+extern int spritesRefused;      /* GCC14: sprites refused, and sector indexes out of range */
+int spritesFree(void);          /* GCC14: entries left in the pool -- for the overlay only */
 void moveSprites(void);
 void initSpriteSystem(void);
 Sprite *newSprite(int sector,Fixed32 radius,Fixed32 friction,Fixed32 gravity,
@@ -318,6 +321,7 @@ extern unsigned char doomSectorDamage[];
 #define CFG_MP_SPOTSAFE(s)     (!doomSectorDamage[s])            /* no spawn on nukage or E1M8's last room */
 #define CFG_MP_LEVELSTART()    doom_mpLevelStart()               /* SRUINS.C runLevel, after mpLevelBuild */
 #define CFG_MP_RESPAWNED(k)    doom_mpRespawned(k)               /* SRUINS.C mpRespawn, player k loaded */
+#define CFG_MP_RESPAWN_HOLD(k) doom_mpRespawnHold(k)             /* SRUINS.C mpRespawn: 1 = do not move it */
 #define CFG_MP_JOINED(k)       doom_mpJoined(k)                  /* SRUINS.C mpPollStart: player k came in */
 #define CFG_LEVEL_END(a)       doom_levelEnd(a)                  /* SRUINS.C runLevel, before an exit returns */
 #define CFG_LEVEL_END_SHOWN(a) ((a)>=200 || (a)==2)              /* ... a level's exit, or the episode's end */
@@ -371,6 +375,7 @@ extern unsigned char doomSectorDamage[];
 #define CFG_MP_SPOTSAFE(s)     1
 #define CFG_MP_LEVELSTART()
 #define CFG_MP_RESPAWNED(k)
+#define CFG_MP_RESPAWN_HOLD(k) 0
 #define CFG_MP_JOINED(k)
 #define CFG_LEVEL_END(a)
 #define CFG_LEVEL_END_SHOWN(a) 0

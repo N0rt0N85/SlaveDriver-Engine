@@ -246,6 +246,7 @@ void        doom_modesLevelReset(void);        /* a level's placement begins    
 int         doom_levelOpenChannel(int i);      /* BOSS BATTLE: the channels that open the arena, -1 = end */
 void        doom_mpLevelStart(void);
 void        doom_mpRespawned(int k);
+int         doom_mpRespawnHold(int k);         /* CFG_MP_RESPAWN_HOLD: 1 = stays where it fell */
 void        doom_mpJoined(int k);
 void        doom_levelEnd(int action);
 /* DOOM_GAME.C, for the modes */

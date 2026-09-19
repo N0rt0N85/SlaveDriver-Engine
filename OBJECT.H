@@ -99,6 +99,9 @@ typedef struct __monster
 extern Object *objectRunList; /* these lists have head nodes */
 extern Object *objectIdleList;
 extern Object *objectFreeList;
+#define MAXOBJECTS 544          /* GCC14: the pool, in OBJECT.H so the overlay can show it */
+extern int objectsRefused;      /* GCC14: objects the pool could not give (overlay lost:) */
+int objectsFree(void);          /* GCC14: entries left in it -- walked, for the overlay only */
 
 void initObjects(void);
 

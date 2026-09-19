@@ -10,12 +10,24 @@
 #include "ai.h"
 #include "mplayer.h"
 
-#define MAXNMSPRITES 450
 extern Sprite *camera;
 
 Sprite sprites[MAXNMSPRITES];
 
+/* GCC14: sprites the pool could not give, plus every sector index refused below.  Kept in NDEBUG:
+   sectorSpriteList[sector] with a sector out of range is a write tens of kilobytes past the
+   array, and the asserts that used to catch it are compiled out of the disc builds. */
+int spritesRefused;
+
 Sprite *freeList;
+
+int spritesFree(void)
+{Sprite *o;
+ int n=0;
+ for (o=freeList;o;o=o->next)
+    n++;
+ return n;
+}
 
 Sprite *sectorSpriteList[MAXNMSECTORS];
 
@@ -72,8 +84,14 @@ Sprite *newSprite(int sector,Fixed32 radius,Fixed32 friction,Fixed32 gravity,
  /* assert(freeList); */
  assert(sector>=0);
  assert(sector<level_nmSectors);
+ if (sector<0 || sector>=level_nmSectors)
+    {spritesRefused++;          /* GCC14: kept in NDEBUG, see spritesRefused */
+     return NULL;
+    }
  if (!freeList)
-    return NULL;
+    {spritesRefused++;
+     return NULL;
+    }
  o=freeList;
  freeList=freeList->next;
  o->vel.x=0; o->vel.y=0; o->vel.z=0;
@@ -936,6 +954,10 @@ int moveSprite(Sprite *sprite)
 void moveSpriteTo(Sprite *o,int newSector,MthXyz *newPos)
 {Sprite *t,*prev;
  assert(o);
+ if (!o || newSector<0 || newSector>=level_nmSectors)
+    {spritesRefused++;          /* GCC14: kept in NDEBUG, see spritesRefused */
+     return;
+    }
  prev=NULL;
  if (o->s!=newSector)
     {/* remove o from current sector list */

@@ -2004,6 +2004,13 @@ static void mpBuild(int k)
  if (!mpBuilt[k])
     CFG_MP_NEWPLAYER();         /* nothing to carry: the game's init gives the starting kit */
  player=constructPlayer(mpBody[0]->s,0);
+ /* GCC14: no body -- the level's own objects filled the pool (OBJECT.C objectsRefused).  This
+    player is not in the level, and mpLevelBuild stops there rather than draw a view with
+    nothing behind it. */
+ if (!player)
+    {mpSwitch(prev);
+     return;
+    }
  camera=player->sprite;
  mpBody[k]=camera;
  mpObj[k]=(Object *)player;
@@ -2034,8 +2041,15 @@ static void mpLevelBuild(void)
  mpSpawnAngle[0]=playerAngle;
  for (k=1;k<MPMAX;k++)
     mpInLevel[k]=0;
+ /* GCC14: a player the level had no room for ends the count -- fewer players is better than a
+    view with no body behind it */
  for (k=1;k<mpPlayers;k++)
-    mpBuild(k);
+    {mpBuild(k);
+     if (!mpInLevel[k])
+	{mpPlayers=k;
+	 break;
+	}
+    }
  mpSetBanks();                  /* loadPalletes and initPlax just rebuilt banks 1..7 */
  mpSkyPlayers(mpPlayers);       /* split screen's sky (MPSKY.C), from the sky initPlax loaded */
  wallsSplitReset();             /* the level's low RAM was reset with it */
@@ -2053,7 +2067,13 @@ static void mpNewGame(void)
 
 /* A dead player back at its spawn point with the starting kit (Doom co-op: G_DoReborn). */
 static void mpRespawn(int k)
-{removeLight(camera);           /* died firing: doom_playerInit zeroes muzzleTics, not the light */
+{/* GCC14: the game can keep this one where it fell -- a demon with no monster left to take over
+    stays dead on the corpse, instead of standing its body at a spawn spot.  Fire asks again. */
+ if (CFG_MP_RESPAWN_HOLD(k))
+    {mvRespawn=0;
+     return;
+    }
+ removeLight(camera);           /* died firing: doom_playerInit zeroes muzzleTics, not the light */
  playerAngle=mpSpawnAngle[k];
  if (!mpPlaceFar(camera,k))     /* GCC14: a fighting game respawns away from the others */
     {moveSpriteTo(camera,mpSpawnSector[k],&mpSpawnPos[k]);
@@ -2107,6 +2127,12 @@ static void mpPollStart(void)
 	 mpRole[j]=0;                   /* a newcomer is the normal player -- unless the game says */
 	 mpPlayers++;
 	 mpBuild(j);
+	 if (!mpInLevel[j])             /* GCC14: the level had no object left for it (mpBuild) */
+	    {mpPlayers--;
+	     changeMessage("NO ROOM IN THIS LEVEL");
+	     held[j]=(char)down;
+	     continue;
+	    }
 	 CFG_MP_JOINED(j);              /* GCC14: its role (a boss, when two marines are in already) */
 	 wallsSplitAlloc();
 	 mpArmed=mpPlayers;
@@ -2772,6 +2798,17 @@ int runLevel(char *filename,int levelNm)
 			 -1 = nothing was in flight, the master traversed (earthquake,
 			 or WALLPIPE at 0). */
      drawStringf(-158,-70,1,"polys:%d/%d pipe:%d",nmPolys+nmSlavePolys,nmSlavePolys,pipeSpin);
+
+     /* LEGEND  obj : objects of the pool in use / its size (OBJECT.C MAXOBJECTS).  Everything
+	       the level places takes one, and so does every shot, puff and drop of blood.
+	 spr : the same for the sprite pool (SPRITE.C MAXNMSPRITES).
+	 lost: objects then sprites the pools REFUSED since the level started.  Anything
+	       but 0 means the level is bigger than the engine holds: things are
+	       missing, and before the refusal was counted it corrupted memory. */
+     drawStringf(-158,-80,1,"obj:%d/%d spr:%d/%d lost:%d/%d",
+		 MAXOBJECTS-3-objectsFree(),MAXOBJECTS-3,
+		 MAXNMSPRITES-spritesFree(),MAXNMSPRITES,
+		 objectsRefused,spritesRefused);
 
      drawStringf(-158,-50,1,"time:%d %d:%d",(lastCalc+lastLastCalc)>>1,lastDraw,
 		 lastCalc+lastDraw);
