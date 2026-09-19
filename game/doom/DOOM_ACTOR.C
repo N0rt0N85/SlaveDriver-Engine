@@ -457,6 +457,8 @@ static void doomKill(DoomActor *this,Object *source)
  if (this->tics<1)
     this->tics=1;
 
+ doom_hordeKilled(this);                        /* HORDE: its own drop, before Doom's own */
+
  switch (this->mt)
     {case MT_WOLFSS:
      case MT_POSSESSED:

@@ -1038,8 +1038,10 @@ static void doomExitLevel(int secret)
 {int lNm=currentState.currentLevel;
  int next;
  assert(lNm>=0 && lNm<DOOM_NMLEVELS);
- if (mpCompetitive())
-    {doom_endRound();                           /* GCC14: a fighting game's exit is the round's */
+ if (mpCompetitive() || mpMode==MP_HORDE)
+    {/* GCC14: a fighting game's exit is the round's -- and the horde's exit switch is the way
+       out of a run that is going badly, not a way to leave the mode behind. */
+     doom_endRound();
      return;
     }
  if (doomExiting)
@@ -1137,7 +1139,8 @@ void doom_endRound(void)
  if (doomExiting)
     return;
  doomExiting=1;
- next=(mpMode==MP_BOSS)? lNm: doomLevelNext[lNm];
+ /* the boss battle and the horde are played on ONE map: the round ends where it began */
+ next=(mpMode==MP_BOSS || mpMode==MP_HORDE)? lNm: doomLevelNext[lNm];
  if (next<0)
     next=0;
  playerHitTeleport(next);

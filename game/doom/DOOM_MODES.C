@@ -74,6 +74,7 @@ static int doomNmBossSpots;
 
 void doom_modesLevelReset(void)
 {doomNmBossSpots=0;
+ doom_hordeLevelReset();                /* HORDE: the families of the LAST level are not this one's */
 }
 
 /* Doom's menu, without the characters bigFont lacks (' , !) -- and without NIGHTMARE */
@@ -333,6 +334,7 @@ void doom_mpLevelStart(void)
      doomTellMarines(msg);
     }
  mpSwitch(prev);
+ doom_hordeLevelStart();
 }
 
 /* SRUINS.C mpRespawn (CFG_MP_RESPAWNED), player k loaded, the marine's kit given: a demon takes
@@ -342,7 +344,9 @@ void doom_mpLevelStart(void)
    fell.  A demon with no monster left to take over stays dead on the corpse -- respawning it
    would stand its body at a spawn spot with nothing to wear. */
 int doom_mpRespawnHold(int k)
-{if (mpMode!=MP_MONSTERS || !mpRole[k] || doomPickMonster(NULL))
+{if (mpMode==MP_HORDE)
+    return 1;                           /* survival: one life a player, and no way back */
+ if (mpMode!=MP_MONSTERS || !mpRole[k] || doomPickMonster(NULL))
     return 0;
  doom_setMessage("NO MONSTER LEFT TO TAKE OVER");
  return 1;
@@ -393,13 +397,18 @@ int doom_modePlace(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
      doomBossSpot[doomNmBossSpots].yaw=(short)(normalizeAngle(angle-F(90))>>16);
      doomNmBossSpots++;
     }
- if (mpCompetitive())
+ if (mpCompetitive() || mpMode==MP_HORDE)
     {if ((flags & MF_COUNTKILL) || mt==MT_SKULL)
 	{mpSpotAdd(sector,pos,angle-F(90));
+	 /* HORDE: the place a monster would have stood is where a wave is born, and the family
+	    is one this level's sprites can show (DOOM_HORDE.C) */
+	 doom_hordeSaw(mt);
 	 return 1;
 	}
-     if (flags & MF_NOTDMATCH)
-	return 1;
+     if (mpMode==MP_HORDE)
+	doom_hordeSaw(mt);              /* ... and so is every pickup, for the drop table */
+     else if (flags & MF_NOTDMATCH)
+	return 1;                       /* HORDE keeps the keys: the level is still played */
     }
  if (flags & MF_COUNTKILL)
     mpTotal[0]++;
@@ -612,6 +621,7 @@ static void doomCrown(int v)
 /* 35 Hz, once (doom_playerTic of player 1): the round's limits, the crowns */
 void doom_modesTic(void)
 {int k;
+ doom_hordeTic();                       /* HORDE runs with one player too: before the guard */
  if (mpPlayers<2 || doom_exiting())
     return;
  if (mpCompetitive() &&
@@ -632,6 +642,9 @@ void doom_levelEnd(int action)
 {char title[24];
  if (action<200 && action!=2)
     return;
- sprintf(title,"%s FINISHED",doom_levelLabel(currentState.currentLevel));
+ if (mpMode==MP_HORDE)
+    sprintf(title,"%d WAVES SURVIVED",doom_hordeWave());
+ else
+    sprintf(title,"%s FINISHED",doom_levelLabel(currentState.currentLevel));
  mpIntermission(title,doomLevelTime/35,0);
 }

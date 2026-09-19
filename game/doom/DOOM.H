@@ -252,6 +252,13 @@ int         doom_chainAt(int st,int t);        /* the state t tics into the chai
 void        doom_shootLine(Fixed32 hx,Fixed32 hz);  /* P_ShootSpecialLine: a line a bullet opens */
 void        doom_mpJoined(int k);
 void        doom_levelEnd(int action);
+/* DOOM_HORDE.C -- MP_HORDE, the survival mode */
+void        doom_hordeLevelReset(void);        /* a level's placement begins: forget the families */
+void        doom_hordeSaw(int mt);             /* ... this level ships that family               */
+void        doom_hordeLevelStart(void);        /* every player built: the first wave is on       */
+void        doom_hordeTic(void);               /* 35 Hz, once: the waves                         */
+void        doom_hordeKilled(DoomActor *this); /* doomKill: what the corpse leaves behind        */
+int         doom_hordeWave(void);              /* the wave reached -- the mode's score           */
 /* DOOM_GAME.C, for the modes */
 int         doom_exiting(void);                /* the level is over                              */
 void        doom_endRound(void);               /* a fighting game's limit: the next round        */

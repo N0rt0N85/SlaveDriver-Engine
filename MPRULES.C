@@ -36,6 +36,7 @@ int mpAllies(int a,int b)
      case MP_TEAM:     return mpTeam[a]==mpTeam[b];
      case MP_MONSTERS: return mpRole[a]==mpRole[b];
      case MP_BOSS:     return mpRole[a] && mpRole[b];   /* the bosses stand together */
+     case MP_HORDE:    return 1;           /* survival: the marines are all on the same side */
      default:          return 0;           /* deathmatch, the boss battle's marines: every player for themself */
     }
 }
@@ -59,15 +60,25 @@ void mpScoreDeath(int victim,int killer)
 
 #define MPMAXSPOTS 32
 static struct {MthXyz feet; short sector,yaw;} mpSpot[MPMAXSPOTS];
-static int mpNmSpots;
+static int mpNmSpots,mpSpotsSeen;
 
+/* GCC14: once the buffer is full, keep a UNIFORM sample of the level's spots instead of the
+   first 32.  A WAD's things are in the order the author drew them, so the first 32 sit in one
+   quarter of the map -- fine for a deathmatch respawn, wrong for the horde, whose waves would
+   all be born in that quarter.  Reservoir: the k-th spot takes a seat with probability 32/k. */
 void mpSpotAdd(int sector,MthXyz *feet,int yaw)
-{if (mpNmSpots>=MPMAXSPOTS)
-    return;
- mpSpot[mpNmSpots].feet=*feet;
- mpSpot[mpNmSpots].sector=(short)sector;
- mpSpot[mpNmSpots].yaw=(short)(normalizeAngle(yaw)>>16);
- mpNmSpots++;
+{int i;
+ mpSpotsSeen++;
+ if (mpNmSpots<MPMAXSPOTS)
+    i=mpNmSpots++;
+ else
+    {i=getNextRand()%mpSpotsSeen;
+     if (i>=MPMAXSPOTS)
+	return;
+    }
+ mpSpot[i].feet=*feet;
+ mpSpot[i].sector=(short)sector;
+ mpSpot[i].yaw=(short)(normalizeAngle(yaw)>>16);
 }
 
 /* The spot whose nearest other player is the farthest away -- one of those that come within a
@@ -106,7 +117,7 @@ int mpSpotFar(int k,int *sector,MthXyz *feet,int *yaw)
 }
 
 void mpLevelReset(void)
-{mpNmSpots=0;
+{mpNmSpots=mpSpotsSeen=0;
  memset(mpStat,0,sizeof(mpStat));
  memset(mpTotal,0,sizeof(mpTotal));
 }
@@ -119,7 +130,7 @@ void mpLevelReset(void)
    title's buttons: capitals, digits, spaces and '-' only. */
 enum {MR_MODE,MR_MAP,MR_BOSS,MR_SKILL,MR_PLAYERS,MR_FRAGS,MR_TIME,MR_P1,MR_START=MR_P1+MPMAX,MR_BACK,MR_NM};
 static const char *const mpModeName[MP_NMMODES]=
-   {"COOPERATIVE","DEATHMATCH","TEAM DEATHMATCH",CFG_MP_MONSTERS_NAME,"BOSS BATTLE"};
+   {"COOPERATIVE","DEATHMATCH","TEAM DEATHMATCH",CFG_MP_MONSTERS_NAME,"BOSS BATTLE","HORDE"};
 static const unsigned char mpFragChoice[5]={0,10,20,30,50};
 static const unsigned char mpTimeChoice[5]={0,5,10,15,20};
 /* what the screen shows, kept from one visit to the next: players 2 and 4 start on the other
@@ -135,7 +146,7 @@ static int mpRowShown(int r,int players,int multi)
  if (r==MR_BOSS)
     return mpMode==MP_BOSS;
  if (r==MR_SKILL)
-    return mpMode==MP_COOP || mpMode==MP_MONSTERS;   /* the modes with monsters */
+    return mpMode==MP_COOP || mpMode==MP_MONSTERS || mpMode==MP_HORDE;   /* the modes with monsters */
  if (r==MR_FRAGS || r==MR_TIME)
     return mpCompetitive();
  if (r>=MR_P1 && r<MR_P1+MPMAX)
@@ -264,7 +275,12 @@ static int mpGameMenu(int multi)
  SCL_SetFrameInterval(0xfffe);
  data=lastInputSample;
  while (1)
-    {if (mpMode==MP_BOSS && !CFG_MP_BOSSLEVEL(level))
+    {/* HORDE is a survival run, playable alone: the multiplayer screen's floor of two is its
+	alone lifted, and the count follows when the mode changes under it. */
+     lo=(multi && mpMode!=MP_HORDE)? 2: 1;
+     if (players<lo)
+	players=lo;
+     if (mpMode==MP_BOSS && !CFG_MP_BOSSLEVEL(level))
 	level=mpNextLevel(level,1);
      EZ_openCommand();
      EZ_sysClip();

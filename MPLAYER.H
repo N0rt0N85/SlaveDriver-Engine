@@ -59,7 +59,9 @@ extern int mpPadsPresent;               /* pads found at the last poll */
    game: nothing in a level writes them but the boss battle's mpRole.  The engine knows sides,
    spawn spots and the score; what a role IS (a monster the player drives, the boss) belongs to
    the game (CFG_MP_* hooks). */
-enum {MP_COOP,MP_DM,MP_TEAM,MP_MONSTERS,MP_BOSS,MP_NMMODES};
+/* MP_HORDE (game/doom/DOOM_HORDE.C): the survival mode.  Appended, so the values above keep
+   theirs; it is the one mode the multiplayer screen lets a single player start. */
+enum {MP_COOP,MP_DM,MP_TEAM,MP_MONSTERS,MP_BOSS,MP_HORDE,MP_NMMODES};
 extern int mpMode;
 extern unsigned char mpTeam[MPMAX];     /* MP_TEAM: 0 or 1 */
 extern unsigned char mpRole[MPMAX];     /* MP_MONSTERS: 1 = drives a monster, 0 = the normal player;
