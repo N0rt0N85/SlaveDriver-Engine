@@ -914,7 +914,13 @@ void updatePushBlockPositions(void)
 		continue;
 	     for (o=sectorSpriteList[s2];
 		  o;o=o->next)
-		{if (o->floorSector==s2 && o!=camera)
+		{/* GCC14: floorSector is written by the floor search, which an IMMOBILE sprite
+		    never reaches -- collideSprite jumps straight to skipWallCollision, so a
+		    Doom pickup keeps the -1 newSprite gave it and rode nothing.  It does not
+		    move, so the leaf it sits in IS the leaf whose floor holds it: E1M2's
+		    chainsaw on the donut pillar the switch lowers. */
+		 if ((o->floorSector==s2 ||
+		      ((o->flags & SPRITEFLAG_IMMOBILE) && o->s==s2)) && o!=camera)
 		    {o->pos.y+=F(pb->dy);
 		    }
 		}

@@ -305,6 +305,41 @@ def main(argv=None):
     #     `setDoorBlockBits` (AI.C:4294-4309), et le joueur l'ouvre en pressant. On le traverse.
     PLAYER_FLAGS = 0x1100
     STEPHEIGHT = 24
+    #     ML_BLOCKING : Doom bloque la ligne elle-meme, quelle que soit l'ouverture, et doom3d
+    #     le rend par SHORTOPENING (voir la tete de doom3d.py). Une telle frontiere est EXPLIQUEE
+    #     sans marche ni ouverture basse -- mais seulement si le WAD le dit : on relit les lignes,
+    #     on ne desarme pas l'invariant.
+    try:
+        _W = wadmod_of(a)
+        import wad as _wadmod
+        _MB = _wadmod.read_map(_W, a.map)
+    except Exception:
+        _MB = None
+    seg_bloq = []
+    if _MB:
+        for ld in _MB["linedefs"]:
+            if ld.left != -1 and (ld.flags & 0x0001):
+                seg_bloq.append((_MB["vertices"][ld.v1], _MB["vertices"][ld.v2]))
+
+    def sur_ligne_bloquante(w):
+        """Les deux bouts du portail (x, z) posent-ils sur une ligne ML_BLOCKING du WAD ?"""
+        if not seg_bloq:
+            return False
+        pts = [(V[i]["x"], V[i]["z"]) for i in w["v"][:2]]
+        for (ax_, ay_), (bx_, by_) in seg_bloq:
+            dx_, dy_ = bx_ - ax_, by_ - ay_
+            ll = dx_ * dx_ + dy_ * dy_
+            if not ll:
+                continue
+            ok = True
+            for px, py in pts:
+                t = max(0.0, min(1.0, ((px - ax_) * dx_ + (py - ay_) * dy_) / ll))
+                if (px - (ax_ + t * dx_)) ** 2 + (py - (ay_ + t * dy_)) ** 2 > 2.0:
+                    ok = False
+                    break
+            if ok:
+                return True
+        return False
     #     Un sol MOBILE (ascenseur, sol qui descend : push block a floorSector) se traverse aussi :
     #     son interrupteur ou son declencheur l'amene au niveau. MESURE 2026-09-18 : E1M8 demarre
     #     dans une salle fermee par un sol a +64 u (secteur Doom 10) que l'interrupteur de la ligne
@@ -370,6 +405,8 @@ def main(argv=None):
                 raisons[f"ouverture de {h} (< {56})"] += 1
             elif d > STEPHEIGHT:
                 raisons[f"marche de {d} (> {STEPHEIGHT})"] += 1
+            elif (w["flags"] & 0x1000) and sur_ligne_bloquante(w):
+                raisons["ligne infranchissable du WAD (ML_BLOCKING)"] += 1
             else:
                 raisons["INEXPLIQUE"] += 1
     put("joueur non scelle au depart", len(seen) * 5 >= len(S) * 3,

@@ -99,6 +99,30 @@ MUR_COURT = 8.0
 DOOR_SLIT = sp.DOOR_SLIT
 WALLFLAG_DOORWALL = 0x20
 WALLFLAG_SHORTOPENING = 0x1000
+
+# Les deux drapeaux de LIGNE de Doom qui bloquent le passage sans rien fermer (p_map.c
+# PIT_CheckLine). Aucun n'etait lu : MESURE sur l'episode, 165 lignes a deux faces ML_BLOCKING et
+# 108 ML_BLOCKMONSTERS. La plupart des ML_BLOCKING sont deja bloquees par la marche (> 24) ou
+# portent une grille ; il en reste 31 qu'on franchissait pour de bon -- les rebords des deux
+# batiments de la cour d'E1M2, la corniche d'E1M5, et les quatre cotes de la dalle de teleportation
+# d'E1M8. Les ML_BLOCKMONSTERS, elles, ceinturent les nappes de nukage (E1M1 10 sur 13,
+# E1M3 11 sur 19) : sans elles les monstres marchent dans l'acide.
+#
+# Le moteur n'a pas de bit libre : ses cinq bits de blocage (WALLFLAG_BLOCKBITS 0x1f00) sont pris,
+# et le test est un ET entre le mur et le sprite. On reprend donc deux bits dont le SENS est deja
+# le bon, et que Doom n'utilise pas autrement (ce jeu n'a pas d'eau) :
+#   ML_BLOCKING      -> SHORTOPENING : porte par le joueur (AI.C:47) ET par les monstres
+#                       (DOOM_ACTOR.C:313), pas par les projectiles. Ne touche ni la ligne de vue
+#                       ni les balles (HITSCAN.C ne regarde que WALLFLAG_BLOCKED), ce qui compte :
+#                       ces ouvertures font jusqu'a 176 u de haut, on tire au travers.
+#                       Divergence assumee : Doom y arrete aussi les projectiles.
+#   ML_BLOCKMONSTERS -> WATERBNDRY : seuls les monstres portent BWATERBNDRY. Exactement Doom.
+# ATTENTION : doom_pbBlockBits (DOOM_GAME.C) recalcule SHORTOPENING sur les portails d'un push
+# block en marche et effacerait un ML_BLOCKING pose la. Aucune des 31 lignes n'est dans ce cas
+# (verifie sur l'episode) ; WATERBNDRY, lui, n'est jamais recalcule.
+WALLFLAG_WATERBNDRY = 0x400
+ML_BLOCKING = 0x0001
+ML_BLOCKMONSTERS = 0x0002
 PBVERT_MAX = 255            # sPBVertex.vNm est un unsigned char (SLEVEL.H:109-113)
 
 
@@ -1331,6 +1355,12 @@ class DoomConverter:
                 mob.append((mn, "bottom"))
             idx = emit_wall(P, Q, bot, top, next_sector=nbi, tex=None, picnum=0,
                                  light=light, invisible=True, centre=cen, mob=mob)
+            bloc = ((WALLFLAG_SHORTOPENING if ld.flags & ML_BLOCKING else 0) |
+                    (WALLFLAG_WATERBNDRY if ld.flags & ML_BLOCKMONSTERS else 0))
+            if bloc:                                   # voir les deux drapeaux en tete de fichier
+                for wi in idx:
+                    self.em.walls[wi]["flags"] |= bloc
+                self.stats["lignes_bloquantes"] = self.stats.get("lignes_bloquantes", 0) + 1
             if ld.flags & 0x0020:                      # ML_SECRET : un monstre ne l'ouvre pas
                 for wi in idx:
                     w = self.em.walls[wi]
