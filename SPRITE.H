@@ -38,6 +38,10 @@ struct __sprite;
 #define SPRITEFLAG_LINE            0x20000
 #define SPRITEFLAG_THINLINE        0x40000
 #define SPRITEFLAG_COLORED         0x80000
+/* GCC14: drawn through the VDP1's MESH, one pixel in two on a screen-aligned checkerboard, so
+   what is behind shows through.  Doom's MF_SHADOW (the spectre) asks for it; the hardware gives
+   it for nothing, as a draw-mode bit, unlike half-transparency which needs colour calculation. */
+#define SPRITEFLAG_MESH            0x100000
 
 typedef
 struct __sprite

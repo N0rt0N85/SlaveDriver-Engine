@@ -3947,7 +3947,9 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	      if (sprRect(pos))
 		 EZ_scaleSpr(ZOOM_TL|flip,
 			     UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|
-			     DRAW_GOURAU,0,pic,pos,&gtable);
+			     DRAW_GOURAU|
+			     ((o->flags & SPRITEFLAG_MESH)? DRAW_MESH: 0),
+			     0,pic,pos,&gtable);
 	     }
 	  else
 	     {if (i==TILESMALL8BPP)
@@ -3956,7 +3958,8 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		 }
 	      if (sprRect(pos))
 		 EZ_scaleSpr(ZOOM_TL | flip,
-			     UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE,
+			     UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE|
+			     ((o->flags & SPRITEFLAG_MESH)? DRAW_MESH: 0),
 			     (light? light: spriteBank)<<8,pic,pos,  /* light = muzzle flash */
 			     NULL);
 	     }

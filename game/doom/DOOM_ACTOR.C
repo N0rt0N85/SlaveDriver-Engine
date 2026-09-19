@@ -334,6 +334,10 @@ DoomActor *doom_spawn(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
     {class=CLASS_SPRITE;                /* puff, blood, fog: one-shots with a velocity */
      sflags=SPRITEFLAG_IMATERIAL;
     }
+ /* MF_SHADOW, the spectre: Doom draws it through its fuzz column map, which this engine has no
+    equivalent of -- the VDP1's mesh is the hardware's own see-through, a screen checkerboard. */
+ if (info->flags & MF_SHADOW)
+    sflags|=SPRITEFLAG_MESH;
  /* P_ZMovement: momz -= GRAVITY = FRACUNIT per tic (SIGNAL_MOVE is one 35 Hz tic) */
  gravity=(info->flags & MF_NOGRAVITY)?0:F(1);
  /* one sphere: height/2 covers the Doom height (SPEC_RUNTIME section 2); a missile keeps its
