@@ -117,19 +117,32 @@ void doom_psprTic(void)
    pspSx/pspSy belong to the psprites, which are not being clocked. */
 static const short doomRoleGun[2][2]={{MT_POSSESSED,wp_pistol},{MT_SHOTGUY,wp_shotgun}};
 
+/* setWeaponSequence RESETS the sequence's frame and clock (SEQUENCE.C:353): the player's own
+   weapon is pinned once per TIC, from doom_psprTic, and the frames in between only advance it.
+   Pinning it here every image would hold the gun on the first frame of its state for ever, so
+   the role's gun is pinned only when its state changes -- at the edges of the attack. */
+static short roleGunPin[MPMAX];     /* the state each role gun stands pinned at, 0 = none */
+static char roleGunAtk[MPMAX];      /* whether it was attacking when it was pinned */
+
 void doom_weaponDraw(int nmFrames)
 {(void)nmFrames;
  if (doomRoleMt[mpCur])
-    {int i,wp=-1,st;
+    {int i,wp=-1,st,atk=(doomRole.atk>=0);
      for (i=0;i<2;i++)
 	if (doomRoleGun[i][0]==doomRoleMt[mpCur])
 	   wp=doomRoleGun[i][1];
      if (wp<0)
 	return;                         /* the others hold no gun (DOOM_MODES.C) */
-     st=(doomRole.atk>=0)? doomWeaponInfo[wp].atkstate: doomWeaponInfo[wp].readystate;
-     setWeaponSequence(st-1,0,DOOM_PSP_Y0+f(DOOM_WEAPONTOP));
-     addWeaponSequence((doomRole.atk>=0)? doomWeaponInfo[wp].flashstate-1: -1);
+     st=atk? doomWeaponInfo[wp].atkstate: doomWeaponInfo[wp].readystate;
+     if (st!=roleGunPin[mpCur] || atk!=roleGunAtk[mpCur])
+	{roleGunPin[mpCur]=st;
+	 roleGunAtk[mpCur]=atk;
+	 setWeaponSequence(st-1,0,DOOM_PSP_Y0+f(DOOM_WEAPONTOP));
+	 addWeaponSequence(atk? doomWeaponInfo[wp].flashstate-1: -1);
+	}
     }
+ else
+    roleGunPin[mpCur]=0;               /* the role is gone: the next one pins its gun afresh */
  advanceWeaponSequence(0,0,0);
 }
 

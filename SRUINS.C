@@ -2527,6 +2527,27 @@ int runLevel(char *filename,int levelNm)
 	 fogChord=0;
      }
 #ifdef STATUSTEXT
+     {/* hold L+R+A -- or X+Y+A -- to PAINT THE BACKGROUND: the VDP1 erase stops being
+	 transparent (0x0000) and becomes magenta, so every pixel the world does not draw
+	 shows up magenta instead of the VDP2 sky behind it.  That is the only way to tell a
+	 hole (nothing emitted there) from a cell painted flat in its tile's first texel,
+	 which a plain sky imitates exactly.  Everything really open to the sky goes magenta
+	 too -- that is the point, not a fault. */
+      static char holeChord=0,holePaint=0;
+      if (((((~lastInputSample)&(PER_DGT_TL|PER_DGT_TR|PER_DGT_A)))==
+	   (PER_DGT_TL|PER_DGT_TR|PER_DGT_A)) ||
+	  ((((~lastInputSample)&(PER_DGT_X|PER_DGT_Y|PER_DGT_A)))==
+	   (PER_DGT_X|PER_DGT_Y|PER_DGT_A)))
+	 {if (!holeChord)
+	     {holePaint=!holePaint;
+	      EZ_setErase(240,holePaint? RGB(31,0,31): 0x0000);
+	      changeMessage(holePaint? "BACKGROUND PAINTED": "BACKGROUND CLEAR");
+	      holeChord=1;
+	     }
+	 }
+      else
+	 holeChord=0;
+     }
      {/* hold L+R+Y -- or A+B+C, for pads whose triggers report only analog values --
 	 to show the per-frame profile tree (PROFILE.C) */
       static char profChord=0;
@@ -2775,7 +2796,7 @@ int runLevel(char *filename,int levelNm)
 	  for (k=0;k<mpPlayers;k++)
 	     mz[k]=(mpBody[k] && hasLight(mpBody[k]))? '1': '0';
 	  mz[mpPlayers]=0;
-	  drawStringf(-158,-90,1,"lt:%d mz:%s",nmLights,mz);
+	  drawStringf(40,-70,1,"lt:%d mz:%s",nmLights,mz);
 	 }
 	}
 
@@ -2858,16 +2879,18 @@ int runLevel(char *filename,int levelNm)
 		       image on screen uses gets its texels once the VDP1 is done with
 		       it (Tile Flush in the tree): sw no longer means a wrong texture.
 		  flat: cells painted flat in their tile's first texel: too small /
-		       every slot taken by this image
+		       every slot taken by this image.  A large cell painted flat looks
+		       like a hole onto a plain sky -- L+R+A tells them apart.
 		  B:   the cell budget, the VDP1 list less what the image spends
 		       outside the cells.  Past it, or past the slave's records,
-		       the fog comes in (SOLO_FOG = budget, mpBalance).
-		  Solo only: split screen has its B: line there. */
+		       the fog comes in (SOLO_FOG = budget, mpBalance).  Solo only:
+		       split screen carries its own B: on that line. */
       /* fog : distance in units at which a fully lit sector reaches black.  4096 is
 	 the original setting, beyond any line of sight -- L+R+Z cycles it. */
-      drawStringf(-158,-90,1,"tile:%d sw:%d fog:%d",used[0],nmSwaps[0],fogDist);
+      drawStringf(-158,-90,1,"tile:%d sw:%d flat:%d/%d fog:%d",used[0],nmSwaps[0],
+		  picLastSmall,picLastFull,fogDist);
       if (mpPlayers==1)
-	 drawStringf(-158,-110,1,"flat:%d/%d B:%d",picLastSmall,picLastFull,mpBudget);
+	 drawStringf(-158,-110,1,"B:%d",mpBudget);
 #endif
 #ifndef NDEBUG
 #ifdef STATUSTEXT

@@ -297,6 +297,7 @@ const char *doom_levelLabel(int l);
 int  doom_bossLevel(int l);
 void doom_mpLevelStart(void);
 void doom_mpRespawned(int k);
+int doom_mpRespawnHold(int k);
 void doom_mpJoined(int k);
 void doom_lightMenu(void);
 int  doom_bossCount(int l);
