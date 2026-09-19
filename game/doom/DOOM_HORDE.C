@@ -115,67 +115,20 @@ void doom_hordeLevelStart(void)
  doom_setMessage(hordeNmFam? "SURVIVE": "THIS MAP HAS NO MONSTERS");
 }
 
-/* P_DamageMobj's wake (DOOM_ACTOR.C doom_damageActor): the monster comes into the world already
-   hunting one marine, drawn at random, exactly as if that one had shot it -- target, Doom's own
-   threshold of 100 tics on it, and the see state.  A_Chase then walks it there whether it can see
-   the marine or not; the threshold running out lets it turn on whoever is nearer.  Without this a
-   wave born across the map would stand in its spawn room until someone walked into its view. */
-static void hordeHunt(DoomActor *a)
-{int k,n=0;
- unsigned char pick[MPMAX];
- for (k=0;k<mpPlayers;k++)
-    if (mpObj[k] && doom_targetAlive(mpObj[k]) && !doom_isMonsterPlayer(k))
-       pick[n++]=(unsigned char)k;
- if (!n)
-    return;
- k=pick[getNextRand()%n];
- a->target=mpObj[k];
- a->lastlook=(short)k;                  /* A_Look starts its round on the same one */
- a->threshold=DOOM_BASETHRESHOLD;
- a->reactiontime=0;
- /* P_NoiseAlert's half: the leaf remembers who made the noise, so the engine's OWN wake path
-    (A_Look reads doomSoundTarget before it looks for anyone in front) reaches it too, on a
-    sight it will never have.  Two of Doom's own mechanisms, and neither needs the marine to be
-    visible; if the state below is ever undone, this one still points it at him. */
- if (a->sprite && a->sprite->s>=0 && a->sprite->s<level_nmSectors)
-    doomSoundTarget[a->sprite->s]=mpObj[k];
- if (doomMobjInfo[a->mt].seestate)
-    doom_setState(a,doomMobjInfo[a->mt].seestate);
-}
-
-/* Is it standing in its look chain -- the two states P_SpawnMobj leaves a monster in, where it
-   does nothing but wait for someone to walk into its view (A_Look)? */
-static int hordeAsleep(DoomActor *a)
-{int sp=doomMobjInfo[a->mt].spawnstate;
- return a->state==sp || a->state==doomStates[sp].nextstate;
-}
-
-/* ONE walk of the object lists: count the horde still standing and, when asked, put back on a
-   marine any of them that is not hunting one.  The level's own monsters were never placed, so
-   every walker here is ours.
-   Re-aiming in the same pass, rather than only at the birth, is what makes a horde a horde.  A
-   single poke at birth has to survive every later turn of the state machine: A_Chase drops a
-   monster back into its look chain the moment its target stops being alive, and anything that
-   eats the poke leaves it standing in its spawn room for good, since it will never SEE a marine
-   across the map.  Asked again every few tics, the mode heals itself instead.
-   `o->next` is read before the aim: doom_setState only defers its list moves (delay_moveObject),
-   and a monster born meanwhile goes in at the head, behind the cursor. */
-static int hordeSweep(int aim)
-{Object *o,*next;
+/* The walkers standing.  The level's own were never placed, so this is the horde and nothing
+   else -- and a death by any road at all (a crush, a fall, a barrel) is seen here. */
+static int hordeAlive(void)
+{Object *o;
  DoomActor *a;
  int l,n=0;
  for (l=0;l<2;l++)
-    for (o=l?objectIdleList:objectRunList;o;o=next)
-       {next=o->next;
-	if (o->func!=game_actor_func)
+    for (o=l?objectIdleList:objectRunList;o;o=o->next)
+       {if (o->func!=game_actor_func)
 	   continue;
 	a=(DoomActor *)o;
-	if (!a->sprite || !(a->mflags & DF_SHOOTABLE) || a->health<=0 ||
-	    !(doomMobjInfo[a->mt].flags & MF_COUNTKILL))
-	   continue;
-	n++;
-	if (aim && (!doom_targetAlive(a->target) || hordeAsleep(a)))
-	   hordeHunt(a);
+	if (a->sprite && (a->mflags & DF_SHOOTABLE) && a->health>0 &&
+	    (doomMobjInfo[a->mt].flags & MF_COUNTKILL))
+	   n++;
        }
  return n;
 }
@@ -195,6 +148,28 @@ static int hordePick(void)
 	i=j;
     }
  return hordeFam[i];
+}
+
+/* P_DamageMobj's wake (DOOM_ACTOR.C doom_damageActor): the monster comes into the world already
+   hunting one marine, drawn at random, exactly as if that one had shot it -- target, Doom's own
+   threshold of 100 tics on it, and the see state.  A_Chase then walks it there whether it can see
+   the marine or not; the threshold running out lets it turn on whoever is nearer.  Without this a
+   wave born across the map would stand in its spawn room until someone walked into its view. */
+static void hordeHunt(DoomActor *a)
+{int k,n=0;
+ unsigned char pick[MPMAX];
+ for (k=0;k<mpPlayers;k++)
+    if (mpObj[k] && doom_targetAlive(mpObj[k]) && !doom_isMonsterPlayer(k))
+       pick[n++]=(unsigned char)k;
+ if (!n)
+    return;
+ k=pick[getNextRand()%n];
+ a->target=mpObj[k];
+ a->lastlook=(short)k;                  /* A_Look starts its round on the same one */
+ a->threshold=DOOM_BASETHRESHOLD;
+ a->reactiontime=0;
+ if (doomMobjInfo[a->mt].seestate)
+    doom_setState(a,doomMobjInfo[a->mt].seestate);
 }
 
 /* One monster at a spawn spot away from every player (mpSpotFar with no player of its own to
@@ -279,7 +254,7 @@ void doom_hordeTic(void)
 	}
      hordeClock=hordeSkillGap[hordeSkill()];
      cap=hordeSkillAlive[hordeSkill()]*mpPlayers;
-     alive=hordeSweep(1);
+     alive=hordeAlive();
      if (alive<cap && objectsFree()>DOOM_HORDE_KEEP && spritesFree()>DOOM_HORDE_KEEP)
 	{if (hordeBirth())
 	    hordeLeft--;
@@ -291,7 +266,7 @@ void doom_hordeTic(void)
  if (--hordeClock>0)
     return;
  hordeClock=4;
- if (hordeSweep(1))
+ if (hordeAlive())
     {hordeRest=DOOM_HORDE_REST;
      return;
     }
