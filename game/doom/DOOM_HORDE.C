@@ -37,7 +37,15 @@
 #define DOOM_HORDE_BASE     5          /* monsters in wave 1, per player, at HURT ME PLENTY      */
 #define DOOM_HORDE_GROW     3          /* ... and per wave after it                              */
 #define DOOM_HORDE_NEWFAM   2          /* a new family every this many waves                     */
-#define DOOM_HORDE_NEAR     512        /* no birth nearer than this to the loaded player         */
+#define DOOM_HORDE_NEAR     512        /* no birth nearer than this to ANY marine                */
+#define DOOM_HORDE_REACH    24         /* hops the reach plot walks out from the marines         */
+#define DOOM_HORDE_QUEUE    96         /* leaves it may hold at once: the plot's whole cost      */
+#define DOOM_HORDE_SPREAD   4          /* hops past the nearest spot that may still be drawn     */
+#define DOOM_HORDE_REPLOT   35         /* one second: the marines have moved, plot again         */
+/* A monster's own blocking bits (DOOM_ACTOR.C doom_spawn), the plot's rule for a portal.  Note
+   WATERBNDRY: since ML_BLOCKMONSTERS borrows it, the plot refuses a line Doom forbids monsters,
+   so the horde is never asked to be born behind one and walk through it. */
+#define DOOM_HORDE_MFLAGS   (SPRITEFLAG_BBLOCKED|SPRITEFLAG_BWATERBNDRY| 			     SPRITEFLAG_BCLIFF|SPRITEFLAG_BSHORT)
 
 /* Doom's skill sieves the things a map places and softens the damage; a horde places its own
    things, so here the skill is the PRESSURE and nothing else -- how many a wave brings, how fast
@@ -80,6 +88,11 @@ static short hordeLeft;                /* of this wave, still to be born        
 static short hordeClock;               /* tics until the next birth                              */
 static short hordeRest;                /* tics until the next wave                               */
 static char  hordeDone;                /* every marine is down: the run is over                  */
+static short hordePlot;                /* tics until the reach is plotted again                  */
+/* The reach: hops from the nearest marine ON FOOT, 0 = not reached.  792 bytes of BSS, and the
+   queue's bound is what bounds the plot's cost -- it stops expanding rather than run the map. */
+static unsigned char hordeHop[MAXNMSECTORS];
+static short hordeQ[DOOM_HORDE_QUEUE];
 
 #define hordeShips(mt) (hordeHas[(mt)>>3] & (1<<((mt)&7)))
 
@@ -107,6 +120,8 @@ void doom_hordeLevelStart(void)
  hordeClock=0;
  hordeDone=0;
  hordeRest=DOOM_HORDE_REST;
+ hordePlot=0;                           /* the first birth plots the reach */
+ memset(hordeHop,0,sizeof(hordeHop));
  if (mpMode!=MP_HORDE)
     return;
  for (i=0;i<DOOM_HORDE_MAXFAM;i++)
@@ -172,20 +187,109 @@ static void hordeHunt(DoomActor *a)
     doom_setState(a,doomMobjInfo[a->mt].seestate);
 }
 
-/* One monster at a spawn spot away from every player (mpSpotFar with no player of its own to
-   skip), with the teleport fog Doom gives an arrival.  0 = the pool said no, try again next tic. */
+/* MEASURED, and the reason this plot exists at all: from a level's start leaf, the median spawn
+   spot is 14 to 22 leaves away (E1M5 14, E1M1 18, E1M6 22), and half of them have no route to
+   the marine at all -- a lift parked up, a CLIFFBNDRY drop, a key door.  A_Chase is Doom's greedy
+   eight-direction wall follower with no knowledge of the map: over two or three leaves it gets
+   there, over twenty it cannot, which is why a wave born across the map only closed in when the
+   marine walked to IT.  So the horde is born WHERE A_Chase can finish the walk: one breadth-first
+   plot of the leaves reachable on foot from the marines, doors included (doomBlocked presses a
+   door it bumps, DOOM_VERBS.C), and the spots are ranked by that distance.
+   No radius is picked: a fixed one is a number with nothing behind it -- at 8 hops E1M1 offers 2
+   spots and E1M2 four -- so the nearest usable spot wins, whatever its distance. */
+static void hordePlotReach(void)
+{int head=0,tail=0,k,u,w,n,hop;
+ memset(hordeHop,0,sizeof(hordeHop));
+ for (k=0;k<mpPlayers;k++)
+    if (mpBody[k] && mpBody[k]->s>=0 && mpBody[k]->s<level_nmSectors &&
+	!hordeHop[mpBody[k]->s] && tail<DOOM_HORDE_QUEUE)
+       {hordeHop[mpBody[k]->s]=1;
+	hordeQ[tail++]=(short)mpBody[k]->s;
+       }
+ while (head<tail)
+    {u=hordeQ[head++];
+     hop=hordeHop[u];
+     if (hop>=DOOM_HORDE_REACH)
+	continue;
+     for (w=level_sector[u].firstWall;w<=level_sector[u].lastWall;w++)
+	{n=level_wall[w].nextSector;
+	 if (n==-1)
+	    break;                              /* portals come first (WALLS.C findDoorways) */
+	 if (level_wall[w].normal[1]!=0)
+	    continue;                           /* a floor portal is not a step */
+	 if (!(level_wall[w].flags & WALLFLAG_DOORWALL) &&
+	     ((level_wall[w].flags & DOOM_HORDE_MFLAGS) & WALLFLAG_BLOCKBITS))
+	    continue;
+	 if (n<0 || n>=level_nmSectors || hordeHop[n])
+	    continue;
+	 hordeHop[n]=(unsigned char)(hop+1);
+	 if (tail<DOOM_HORDE_QUEUE)
+	    hordeQ[tail++]=(short)n;
+	}
+    }
+}
+
+/* Far enough from every marine that nothing pops into a face */
+static int hordeClearOfMarines(MthXyz *feet)
+{int k;
+ for (k=0;k<mpPlayers;k++)
+    if (mpBody[k] &&
+	doom_approxDist2(feet->x-mpBody[k]->pos.x,feet->z-mpBody[k]->pos.z)<=F(DOOM_HORDE_NEAR))
+       return 0;
+ return 1;
+}
+
+/* The nearest spot on foot, drawn among those within DOOM_HORDE_SPREAD hops of it so the wave
+   does not always come through the same door.  0 = the plot reached none of them. */
+static int hordeNearSpot(int *sector,MthXyz *feet,int *yaw)
+{int i,n=mpSpotCount(),best=0,cnt=0,pick,s2,y2,hop;
+ MthXyz f2;
+ for (i=0;i<n;i++)
+    {if (!mpSpotGet(i,&s2,&f2,&y2) || s2<0 || s2>=level_nmSectors)
+	continue;
+     hop=hordeHop[s2];
+     if (!hop || !hordeClearOfMarines(&f2))
+	continue;
+     if (!best || hop<best)
+	best=hop;
+    }
+ if (!best)
+    return 0;
+ for (i=0;i<n;i++)
+    {if (!mpSpotGet(i,&s2,&f2,&y2) || s2<0 || s2>=level_nmSectors)
+	continue;
+     hop=hordeHop[s2];
+     if (hop && hop<=best+DOOM_HORDE_SPREAD && hordeClearOfMarines(&f2))
+	cnt++;
+    }
+ if (!cnt)
+    return 0;                           /* the pass above found one: never, but no divide by 0 */
+ pick=getNextRand()%cnt;
+ for (i=0;i<n;i++)
+    {if (!mpSpotGet(i,&s2,&f2,&y2) || s2<0 || s2>=level_nmSectors)
+	continue;
+     hop=hordeHop[s2];
+     if (hop && hop<=best+DOOM_HORDE_SPREAD && hordeClearOfMarines(&f2) && !pick--)
+	{*sector=s2;
+	 *feet=f2;
+	 *yaw=y2;
+	 return 1;
+	}
+    }
+ return 0;
+}
+
+/* One monster at a spot the marines can be walked to, with the teleport fog Doom gives an
+   arrival.  0 = no spot, or the pool said no: try again next tic. */
 static int hordeBirth(void)
 {MthXyz feet,pos;
  DoomActor *a,*f;
- int sector,yaw,mt,try_;
- /* mpSpotFar keeps away from the OTHER players (it is written for a respawn); the loaded one is
-    the camera, which it never sees, so ask again while the spot is in its lap. */
- for (try_=0;;try_++)
-    {if (!mpSpotFar(-1,&sector,&feet,&yaw))
+ int sector,yaw,mt;
+ if (!hordeNearSpot(&sector,&feet,&yaw))
+    {/* the marines are sealed in (a lift not yet called, a door not yet opened): the wave still
+	comes, from the farthest spot, as before the plot */
+     if (!mpSpotFar(-1,&sector,&feet,&yaw))
 	return 0;
-     if (try_>=4 || !camera ||
-	 doom_approxDist2(feet.x-camera->pos.x,feet.z-camera->pos.z)>F(DOOM_HORDE_NEAR))
-	break;
     }
  mt=hordePick();
  pos=feet;
@@ -253,6 +357,12 @@ void doom_hordeTic(void)
 	 return;
 	}
      hordeClock=hordeSkillGap[hordeSkill()];
+     if (hordePlot>0)
+	hordePlot-=hordeSkillGap[hordeSkill()];
+     if (hordePlot<=0)
+	{hordePlotReach();                      /* the marines have moved: plot again, once a second */
+	 hordePlot=DOOM_HORDE_REPLOT;
+	}
      cap=hordeSkillAlive[hordeSkill()]*mpPlayers;
      alive=hordeAlive();
      if (alive<cap && objectsFree()>DOOM_HORDE_KEEP && spritesFree()>DOOM_HORDE_KEEP)

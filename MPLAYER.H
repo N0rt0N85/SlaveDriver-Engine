@@ -86,6 +86,10 @@ void mpScoreDeath(int victim,int killer);   /* killer -1 = the world, -2 = a mon
    have stood; a player is (re)born on the one farthest from the others. */
 void mpSpotAdd(int sector,MthXyz *feet,int yaw);
 int  mpSpotFar(int k,int *sector,MthXyz *feet,int *yaw);   /* 0 = no spot; never on a floor the game calls unsafe (CFG_MP_SPOTSAFE) while a safe one is left */
+/* The spots themselves, for a game that chooses by its own rule instead of mpSpotFar's respawn
+   one (game/doom/DOOM_HORDE.C picks the one nearest the marines ON FOOT). */
+int  mpSpotCount(void);
+int  mpSpotGet(int i,int *sector,MthXyz *feet,int *yaw);   /* 0 = no such spot */
 void mpLevelReset(void);                /* runLevel, before the level's objects are placed */
 
 int  mpMenu(void);                      /* the title's multiplayer screen: 1 = start that game */

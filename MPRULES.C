@@ -81,6 +81,19 @@ void mpSpotAdd(int sector,MthXyz *feet,int yaw)
  mpSpot[i].yaw=(short)(normalizeAngle(yaw)>>16);
 }
 
+int mpSpotCount(void)
+{return mpNmSpots;
+}
+
+int mpSpotGet(int i,int *sector,MthXyz *feet,int *yaw)
+{if (i<0 || i>=mpNmSpots)
+    return 0;
+ *sector=mpSpot[i].sector;
+ *feet=mpSpot[i].feet;
+ *yaw=mpSpot[i].yaw<<16;
+ return 1;
+}
+
 /* The spot whose nearest other player is the farthest away -- one of those that come within a
    quarter of the best, at random, so that a respawn cannot be camped. */
 int mpSpotFar(int k,int *sector,MthXyz *feet,int *yaw)
