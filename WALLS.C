@@ -1085,71 +1085,201 @@ void EZ_specialDistSpr2(short charNm,XyInt *xy,struct gourTable *gTable);
 #endif
 
 
-/* GCC14: near-plane repair of one row of a wall grid.  rectTransform cannot clip, only clamp: a
-   grid point nearer than the floor keeps its x,y and is divided by the floor, which for a point
-   BEHIND the eye invents a projection -- as the wall's near end swings behind you its view x goes
-   to zero and the corner drifts to the middle of the screen.  Every flagged point of the row
-   (light bit 15) is moved to where the row crosses the cut, the further along U of
-     (a) the near plane z = NEARCLIP, and
-     (b) the lateral frustum plane |x| = z, where the wall genuinely leaves the screen.
-   (b) is the only handle on the straddling tile's stretch: a tile's pattern cannot be windowed in
-   U (WALLASM.H), so the whole tile is spread from that corner whatever we do, and the screen edge
-   is the furthest out the corner can sit without leaving a hole.  Two divides per row, and only
-   on a wall that has a corner nearer than the plane. */
-static void repairNearRow(struct vCalc *row,int nmv,MthXyz *p0,MthXyz *vW)
-{int i,flagged=0;
- Fixed32 u,ua,den,umax;
- MthXyz P;
- XyInt xy;
+/* GCC14: a cell that leaves the view.  The VDP1 lays a tile over a cell's four corners affinely:
+   no perspective, and no window in U (WALLASM.H).  A corner off the view left at its true
+   projection s_n shows the part of the tile still on screen z_e/z_n times too big -- z_e the
+   depth where the cell's edge leaves the view, z_n the corner's.  Walking along the surface, that
+   zoom grows (1 + z_f/z_n) times faster than it should (z_f the corner still in view): two depths
+   shrink in it where one shrinks in the true zoom, z_e staying put -- the texture that "grows
+   twice too fast" of the console report, never less than twice.  On the Doom floor the bottom of
+   the view is 80 = FOCALDIST/2 below the centre, so it meets the floor at twice the eye's height,
+   z = 82: a tile whose near edge is at the eye's depth, 41, shows x2.00, at 20 x4.1.
+   The corner that makes the affine map EXACT at the corner in view (A) and where the edge leaves
+   the view (e) is
+      s* = s_A + (s_n - s_A) z_n/z_e,
+   the projection of the stand-in  Q = N + A (z_e - z_n)/z_A,  at depth z_e -- which exists for a
+   corner BEHIND the eye too (z_n <= 0), where s_n does not.  s* lies on the edge's own line, past
+   e: the part of the edge in view does not move.
+   s* is not taken as is.  On a wall it stands like an edge at depth z_e/(1 + k), k =
+   (z_e - z_n)/z_A: for a corner behind the eye k passes 26 with a 256 cell, s* passes a short
+   (project_point stores them) and, first, trips vdp1Fit, whose V window keeps the INTERSECTION
+   of both V edges' intervals: a fitted edge that tall cuts the edge IN VIEW too, and a hole
+   opens (simulated, hugging a wall of 128 cells: 250 px a frame against 100 before; of 256
+   cells: 1450 against 150).  The corner goes to  s = s_e + lam (s* - s_e),  s_e the projection
+   of e -- the old repair's place for a corner behind the plane -- with lam as large as keeps the
+   cut out of the window: s stands at depth z_T = z_e/(1 + lam k), and the cut stays past the
+   window's top and bottom while z_T >= rho z_A, rho = max(-ymin,ymax)/VDP1LIM:
+      lam = (z_e - rho z_A) / (rho z_A k),  clamped to [0,1].
+   No height in it: the same on every row of a wall, whose V edges stay vertical, and continuous,
+   across the near plane too.  lam < 1 only on cells long against the distance, z_A (1 + k) >
+   z_e/rho: there the tile shows squeezed rather than cut, as the old repair showed it; lam 0
+   (z_e < rho z_A) is a cut no place avoids, s_e gives the smallest.  Last, a corner is held
+   within FITLIMW of the middle, along the same line, for the shorts.
+   Only a corner NEARER than its anchor is fitted: a further one shows its tile squeezed, not
+   stretched, and pulling it out would make the VDP1 walk further off the screen.  Returns 1 and
+   s, 0 when N is in view after all (the window's rounding), -1 for nothing to fit.  A may be off
+   the view too (a cell wider than it): e is where the edge leaves the view towards N.
+   Where a row leaves the view: the view's width, a wedge F.X >= xmin.Z and xmax.Z >= F.X, and
+   the near plane -- a row that passes the eye inside the wedge, a lintel walked under, a riser
+   stood over, leaves through it.  In 1/256 unit, so a point 8000 away still fits in 32 bits.
+   The wedge is the window's: split screen (focal 126, 80 each side) is right too, where
+   |x| = z was not. */
+#define FITLIMW 16000   /* a fitted corner's |x|,|y|: a short, and room for vdp1Slide's <<12 */
 
- for (i=0;i<nmv;i++)
-    if (row[i].light & 0x8000)
-       flagged++;
- if (!flagged || !vW->z)
-    return;
- umax=F(nmv-1);
- if (flagged==nmv)
-    /* no crossing in this row -- it is nearer than the plane from end to end.  Collapse it to
-       its far end rather than divide for a crossing that is not there. */
-    u=(vW->z>0)? umax: 0;
- else
-    {/* a point on each side of the plane, so this crossing is inside [0,nmv-1] */
-     u=MTH_Div(NEARCLIP-p0->z,vW->z);
-     den=(p0->x<0)? vW->x+vW->z: vW->x-vW->z;
-     if (den)
-	{ua=(p0->x<0)? MTH_Div(-(p0->z+p0->x),den): MTH_Div(p0->z-p0->x,den);
-	 if (ua>=0 && ua<=umax && ((vW->z>0)? (ua>u): (ua<u)))
-	    u=ua;
-	}
-     if (u<0) u=0;
-     if (u>umax) u=umax;
+static int viewSide(int side,const MthXyz *p)
+{return side==0? focalDist*(p->x>>8)-viewXmin*(p->z>>8):
+	side==1? viewXmax*(p->z>>8)-focalDist*(p->x>>8):
+		 (p->z-NEARCLIP)>>8;
+}
+
+/* project_point in 32 bits (same divide, same rounding): a stand-in may pass a short */
+static void projectWide(const MthXyz *p,int *sx,int *sy)
+{Fixed32 q=MTH_Div(F(focalDist),p->z);
+ *sx=(int)(((long long)p->x*q)>>32);
+ *sy=-(int)(((long long)p->y*q)>>32);
+}
+
+/* lam no larger than keeps e + lam (q - e) within FITLIMW of the middle */
+static Fixed32 capWide(Fixed32 lam,int e,int q)
+{Fixed32 c;
+ if (q>FITLIMW || q<-FITLIMW)
+    {c=(q>0? FITLIMW: -FITLIMW)-e;
+     c=((c<=0 && q>0) || (c>=0 && q<0))? 0: MTH_Div(c,q-e);
+     if (c<lam)
+	lam=c;
     }
- P.x=p0->x+MTH_Mul(vW->x,u);
- P.y=p0->y+MTH_Mul(vW->y,u);
- P.z=p0->z+MTH_Mul(vW->z,u);
- if (P.z<NEARCLIP)
-    P.z=NEARCLIP;
- project_point(&P,&xy);
- for (i=0;i<nmv;i++)
-    if (row[i].light & 0x8000)
-       {row[i].x=xy.x;
-	row[i].y=xy.y;
+ return lam;
+}
+
+static int fitCorner(const MthXyz *A,const MthXyz *N,XyInt *s)
+{Fixed32 t0=0,t1=F(1),t,ze,k,lam,rz,num,den;
+ int p,ga,gn,ex,ey,qx,qy;
+ MthXyz E,Q;
+
+ if (N->z>=A->z)
+    return -1;
+ for (p=0;p<3;p++)
+    {ga=viewSide(p,A);
+     gn=viewSide(p,N);
+     if (ga<0 && gn<0)
+	return -1;                      /* the edge is past this side end to end */
+     if ((ga<0)!=(gn<0))
+	{t=MTH_Div(ga,ga-gn);          /* where it crosses this side, 0..1 from A */
+	 if (gn<0)
+	    {if (t<t1) t1=t;}
+	 else if (t>t0)
+	    t0=t;
+	}
+    }
+ if (t1>=F(1))
+    return 0;
+ if (t0>=t1)
+    return -1;                          /* it passes by the view */
+ ze=A->z+MTH_Mul(N->z-A->z,t1);
+ if (ze<NEARCLIP)
+    ze=NEARCLIP;                        /* the near plane itself, but for rounding */
+ E.x=A->x+MTH_Mul(N->x-A->x,t1);
+ E.y=A->y+MTH_Mul(N->y-A->y,t1);
+ E.z=ze;
+ k=MTH_Div(ze-N->z,A->z);
+ Q.x=N->x+MTH_Mul(A->x,k);
+ Q.y=N->y+MTH_Mul(A->y,k);
+ Q.z=ze;
+ projectWide(&E,&ex,&ey);
+ projectWide(&Q,&qx,&qy);
+ p=(viewYmax>-viewYmin)? viewYmax: -viewYmin;
+ rz=(A->z/VDP1LIM)*p;                   /* rho z_A */
+ num=ze-rz;
+ den=MTH_Mul(rz,k);
+ lam=(num<=0)? 0: (num>=den)? F(1): MTH_Div(num,den);
+ lam=capWide(lam,ex,qx);
+ lam=capWide(lam,ey,qy);
+ s->x=ex+MTH_Mul(qx-ex,lam);
+ s->y=ey+MTH_Mul(qy-ey,lam);
+ return 1;
+}
+
+/* GCC14: a grid row is a world line, and on a wall its U runs along the screen's x (the V edges
+   are vertical there): the view's width and the near plane decide where it leaves the view, not
+   its top and bottom.  What of a row is in view is one run of points; the cell past each end of
+   the run is fitted on its end point, and every point further out takes the fitted corner's
+   place -- off the view, and never a point behind the eye with a projection the clamp invented
+   for it (rectTransform cannot clip).  First the points behind the plane go onto their neighbour
+   towards the row's far end: a place off the view for whatever the fit leaves, a row with
+   nothing in view. */
+#define ROWIN(v) (!((v).light&0x8000) && (v).x>=viewXmin && (v).x<=viewXmax)
+
+static void rowPoint(const MthXyz *p0,const MthXyz *vW,int i,MthXyz *p)
+{p->x=p0->x+vW->x*i;
+ p->y=p0->y+vW->y*i;
+ p->z=p0->z+vW->z*i;
+}
+
+/* the points of the row past its point a, going dir; 1 if a cell was fitted */
+static int fitRowEnd(struct vCalc *row,int nmv,int a,int dir,MthXyz *p0,MthXyz *vW)
+{int n,r;
+ MthXyz A,N;
+ XyInt s;
+
+ for (;;)
+    {n=a+dir;
+     if (n<0 || n>=nmv)
+	return 0;
+     rowPoint(p0,vW,a,&A);
+     rowPoint(p0,vW,n,&N);
+     r=fitCorner(&A,&N,&s);
+     if (r<0)
+	return 0;
+     if (r>0)
+	break;
+     a=n;                               /* in view, only rounded out of the window */
+    }
+ for (;n>=0 && n<nmv;n+=dir)
+    {row[n].x=s.x;
+     row[n].y=s.y;
+    }
+ return 1;
+}
+
+static void fitRow(struct vCalc *row,int nmv,MthXyz *p0,MthXyz *vW)
+{int a,b,d;
+
+ d=(vW->z>0)? -1: 1;                    /* from the row's far end to its near end */
+ for (a=(vW->z>0)? nmv-2: 1;a>=0 && a<nmv;a+=d)
+    if (row[a].light & 0x8000)
+       {row[a].x=row[a-d].x;
+	row[a].y=row[a-d].y;
        }
+ for (a=0;a<nmv && !ROWIN(row[a]);a++)
+    ;
+ if (a<nmv)
+    {for (b=nmv-1;!ROWIN(row[b]);b--)
+	;
+     fitRowEnd(row,nmv,a,-1,p0,vW);
+     fitRowEnd(row,nmv,b,1,p0,vW);
+     return;
+    }
+ /* nothing of the row in the window: one cell wider than the view -- its near corner fitted on
+    its far one --, or nothing to show */
+ for (a=0;a+1<nmv;a++)
+    if (fitRowEnd(row,nmv,(vW->z>0)? a+1: a,d,p0,vW))
+       return;
 }
 
-/* GCC14: true when the wall reaches nearer than the plane, i.e. when its grid needs the repair
-   above.  Four compares on the per-wall path, which already does back face, far and near. */
-static int wallCrossesNear(MthXyz *coords)
-{return coords[0].z<NEARCLIP || coords[1].z<NEARCLIP ||
-	coords[2].z<NEARCLIP || coords[3].z<NEARCLIP;
+/* GCC14: a grid leaves the view's width, or crosses the near plane, iff one of its four corners
+   does: a wall is flat and the view's width a wedge.  Four tests on the per-wall path, where the
+   near plane alone took four compares. */
+static int gridLeavesView(struct vCalc *vc,int width,int height)
+{int last=height*(width+1);
+ return !ROWIN(vc[0]) || !ROWIN(vc[width]) || !ROWIN(vc[last]) || !ROWIN(vc[last+width]);
 }
 
-#define REPAIRNEARGRID(vc)						\
- if (wallCrossesNear(coords))						\
+#define FITGRID(vc)							\
+ if (gridLeavesView((vc),width,height))					\
     {MthXyz p0=coords[0];						\
      int rh;								\
      for (rh=0;rh<=height;rh++)						\
-	{repairNearRow((vc)+rh*(width+1),width+1,&p0,&vWidth);		\
+	{fitRow((vc)+rh*(width+1),width+1,&p0,&vWidth);			\
 	 p0.x+=vHeight.x; p0.y+=vHeight.y; p0.z+=vHeight.z;		\
 	}								\
     }
@@ -1368,10 +1498,160 @@ static void farCorners(sWallType *w,MthXyz *coords,struct gourTable *g)
 #define LODCOL_MESH ((lodEnable>1)? RGB(24,0,0): RGB(0,0,0))
 #define LODCOL_FAR(p) ((lodEnable>1)? RGB(24,24,0): picFirstColour(p))   /* YELLOW: the far LOD */
 
+/* GCC14: a mesh face -- a floor, a ceiling -- that leaves the view, fitted by fitCorner's law.  A
+   face has no row: a corner off the view is fitted along its edge to its ONE neighbour in view,
+   when its other neighbour is off the view too -- the edge between those two may move, the edge
+   in view keeps its line.  In screen space, on the true projections: 1/z runs linearly along a
+   projected edge, so with sg the part of edge A->N in view and r = z_n/z_A,
+      z_n/z_e = r + sg (1 - r).
+   vCalc holds no z: two dot products.
+   CONTINUOUS, or it pops.  A corner is fitted or not by what its neighbours do, and it moves the
+   texture of the whole face, the part in view included (the VDP1 draws lines from edge A-D to
+   edge B-C): a fit that switches on or off between two images makes the floor jump -- simulated,
+   13 to 20 texels of a 64 tile in 0.1 degree of turning, and flickering on the window's rounding.
+   So the fit (1 - k of the way) eases to nothing at every switch, over FITFADE px or 8 units:
+     - its neighbour in view reaching the window's edge (then there is none),
+     - its neighbour off the view reaching the window (then both are in view),
+     - the corner or its neighbour in view reaching the near plane (bit 15, below);
+   and it is k = 1 already when the corner reaches the window or its neighbour's depth.
+   Then each moved edge -- between a moved corner and its neighbour off the view, moved or not --
+   must stay off the window, tested exactly (both past one side, or the window's four corners on
+   one side of its line): if the whole fit does not keep it off, the largest share of it that does
+   is kept, 1/32 near -- 0 when the edge came across the window already.  No face falls back.
+   Left as they came: a corner behind the plane (bit 15), whose projection is the plane's -- in
+   the face where it has two neighbours in view it could not follow, and the two faces would
+   part; a corner with both neighbours in view, which cannot move without moving an edge in view;
+   a corner further than its neighbour.
+   On the floor the player stands on, the bottom of the view meets it at 82 and a tile is 64 deep:
+   a corner next to one in view is 18 away at least, never behind the plane. */
+typedef struct {sWallType *wall; MthMatrix *view; int f;} MeshFace;   /* NULL: a grid cell */
+#define OUTCODE(p) (((p).x<viewXmin)|(((p).x>viewXmax)<<1)|		\
+		    (((p).y<viewYmin)<<2)|(((p).y>viewYmax)<<3))
+#define FITFADE 4       /* the fit eases out over 1<<FITFADE px */
+
+static Fixed32 meshZ(const MeshFace *m,int v)
+{MthXyz w;
+ getVertex(m->wall->firstVertex+v,&w);
+ return MTH_Product(m->view->val[2],(Fixed32 *)&w)+m->view->val[2][3];
+}
+
+/* how far p lies inside the window (< 0: outside), and outside it (< 0: inside), in px */
+static int winIn(const XyInt *p)
+{int d=p->x-viewXmin,e;
+ e=viewXmax-p->x; if (e<d) d=e;
+ e=p->y-viewYmin; if (e<d) d=e;
+ e=viewYmax-p->y; if (e<d) d=e;
+ return d;
+}
+
+static int winOut(const XyInt *p)
+{int d=viewXmin-p->x,e;
+ e=p->x-viewXmax; if (e>d) d=e;
+ e=viewYmin-p->y; if (e>d) d=e;
+ e=p->y-viewYmax; if (e>d) d=e;
+ return d;
+}
+
+/* segment p-q misses the window: both past one side, or the window's corners all on one side of
+   its line (with no side in common, what of the line crosses the window lies between p and q) */
+static int winMissed(const XyInt *p,const XyInt *q)
+{int i,cx,cy,s,sg=0;
+ long long cr;
+ if (OUTCODE(*p)&OUTCODE(*q))
+    return 1;
+ for (i=0;i<4;i++)
+    {cx=(i==1 || i==2)? viewXmax: viewXmin;
+     cy=(i>=2)? viewYmax: viewYmin;
+     cr=(long long)(q->x-p->x)*(cy-p->y)-(long long)(q->y-p->y)*(cx-p->x);
+     s=(cr>0)-(cr<0);
+     if (!s || (sg && s!=sg))
+	return 0;
+     sg=s;
+    }
+ return 1;
+}
+
+/* d = a + t (b - a); d may be b */
+static void lerpXy(XyInt *d,const XyInt *a,const XyInt *b,Fixed32 t)
+{d->x=a->x+MTH_Mul(b->x-a->x,t);
+ d->y=a->y+MTH_Mul(b->y-a->y,t);
+}
+
+static void __attribute__((noinline)) fitFace(const MeshFace *m,XyInt *poly,struct gourTable *g)
+{int i,a,b,n,oc[4],nb[4];
+ Fixed32 sg,t,r,k,w,za,zn,lo,hi;
+ unsigned short *fv=level_face[m->f].v;
+ XyInt q[4],u,v;
+
+ for (i=0;i<4;i++)
+    {oc[i]=OUTCODE(poly[i]);
+     q[i]=poly[i];
+     nb[i]=-1;
+    }
+ for (i=0;i<4;i++)
+    {a=(i+1)&3;
+     b=(i+3)&3;
+     if (oc[a])
+	{a=b;
+	 b=(i+1)&3;
+	}
+     if (!oc[i] || oc[a] || !oc[b] || ((g->entry[i]|g->entry[a])&0x8000))
+	continue;
+     za=meshZ(m,fv[a]);
+     zn=meshZ(m,fv[i]);
+     if (zn>=za)
+	continue;
+     w=F(1);                            /* the ease, 0..1 */
+     t=winIn(poly+a)<<(16-FITFADE); if (t<w) w=t;
+     t=winOut(poly+b)<<(16-FITFADE); if (t<w) w=t;
+     t=(zn-NEARCLIP)>>3; if (t<w) w=t;
+     t=(za-NEARCLIP)>>3; if (t<w) w=t;
+     if (w<=0)
+	continue;
+     sg=F(1);                           /* the part of A->N in view: to the first side it crosses */
+     if (oc[i]&1)
+	{t=MTH_Div(poly[a].x-viewXmin,poly[a].x-poly[i].x); if (t<sg) sg=t;}
+     if (oc[i]&2)
+	{t=MTH_Div(viewXmax-poly[a].x,poly[i].x-poly[a].x); if (t<sg) sg=t;}
+     if (oc[i]&4)
+	{t=MTH_Div(poly[a].y-viewYmin,poly[a].y-poly[i].y); if (t<sg) sg=t;}
+     if (oc[i]&8)
+	{t=MTH_Div(viewYmax-poly[a].y,poly[i].y-poly[a].y); if (t<sg) sg=t;}
+     r=MTH_Div(zn,za);
+     k=r+MTH_Mul(sg,F(1)-r);
+     k=F(1)-MTH_Mul(w,F(1)-k);
+     lerpXy(q+i,poly+a,poly+i,k);
+     nb[i]=b;
+    }
+ /* each moved edge once: when both its ends moved, each names the other */
+ for (i=0;i<4;i++)
+    if ((b=nb[i])>=0 && !(nb[b]==i && b<i) && !winMissed(q+i,q+b))
+       {lo=0;
+	if (winMissed(poly+i,poly+b))
+	   {hi=F(1);
+	    for (n=0;n<5;n++)
+	       {t=(lo+hi)>>1;
+		lerpXy(&u,poly+i,q+i,t);
+		lerpXy(&v,poly+b,q+b,t);
+		if (winMissed(&u,&v))
+		   lo=t;
+		else
+		   hi=t;
+	       }
+	   }
+	lerpXy(q+i,poly+i,q+i,lo);
+	lerpXy(q+b,poly+b,q+b,lo);
+       }
+ for (i=0;i<4;i++)
+    poly[i]=q[i];
+}
+
 /* GCC14: a textured wall cell, through the wall tiles' rule (PIC.H): its tile, or a flat quad in
    the tile's first texel's colour when the cache refuses it.  Its size is the smaller side of its
-   box: a far floor 2 px tall and 30 long would show 2 rows of its texture. */
-static void __attribute__((noinline)) wallCell(int pic,XyInt *poly,struct gourTable *g)
+   box: a far floor 2 px tall and 30 long would show 2 rows of its texture.  A mesh face (m) whose
+   box leaves the view is fitted to it first (fitFace); its size stays the box it came with. */
+static void __attribute__((noinline)) wallCell(int pic,XyInt *poly,struct gourTable *g,
+					       const MeshFace *m)
 {int i,x0,x1,y0,y1;
  x0=x1=poly[0].x;
  y0=y1=poly[0].y;
@@ -1381,6 +1661,8 @@ static void __attribute__((noinline)) wallCell(int pic,XyInt *poly,struct gourTa
      if (poly[i].y<y0) y0=poly[i].y;
      if (poly[i].y>y1) y1=poly[i].y;
     }
+ if (m && (x0<viewXmin || x1>viewXmax || y0<viewYmin || y1>viewYmax))
+    fitFace(m,poly,g);
  x1-=x0;
  y1-=y0;
  i=mapWallPic(pic,x1<y1? x1: y1);
@@ -1476,7 +1758,7 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 #endif
 	       NEARCLIP);
 
- REPAIRNEARGRID(vCalc);
+ FITGRID(vCalc);
 
  tex=theWall->textures;
  row1=0;
@@ -1566,7 +1848,7 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 			gtable.entry[(int)*ppattern]=pts[dh+1][dw].light;
 			poly[(int)*ppattern].x=pts[dh+1][dw].x;
 			poly[(int)*ppattern].y=pts[dh+1][dw].y;
-			wallCell(level_texture[t+1],poly,&gtable);
+			wallCell(level_texture[t+1],poly,&gtable,NULL);
 			nmPolys++;
 		       }
 		 continue;
@@ -1614,7 +1896,7 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
 #if MIPMAP
 		  +tileBias
 #endif
-		  ,poly,&gtable);
+		  ,poly,&gtable,NULL);
 	 nmPolys++;
 	 tex++;
 	}
@@ -1630,6 +1912,7 @@ void drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRecord *s
  XyInt poly[4];
  struct gourTable gtable;
  struct vCalc vCalc[MAXVPERWALL];
+ MeshFace mf;
 #ifndef NDEBUG
  int maxV;
 #endif
@@ -1646,6 +1929,8 @@ void drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRecord *s
 	       wall->lastVertex-wall->firstVertex+1,vCalc,
 	       (nmWallLights||wavyIndex)?&getLight:NULL,NEARCLIP);
  far=wallIsFar(coords,nmWallLights,wavyIndex);
+ mf.wall=wall;
+ mf.view=view;
 
 #ifndef NDEBUG
  maxV=wall->lastVertex-wall->firstVertex+1;
@@ -1692,7 +1977,8 @@ void drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRecord *s
 		UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|DRAW_GOURAU,
 		0,mapPic(level_face[f].tile),poly,&gtable);
 #endif
-     wallCell(level_face[f].tile,poly,&gtable);
+     mf.f=f;
+     wallCell(level_face[f].tile,poly,&gtable,&mf);
      nmPolys++;
     }
 }
@@ -1863,8 +2149,8 @@ static void slaveCmdFlat(XyInt *q,short colour,struct gourTable *g)
 }
 
 /* a textured cell: wallCell and EZ_distSprVClip, all but the tile, which the master maps.  Its
-   size is taken before the range cuts the outline, as wallCell does. */
-static void slaveCmdCell(int pic,XyInt *poly,struct gourTable *g)
+   size is taken before the fit and the range cut the outline, as wallCell does. */
+static void slaveCmdCell(int pic,XyInt *poly,struct gourTable *g,const MeshFace *m)
 {int i,x0,x1,y0,y1,t0,t1;
  struct cmdTable *c;
  x0=x1=poly[0].x;
@@ -1875,6 +2161,8 @@ static void slaveCmdCell(int pic,XyInt *poly,struct gourTable *g)
      if (poly[i].y<y0) y0=poly[i].y;
      if (poly[i].y>y1) y1=poly[i].y;
     }
+ if (m && (x0<viewXmin || x1>viewXmax || y0<viewYmin || y1>viewYmax))
+    fitFace(m,poly,g);
  x1-=x0;
  y1-=y0;
  if (!vdp1Fit(poly,&t0,&t1))
@@ -1988,7 +2276,7 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 #endif
 	       NEARCLIP);
 
- REPAIRNEARGRID(slave_vCalc);
+ FITGRID(slave_vCalc);
 
  tex=theWall->textures;
  row1=0;
@@ -2075,7 +2363,7 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 			gtable.entry[(int)*ppattern]=pts[dh+1][dw].light;
 			poly[(int)*ppattern].x=pts[dh+1][dw].x;
 			poly[(int)*ppattern].y=pts[dh+1][dw].y;
-			slaveCmdCell(level_texture[t+1],poly,&gtable);
+			slaveCmdCell(level_texture[t+1],poly,&gtable,NULL);
 		       }
 		 continue;
 		}
@@ -2115,7 +2403,7 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
 #if MIPMAP
 		      +tileBias
 #endif
-		      ,poly,&gtable);
+		      ,poly,&gtable,NULL);
 	 tex++;
 	}
      row1+=width+1;
@@ -2127,6 +2415,7 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRec
 {int f,i,v,clip,far,black;
  XyInt poly[4];
  struct gourTable gtable;
+ MeshFace mf;
 
  if (wall->lastFace-wall->firstFace+1+nmSlavePolys+50>MAXNMSLAVEPOLYS)
     return;
@@ -2139,6 +2428,8 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRec
 	       wall->lastVertex-wall->firstVertex+1,slave_vCalc,
 	       (snmWallLights||sWavyIndex)?&sgetLight:NULL,NEARCLIP);
  far=wallIsFar(coords,snmWallLights,sWavyIndex);
+ mf.wall=wall;
+ mf.view=view;
 
  for (f=wall->firstFace;f<=wall->lastFace;f++)
     {clip=0x8000;
@@ -2167,7 +2458,8 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRec
 	 f=g;
 	 continue;
 	}
-     slaveCmdCell(level_face[f].tile,poly,&gtable);
+     mf.f=f;
+     slaveCmdCell(level_face[f].tile,poly,&gtable,&mf);
     }
 }
 

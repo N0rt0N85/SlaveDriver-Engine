@@ -245,3 +245,38 @@ instead of a projection of a point that has none. The second puts the straddling
 exactly on the screen edge, which leaves no hole and is the least-stretched position available;
 the residual, ~14% squashed in the same case, is inherent to one sprite per cell. It costs two
 divides per row and runs only on a wall with a corner nearer than the plane (`wallCrossesNear`).
+
+## Cells that leave the view — the affine stretch (supersedes `repairNearRow`)
+
+"The screen edge itself is the optimum" above is wrong. The VDP1 lays a tile over a cell's four
+corners affinely, so with two corners off the view the part left on screen is zoomed `z_e/z_n` —
+`z_e` the depth where the cell's edge leaves the view, `z_n` the off-view corner's. Walking along
+the surface, that zoom grows `1 + z_f/z_n` times faster than it should (`z_f` the corner in view;
+`z_e` stays put): never less than twice, the "texture grows twice too fast" of the console report.
+The edge squeezes the whole tile into the part in view instead: a wall 64 away, a 64 cell,
+jumped from x4.7 to x0.16 as its corner crossed the plane. Floors and ceilings had no repair.
+
+The corner that makes the affine map exact both at the corner in view (A) and where the edge
+leaves the view (e) is `s* = s_A + (s_n - s_A) z_n/z_e`, past `e` on the edge's own line, so the
+part of the edge in view does not move — the projection of `Q = N + A (z_e - z_n)/z_A` at depth
+`z_e`, defined behind the eye too. `fitRow` (WALLS.C) fits both ends of every grid row that
+leaves the view's width — the window's planes, so split screen too (`|x| = z` was solo only) — or
+passes the near plane inside it (a lintel walked under), and every point further out on it.
+
+`s*` is capped. For a corner behind the eye it lands `1 + k` times further out than `e`,
+`k = (z_e - z_n)/z_A` (over 26 with a 256 cell): past a short, and — first — so tall that
+`vdp1Fit`'s V window, which keeps the INTERSECTION of both V edges' intervals, cuts the edge in
+view as well and opens a hole. The corner goes to `s_e + lam (s* - s_e)`, `s_e` the projection of
+`e`, `lam = (z_e - rho z_A)/(rho z_A k)` clamped to [0,1], `rho = max(-ymin, ymax)/VDP1LIM`:
+the cut then stays past the window's top and bottom. No height in it, so a wall's V edges stay
+vertical; continuous across the near plane; `lam < 1` only on cells long against the distance,
+which show squeezed there as before rather than cut.
+
+`fitFace` does it on mesh faces in screen space, `z_n/z_e = r + sg(1 - r)`, for a corner with one
+neighbour in view and the other off it. A fit that switches on or off between two images moves the
+texture of the whole face, the part in view too — the floor jumps — so it eases to nothing over
+16 px (8 units at the near plane) wherever its conditions change, and each moved edge keeps
+off the window by an exact test, the largest share of the fit that does being kept. Left alone:
+a corner further than its anchor (squeezed, not stretched), and a mesh corner behind the plane —
+the face where it has two neighbours in view cannot follow, and the two would part. No command
+added; a corner in front of the plane only comes in, so the VDP1 walks less off the screen there.
