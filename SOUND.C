@@ -183,8 +183,12 @@ void initSound(void)
     {POKE_W(0x20*i+SNDBASE+0x100000+0,0x0000);  /* koff */
      initSlot(i);
     }
- POKE_B(SNDBASE+0x100000+0x217,0xe0); /* make cd audible */
- POKE_B(SNDBASE+0x100000+0x220,0xe0); /* make cd audible */
+ /* make cd audible.  GCC14: the CD's two channels come in as the effect sends of slots 16
+    (left) and 17 (right): byte +0x17 of each, EFSDL 7 and EFPAN hard left / hard right.  The
+    second write went to 0x220, slot 17's key byte, so the right channel stayed at EFSDL 0 and
+    the left one played centred: the music was mono. */
+ POKE_B(SNDBASE+0x100000+0x217,0xff);
+ POKE_B(SNDBASE+0x100000+0x237,0xef);
 
  for (i=0;i<32;i++)
     {slotOwner[i]=-1;
