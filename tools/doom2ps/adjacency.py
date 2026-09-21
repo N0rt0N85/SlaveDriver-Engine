@@ -213,9 +213,30 @@ def _noeuds_troues(M, polys, tol=1.0):
     le point juste au-dela est DANS la carte (derriere un mur a une face, le vide n'est pas un trou).
     C'est la signature du coin que laissent entre elles deux droites voisines, le noeud et le
     linedef -- quelle que soit sa largeur : sur E1M2 il fait moins d'une unite (noeud tire d'un seg
-    arrondi du linedef 917, secteur 141), assez pour que les deux cotes ne s'apparient plus."""
+    arrondi du linedef 917, secteur 141), assez pour que les deux cotes ne s'apparient plus.
+
+    PLUSIEURS noeuds peuvent porter la meme droite (E1M2 : 321 et 330 sur le seg arrondi de 917).
+    Le dictionnaire d'origine n'en gardait que le DERNIER : 330, qui ne borde que la moitie est ;
+    321, le parent de la feuille trouee (ss 322, la nappe 141 face a la passerelle 142), restait
+    decale -- ni portail ni mur cote passerelle, le ciel a travers sur toute la hauteur (console,
+    2026-09-19/21).  Le noeud a recaler est celui qui a TRACE l'arete : un ANCETRE de la feuille
+    trouee.  Le dernier noeud reste recale comme avant, pour ne rien deplacer d'autre."""
     nodes = M["nodes"]
     cle = {line_key(nd.x, nd.y, nd.dx, nd.dy): k for k, nd in enumerate(nodes)}
+    sur_la_droite = defaultdict(list)
+    for k, nd in enumerate(nodes):
+        sur_la_droite[line_key(nd.x, nd.y, nd.dx, nd.dy)].append(k)
+    parent = {}
+    for k, nd in enumerate(nodes):
+        for c in nd.children:
+            parent[c] = k
+
+    def ancetres(ss):
+        out, c = set(), ss | 0x8000
+        while c in parent:
+            c = parent[c]
+            out.add(c)
+        return out
     par_tag = defaultdict(list)
     for pi, p in enumerate(polys):
         if not p or len(p) < 3:
@@ -235,7 +256,7 @@ def _noeuds_troues(M, polys, tol=1.0):
         k = cle[tag]
         echelle = math.hypot(tag[0], tag[1]) or 1.0
         for (a, b, sens, pi, o, (ax, ay, bx, by)) in lst:
-            if k in out or (b - a) / echelle <= tol:
+            if (b - a) / echelle <= tol:
                 continue
             en_face = sorted((a2, b2) for (a2, b2, s2, pj, _o, _s) in lst if pj != pi and s2 != sens)
             trous, pos = [], a
@@ -257,6 +278,7 @@ def _noeuds_troues(M, polys, tol=1.0):
                 L = math.hypot(ex, ey) or 1.0
                 if _dans_la_carte(M, x + o * ey / L * 0.5, y - o * ex / L * 0.5):
                     out.add(k)
+                    out |= ancetres(pi) & set(sur_la_droite[tag])
                     break
     return out
 
