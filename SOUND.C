@@ -82,11 +82,20 @@ static void silenceVoice(void)
 	}
      silentQ[qHead]=slot;
      qHead=(qHead+1)&(SILENCE-1);
-     POKE_W(0x20*slot+SNDBASE+0x100000+0,0x1000);
+     /* GCC14: key off and nothing else.  The word also holds the sample's format and the top of
+	its address, read live while the voice sounds: writing 0x1000 turned a voice still playing
+	(taken 23 sounds after it started) into 16-bit reads from the bottom 64 KB for the ~1 s of
+	its release -- noise, with Doom's 8-bit sounds. */
+     POKE_W(0x20*slot+SNDBASE+0x100000+0,
+	    (PEEK_W(0x20*slot+SNDBASE+0x100000+0) & 0x7ff) | 0x1000);
      slotOwner[slot]=-1;
     }
 }
 
+/* GCC14: the three stops below end with a konex written into slot 0.  It re-read slot "32" --
+   the loop's end, the common register, which reads back 0 -- so slot 0 got silenceVoice's old
+   0x1000: keyed off whatever it was playing, its format and the top of its address cleared.
+   They now re-write slot 0's own word. */
 void stopAllLoopedSounds(void)
 {int i;
  for (i=0;i<32;i++)
@@ -98,7 +107,7 @@ void stopAllLoopedSounds(void)
        }
  /* konex */
  POKE_W(SNDBASE+0x100000+0,
-	PEEK_W(0x20*i+SNDBASE+0x100000) | 0x1000);
+	PEEK_W(SNDBASE+0x100000) | 0x1000);
 }
 
 void stopAllSound(int source)
@@ -113,7 +122,7 @@ void stopAllSound(int source)
     }
  /* konex */
  POKE_W(SNDBASE+0x100000+0,
-	PEEK_W(0x20*i+SNDBASE+0x100000) | 0x1000);
+	PEEK_W(SNDBASE+0x100000) | 0x1000);
 }
 
 void stopSound(int source,int sNm)
@@ -127,7 +136,7 @@ void stopSound(int source,int sNm)
 	}
     }
  POKE_W(SNDBASE+0x100000,
-	PEEK_W(0x20*i+SNDBASE+0x100000) | 0x1000);
+	PEEK_W(SNDBASE+0x100000) | 0x1000);
 }
 
 static int deQVoice(void)
