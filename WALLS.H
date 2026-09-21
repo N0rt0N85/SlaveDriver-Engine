@@ -64,6 +64,7 @@ void wallsSplitAlloc(void);
 void wallsQueueView(int k,MthMatrix *view,Sprite *c);
 void wallsQueueJoin(void);
 int wallsSplitSets(void);
+int wallsSplitNeed(void);        /* GCC14: bytes the missing sets would still take */
 void drawWallsFinish(void);
 void wallRenderSlaveMain(void);
 void startSlave(void *slaveMain);

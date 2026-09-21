@@ -38,6 +38,9 @@
 #include "bigmap.h"
 #include "mplayer.h"
 #include "psmulti.h"
+#include "file.h"
+#include "walls.h"
+#include <sega_scl.h>
 
 /* --- the maps ------------------------------------------------------------------------------
    BIGMAP.C's levelGraph has 31 entries, but the disc holds 24 .LEV files: QUARRY and the six
@@ -152,19 +155,165 @@ static void ps_pickSkin(void)
        }
 }
 
+/* --- the body: Lt. Curtis himself --------------------------------------------------------------
+   tools/psplayer builds it (planche.py cuts the figures out of generated boards, mkdat.py makes
+   PSPLAYER.DAT of them): 64x64 RLE tiles of the sprites' class, frames, chunks and 41 sequences --
+   idle, run, aim, fire, pain, eight views each, then the death.  Loaded at the start of a level
+   played by several, AFTER the split screen's traversal sets (mpLevelBuild), from what they
+   leave: the file holds the body at half resolution then at full (24.9 KB, 81.5 KB), and the
+   best that fits is kept -- the half one is drawn at twice the scale, the same size on screen.
+   Neither fits: the level's monster, as before (psSkins).
+   The sequences are numbered on from the level's (SEQUENCE.H extra_*), so a body carries one in
+   its sprite like any monster.  Its palette is its own, brought onto the level's OBJECT palette
+   once, nearest colour: that palette changes with every level, and it is what the players'
+   tinted banks are built from (PIC.C buildTintedBank). */
+#define PSB_REPOS   0           /* the sequences, eight views each (mkdat.py ANIMS) */
+#define PSB_COURSE  1
+#define PSB_VISEE   2
+#define PSB_TIR     3
+#define PSB_DOULEUR 4
+#define PSB_MORT    40          /* the death: one sequence, every view */
+#define PSB_TICS    3           /* tics a pose is held (planche.py TICS_PAR_POSE) */
+#define PSB_SPARE   (24*1024)   /* left past the body: PowerSlave's own allocations in a level
+				   (Ramses' voice, AI2.C; the map, BIGMAP.C) */
+static int psBodyOn;            /* this level carries the body */
+static Fixed32 psBodyScale;     /* its sprite scale: 48000 full, twice that half */
+static unsigned short psFireTic[MPMAX],psPainTic[MPMAX];   /* on psBodyTic's clock */
+static short psDeadTic[MPMAX];
+
+static void ps_loadBody(void)
+{int hdr[3],var[2][2],room,left,need,pick,fd,i,n,first;
+ int *cnt;
+ unsigned char *buf,*p,remap[256];
+ unsigned short bank0[256];
+ psBodyOn=0;
+ if (!(mpArmed>1 || mpPadsPresent>1) || !fs_exists("+PSPLAYER.DAT"))
+    return;
+ fd=fs_open("+PSPLAYER.DAT");
+ fs_read(fd,(char *)hdr,sizeof(hdr));
+ if (hdr[0]!=0x5053504c || hdr[1]!=1 || hdr[2]!=2)   /* "PSPL", version 1, two variants */
+    {fs_close(fd);
+     return;
+    }
+ fs_read(fd,(char *)var,sizeof(var));  /* {scale, bytes}: the half one, then the full one */
+ room=mem_coreleft(0)>mem_coreleft(1)? mem_coreleft(0): mem_coreleft(1);
+ left=mem_coreleft(0)+mem_coreleft(1);
+ need=wallsSplitNeed()+PSB_SPARE;       /* the views' sets come first */
+ for (pick=1;pick>=0;pick--)
+    if (var[pick][1]<room && left-var[pick][1]>=need)
+       break;
+ if (pick<0 || !(buf=(unsigned char *)mem_nocheck_malloc(0,var[pick][1])))
+    {fs_close(fd);
+     return;
+    }
+ fs_read(fd,(char *)buf,var[0][1]);     /* the file only reads forward: the half one first, */
+ if (pick)
+    fs_read(fd,(char *)buf,var[1][1]);  /* ... and the full one over it */
+ fs_close(fd);
+ cnt=(int *)(buf+512);                  /* tiles, frames, chunks, sequences (records) */
+ if (picRoom()<cnt[0])
+    {mem_free(buf);                     /* the last allocation: it gives the room back */
+     return;
+    }
+ /* its palette onto the level's object palette (bank 0), nearest colour, index 0 = clear --
+    bank 0 copied out of CRAM first: 65 000 comparisons read it, and CRAM is on the B-bus */
+ for (i=0;i<256;i++)
+    bank0[i]=((const unsigned short *)SCL_COLRAM_ADDR)[i];
+ remap[0]=0;
+ for (i=1;i<256;i++)
+    {unsigned short c=((unsigned short *)buf)[i];
+     int r=c & 0x1f,g=(c>>5) & 0x1f,b=(c>>10) & 0x1f,j,d,best=1<<30;
+     remap[i]=1;
+     for (j=1;j<256;j++)
+	{unsigned short o=bank0[j];
+	 int dr=(o & 0x1f)-r,dg=((o>>5) & 0x1f)-g,db=((o>>10) & 0x1f)-b;
+	 d=dr*dr+dg*dg+db*db;
+	 if (d<best)
+	    {best=d;
+	     remap[i]=(unsigned char)j;
+	    }
+	}
+    }
+ p=buf+512+16;
+ first=-1;
+ for (i=0;i<cnt[0];i++)
+    {unsigned char *rle=p+4;
+     int size=*(unsigned short *)p,pos=0,pix=0,k;
+     while (pix<64*64)                  /* PIC.C unRle's walk: <clear run><opaque run><indexes> */
+	{pix+=rle[pos++];
+	 n=rle[pos++];
+	 for (k=0;k<n;k++)
+	    rle[pos+k]=remap[rle[pos+k]];
+	 pos+=n;
+	 pix+=n;
+	}
+     n=picAddSpriteRle(rle);
+     if (first<0)
+	first=n;
+     p+=4+((size+3) & ~3);
+    }
+ extra_frame=(sFrameType *)p;
+ p+=cnt[1]*sizeof(sFrameType);
+ extra_chunk=(sChunkType *)p;
+ for (i=0;i<cnt[2];i++)
+    extra_chunk[i].tile+=first;
+ p+=cnt[2]*sizeof(sChunkType);
+ extra_sequence=(short *)p;
+ extra_nmSequences=cnt[3]-1;
+ psBodyScale=var[pick][0];
+ psBodyOn=1;
+}
+
+/* the body's frame as `viewer` sees it: dead, hurt, firing, running, standing -- in that order */
+static short ps_bodySeq(int k,Sprite *body,Sprite *viewer,int health)
+{int view,saved,seq,f,n;
+ unsigned short t=(unsigned short)((k>=0)? psBodyTic[k]: 0);
+ body->scale=psBodyScale;
+ body->flags&=~SPRITEFLAG_NOSHADOW;     /* a man casts a shadow; a borrowed monster did not */
+ if (health<=0)
+    {seq=PSB_MORT;
+     f=((k>=0)? psDeadTic[k]: 0)/PSB_TICS;
+    }
+ else
+    {saved=body->angle;
+     body->angle=normalizeAngle(body->angle+F(90));
+     view=getFacingAngle(body,viewer);
+     body->angle=saved;
+     if (k>=0 && (unsigned short)(t-psPainTic[k])<2*PSB_TICS)
+	{seq=PSB_DOULEUR; f=0;}
+     else if (k>=0 && (unsigned short)(t-psFireTic[k])<3*PSB_TICS)
+	{seq=PSB_TIR;                   /* the flash first, then the aim held */
+	 f=((unsigned short)(t-psFireTic[k])<PSB_TICS)? 1: 0;
+	}
+     else if (body->vel.x || body->vel.z)
+	{seq=PSB_COURSE; f=t/PSB_TICS;}
+     else
+	{seq=PSB_REPOS; f=0;}
+     seq=seq*8+view;
+    }
+ n=extra_sequence[seq+1]-extra_sequence[seq];
+ if (n<1)
+    return -1;
+ body->frame=(seq==PSB_MORT)? ((f<n)? f: n-1): f%n;
+ return (short)(level_nmSequences+seq);
+}
+
 /* SRUINS.C mpShowBodies, through CFG_MP_BODYSEQ: the frame of player `body` as `viewer` sees
    it.  -1 = nothing drawn -- a dead player (PowerSlave's monsters burst into guts, they leave
    no corpse to borrow) or a level with no skin in it.  The camera's sprite carries the yaw,
    ninety degrees off the sprite convention (AI.C constructPlayer), so it is put back first. */
 short ps_playerBodySeq(Sprite *body,Sprite *viewer,int health)
 {int base,view,saved,seq,nmFrames,k;
- if (health<=0)
-    return -1;
  k=mpIndexOfSprite(body);
+ if (health<=0)                         /* Lt. Curtis falls; a worn monster bursts, as its own do */
+    return (psBodyOn && !(k>=0 && psRoleMt[k]))? ps_bodySeq(k,body,viewer,health): -1;
  if (k>=0 && psRoleMt[k])
     {body->flags|=SPRITEFLAG_NOSHADOW;
+     body->scale=48000;                 /* the monster's own scale (SPRITE.C newSprite) */
      return ps_roleBodySeq(k,body,viewer);      /* it wears a monster, not the level's skin */
     }
+ if (psBodyOn)
+    return ps_bodySeq(k,body,viewer,health);
  if (!psSkin)
     return -1;
  body->flags|=SPRITEFLAG_NOSHADOW;
@@ -287,12 +436,15 @@ void ps_levelPlaced(void)
 
  ps_levelFogColour();           /* before mpLevelBuild's mpSetBanks, which bakes the colour in */
  ps_pickSkin();
+ psBodyOn=0;                    /* ps_loadBody, once every player is built */
  psLevelTics=0;
  psEnding=0;
  for (k=0;k<MPMAX;k++)
     {psLastHurtBy[k]=-1;
      psScored[k]=0;
      psBodyTic[k]=0;
+     psFireTic[k]=psPainTic[k]=(unsigned short)-1000;   /* long ago */
+     psDeadTic[k]=0;
      psRoleMt[k]=0;
      psRoleCool[k]=0;
      psRoleMax[k]=0;
@@ -337,6 +489,7 @@ void ps_levelPlaced(void)
    runs here and not in ps_levelPlaced because a role needs a BODY to move onto the monster. */
 void ps_mpLevelStart(void)
 {int k,prev=mpCur;
+ ps_loadBody();                         /* the traversal sets are in: the body takes what is left */
  if (mpMode!=MP_MONSTERS && mpMode!=MP_BOSS)
     return;
  for (k=0;k<mpPlayers;k++)
@@ -426,6 +579,7 @@ void ps_playerHurt(int hpLost,Object *source)
     psLastHurtBy[mpCur]=(short)from;
  else if (source)
     psLastHurtBy[mpCur]=-2;             /* a monster */
+ psPainTic[mpCur]=(unsigned short)psBodyTic[mpCur];   /* the body flinches (ps_bodySeq) */
  playerHurt(hpLost);
 }
 
@@ -453,6 +607,10 @@ void ps_playerTic(void)
 {if (mpPlayers<2 && !mpCompetitive())
     return;
  psBodyTic[mpCur]++;                    /* the body's animation, one frame a tic like a monster's */
+ if (currentState.health>0)
+    psDeadTic[mpCur]=0;
+ else if (psDeadTic[mpCur]<32767)
+    psDeadTic[mpCur]++;                 /* how far into its fall (ps_bodySeq) */
  if (psRoleCool[mpCur]>0)
     psRoleCool[mpCur]--;
  if (currentState.health<=0 && !psScored[mpCur])
@@ -591,6 +749,16 @@ static int ps_takeOver(int k,int bossOnly)
  mpBody[k]->vel.x=mpBody[k]->vel.y=mpBody[k]->vel.z=0;
  ps_become(k,m->type);
  delayKill((Object *)m);
+ return 1;
+}
+
+/* WEAPON.C fireWeapon (CFG_ROLE_FIRE): the shot shows on the body (ps_bodySeq); a worn monster
+   throws what it throws instead, and the gun does nothing -- 1 */
+int ps_fire(void)
+{psFireTic[mpCur]=(unsigned short)psBodyTic[mpCur];
+ if (!ps_roleNoWeapon())
+    return 0;
+ ps_roleFire();
  return 1;
 }
 

@@ -250,7 +250,7 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_FALL_MIN           F(1)
 #define CFG_LEVEL_PLAYER_INIT()
 #define CFG_RUN_WEAPON(n,i,b)  if (!ps_roleNoWeapon()) runWeapon(n,i,b)   /* a worn monster carries no gun */
-#define CFG_ROLE_FIRE()        (ps_roleNoWeapon()? (ps_roleFire(),1): 0)   /* WEAPON.C fireWeapon: ... it throws what the monster throws */
+#define CFG_ROLE_FIRE()        ps_fire()                         /* WEAPON.C fireWeapon: the body fires; a worn monster throws what it throws */
 #define CFG_PLAYER_HURT(hp,src) ps_playerHurt(hp,(struct __object *)(src))   /* PSMULTI.C: no damage between allies, and the frag goes on a name */
 #define CFG_WOVERLAY_FROM      50
 #define CFG_WFLASH_OVERLAY     0x4000
@@ -413,6 +413,7 @@ int  ps_bossLevel(int l);
 int  ps_bossCount(int l);
 const char *ps_bossName(int l);
 int  ps_roleNoWeapon(void);                              /* WEAPON.C/SRUINS.C: a worn monster */
+int  ps_fire(void);                                      /* WEAPON.C fireWeapon: 1 = a worn monster fired instead */
 void ps_roleFire(void);
 #define CFG_MP_REGISTER()      ps_mpRegister()                   /* PowerSlave's player IS the engine's: nothing more to swap */
 #define CFG_MP_NEWPLAYER()     ps_mpNewPlayer()

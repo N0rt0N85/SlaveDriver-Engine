@@ -19,6 +19,7 @@
 
 #include "art.h"
 #include "dma.h"
+#include "mplayer.h"
 
 #define COMPRESS16BPP 1
 #define MIPMAP 1	/* GCC14: compiled in, gated at runtime by mipEnable -- see WALLS.C */
@@ -282,9 +283,9 @@ void pic_nextFrame(int *swaps,int *used)
        }
 #endif
  if (picLodPx)
-    {wallRank();
-     spriteRank();
-    }
+    wallRank();
+ if (picLodPx || mpPlayers>1)
+    spriteRank();               /* GCC14: the things' rule holds in split screen on every game */
  picLastSmall=picSmall;
  picLastFull=picFull;
  picSmall=picFull=0;
@@ -367,6 +368,16 @@ void resetPics(void)
    not sit in map()'s frame: the next calls' frames overwrote its last row while the DMA was still
    reading it.  Static, and every writer of it or of rleBuffer first waits for the DMA. */
 static unsigned short picBuff[1024*4];
+/* GCC14: tiles a game adds after the level's (PSMULTI.C, the other players' body): room left
+   in the table, and one 64x64 8 bpp RLE tile of the sprites' class */
+int picRoom(void)
+{return MAXNMPICS-nmPics;
+}
+
+int picAddSpriteRle(void *rle)
+{return addPic(TILE8BPP,rle,NULL,PICFLAG_RLE);
+}
+
 /* GCC14: the tile buffer, lent out.  The menus decompress one picture at a time through it
    (MENU.C loadOverPic) instead of keeping the whole set in low RAM; the world is not being
    drawn while a menu is open, so nothing else wants it then. */
@@ -665,8 +676,8 @@ int mapWallPic(int picNm,int size)
 int mapSpritePic(int picNm,int size)
 {Pic *p=pics+picNm;
  int k;
- if (!picLodPx || p->class!=TILE8BPP)
-    return mapPic(picNm);
+ if (!(picLodPx || mpPlayers>1) || p->class!=TILE8BPP)
+    return mapPic(picNm);       /* a game without the rule, alone on the screen: the plain LRU */
  if (p->flags & PICFLAG_ANIM)
     p=pics+level_chunk[animTileChunk[(p->flags>>4)-1]].tile;
  if (size>PIC_ALWAYS)

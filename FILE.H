@@ -7,6 +7,7 @@ void fs_closeProgress(void);
 
 void fs_init(void);
 int fs_open(char *filename);
+int fs_exists(char *filename);  /* GCC14: 1 = on the disc (fs_open asserts it is) */
 void fs_read(int fd, char *buf,int n);
 void fs_close(int fd);
 void fs_getStatus(int *stat,int *ndata);

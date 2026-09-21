@@ -31,6 +31,7 @@ void  ps_drawSplitHud(int view,int nmViews);
    of what a worn monster is -- health, touch, missile, frames -- is psRoles[] in PSMULTI.C. */
 int   ps_roleNoWeapon(void);
 void  ps_roleFire(void);
+int   ps_fire(void);                    /* WEAPON.C fireWeapon: the body fires; 1 = a worn monster did */
 int   ps_isMonsterPlayer(int k);
 int   ps_bossLevel(int l);
 int   ps_bossCount(int l);

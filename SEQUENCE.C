@@ -22,6 +22,10 @@ short *level_sequence;
 sFrameType *level_frame;
 sChunkType *level_chunk;
 short *level_sequenceMap;
+int extra_nmSequences;          /* GCC14: SEQUENCE.H */
+short *extra_sequence;
+sFrameType *extra_frame;
+sChunkType *extra_chunk;
 
 int loadSequences(int fd,int tileBase,int soundBase)
 {int size,i;
@@ -35,6 +39,7 @@ int loadSequences(int fd,int tileBase,int soundBase)
  fs_read(fd,buffer,size);
 
  head=(struct seqHeader *)buffer;
+ extra_nmSequences=0;           /* GCC14: the last level's are gone with its memory */
  level_nmSequences=head->nmSequences;
  level_nmFrames=head->nmFrames;
  level_nmChunks=head->nmChunks;
@@ -282,12 +287,16 @@ int advanceWeaponSequence(int xbase,int ybase,int hack)
 	     XyInt sp[2];
 	     for (cy=0;(sub=picVdp2Sub(c->tile,0,cy))>=0;cy++)
 		for (cx=0;(sub=picVdp2Sub(c->tile,cx,cy))>=0;cx++)
-		   {sp[0].x=((xo+c->chunkx+(cx<<7)-320/2)*vw)/320;
+		   {int pic=mapSpritePic(sub,PIC_ALWAYS);   /* GCC14: the things' slot rule
+							      (PIC.H); -1 = every slot is this image's */
+		    if (pic<0)
+		       continue;
+		    sp[0].x=((xo+c->chunkx+(cx<<7)-320/2)*vw)/320;
 		    sp[0].y=viewYmax+((yo+c->chunky+(cy<<7)-CFG_WCLIP_BOTTOM)*vw)/320;
 		    sp[1].x=(128*vw)/320;
 		    sp[1].y=(128*vw)/320;
 		    EZ_scaleSpr(ZOOM_TL,UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE,
-				overlay,mapPic(sub),sp,NULL);
+				overlay,pic,sp,NULL);
 		    weaponSpriteDrawn++;   /* the overlay's "W:" fourth field */
 		   }
 	     if (hack)

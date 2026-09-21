@@ -2546,6 +2546,13 @@ int wallsSplitSets(void)
 {return splitSets;
 }
 
+/* GCC14: the bytes wallsSplitAlloc would still take to give every view its set -- what a game
+   must leave free when it spends the level's memory before a player joins (PSMULTI.C) */
+int wallsSplitNeed(void)
+{return (splitDC? 0: level_nmWalls*(int)sizeof(struct doorwayCache))+
+	(MPMAX-1-splitSets)*level_nmSectors*(int)(sizeof(SectorDrawRecord)+sizeof(SectorDrawRecord *));
+}
+
 /* a new level: its memory is gone */
 void wallsSplitReset(void)
 {int k;
@@ -3944,7 +3951,10 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
  int chunk,light,x,y,i,j;
  int spriteFog=0,spriteBank=0;
  int flip;
- int frame;
+ int frame,sqn;
+ const short *sq;               /* GCC14: the sequence tables o->sequence reads (SEQUENCE.H) */
+ const sFrameType *fr;
+ const sChunkType *ch;
  Fixed32 width64,scale;
  MthXyz tformed,feetPos;
  XyInt pos[4];
@@ -4202,20 +4212,24 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	}
 
      /* draw sprite */
-     frame=o->frame+level_sequence[o->sequence];
-     for (chunk=level_frame[frame].chunkIndex;
-	  chunk<level_frame[frame+1].chunkIndex;
+     /* GCC14: a sequence past the level's is the game's own (SEQUENCE.H extra_*) */
+     sq=level_sequence; fr=level_frame; ch=level_chunk; sqn=o->sequence;
+     if (sqn>=level_nmSequences)
+	{sqn-=level_nmSequences; sq=extra_sequence; fr=extra_frame; ch=extra_chunk;}
+     frame=o->frame+sq[sqn];
+     for (chunk=fr[frame].chunkIndex;
+	  chunk<fr[frame+1].chunkIndex;
 	  chunk++)
-	{x=level_chunk[chunk].chunkx;
-	 y=level_chunk[chunk].chunky;
+	{x=ch[chunk].chunkx;
+	 y=ch[chunk].chunky;
 	 pos[0].x=feetScreenPos.x+f(scale*x);
 	 pos[0].y=feetScreenPos.y+f(scale*y);
 	 pos[1].x=width64;
 	 pos[1].y=width64;
 	 flip=0;
-	 if (level_chunk[chunk].flags & 1)
+	 if (ch[chunk].flags & 1)
 	    flip|=DIR_LRREV;
-	 if (level_chunk[chunk].flags & 2)
+	 if (ch[chunk].flags & 2)
 	    flip|=DIR_TBREV;
 #if 0
 	 {XyInt p[4];
@@ -4232,12 +4246,12 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	 }
 #endif
 
-	 assert(getPicClass(level_chunk[chunk].tile!=TILEVDP));
+	 assert(getPicClass(ch[chunk].tile!=TILEVDP));
 	 /* GCC14: the tile is asked for once sprRect has kept the chunk: no slot for what is off the
 	    view, and the tile cache's bar ranks only what is drawn (PIC.H mapSpritePic, -1 = left out) */
 	 {int pic;
 
-	  i=getPicClass(level_chunk[chunk].tile);
+	  i=getPicClass(ch[chunk].tile);
 	  if (i!=TILE8BPP && i!=TILESMALL8BPP)
 	     {struct gourTable gtable;
 	      if (i==TILESMALL16BPP)
@@ -4258,7 +4272,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	      gtable.entry[1]=gtable.entry[0];
 	      gtable.entry[2]=gtable.entry[0];
 	      gtable.entry[3]=gtable.entry[0];
-	      if (sprRect(pos) && (pic=mapSpritePic(level_chunk[chunk].tile,width64))>=0)
+	      if (sprRect(pos) && (pic=mapSpritePic(ch[chunk].tile,width64))>=0)
 		 EZ_scaleSpr(ZOOM_TL|flip,
 			     UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|
 			     DRAW_GOURAU|
@@ -4270,7 +4284,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		 {pos[1].x>>=1;
 		  pos[1].y>>=1;
 		 }
-	      if (sprRect(pos) && (pic=mapSpritePic(level_chunk[chunk].tile,width64))>=0)
+	      if (sprRect(pos) && (pic=mapSpritePic(ch[chunk].tile,width64))>=0)
 		 EZ_scaleSpr(ZOOM_TL | flip,
 			     UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE|
 			     ((o->flags & SPRITEFLAG_MESH)? DRAW_MESH: 0),

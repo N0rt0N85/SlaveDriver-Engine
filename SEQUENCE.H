@@ -11,6 +11,13 @@ extern short *level_sequence;
 extern sFrameType *level_frame;
 extern sChunkType *level_chunk;
 extern short *level_sequenceMap;
+/* GCC14: sequences a game adds after the level's own, numbered on from them -- a sprite carries
+   one in o->sequence like any other (WALLS.C drawSprites reads these tables for o->sequence >=
+   level_nmSequences).  PSMULTI.C: the other players' body.  loadSequences resets them. */
+extern int extra_nmSequences;
+extern short *extra_sequence;
+extern sFrameType *extra_frame;
+extern sChunkType *extra_chunk;
 
 /* sequences for the weapons */
 extern short *level_wSequence;

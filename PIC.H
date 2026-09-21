@@ -39,6 +39,9 @@ void delay_dontDisplayVDP2Pic(void);
 void resetPics(void);
 /* GCC14: the tile-upload buffer, lent while the world is not drawn (MENU.C) */
 void *picScratch(int *size);
+/* GCC14: how many more pics the table takes (a game adding tiles of its own: PSMULTI.C) */
+int picRoom(void);
+int picAddSpriteRle(void *rle);  /* ... and one: a 64x64 8 bpp RLE tile of the sprites' class */
 
 void setDrawModeBit(int class,int bit,int onOff);
 

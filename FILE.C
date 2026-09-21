@@ -143,6 +143,18 @@ void fs_init(void)
 #endif
 }
 
+/* GCC14: a file a game may do without (PSMULTI.C PSPLAYER.DAT) -- fs_open would assert */
+int fs_exists(char *filename)
+{
+#ifdef PSYQ
+ return 1;
+#else
+ if (filename[0]=='+')
+    filename++;
+ return GFS_NameToId(filename)>=0;
+#endif
+}
+
 int fs_open(char *filename)
 {int id;
 #ifdef PSYQ
