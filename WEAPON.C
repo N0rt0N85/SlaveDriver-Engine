@@ -155,10 +155,8 @@ static int weaponOK(void)
 void fireWeapon(void)
 {/* GCC14: a player wearing a monster (PSMULTI.C, MPLAYER.H mpRole) fires what the monster
     throws, not what it carries -- it carries nothing. */
- if (ps_roleNoWeapon())
-    {ps_roleFire();
-     return;
-    }
+ if (CFG_ROLE_FIRE())
+    return;
  if (currentWeapon>=WP_NMWEAPONS)
     return;
  if (weaponMaxAmmo[currentWeapon] && !currentState.weaponAmmo[currentWeapon])

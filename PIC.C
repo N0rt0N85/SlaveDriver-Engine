@@ -371,7 +371,9 @@ static unsigned short picBuff[1024*4];
    (MENU.C loadOverPic) instead of keeping the whole set in low RAM; the world is not being
    drawn while a menu is open, so nothing else wants it then. */
 void *picScratch(int *size)
-{if (size)
+{while (dmaActive())            /* the last image's uploads may still be reading it */
+    ;
+ if (size)
     *size=sizeof(picBuff);
  return picBuff;
 }

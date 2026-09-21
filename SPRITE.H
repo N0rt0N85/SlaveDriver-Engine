@@ -189,6 +189,7 @@ void doom_weaponReserve(int k);                      /* player k's gun takes its
 #define CFG_FALL_MIN           0x7fffffff                        /* SRUINS.C:238: no fall damage  */
 #define CFG_LEVEL_PLAYER_INIT() doom_playerInit()                /* SRUINS.C:2010                 */
 #define CFG_RUN_WEAPON(n,i,b)  if (!mapOn) doom_weaponDraw(n)    /* SRUINS.C:2207; no gun over the automap */
+#define CFG_ROLE_FIRE()        0                                 /* WEAPON.C fireWeapon: Doom's roles fire in DOOM_MODES.C */
 #define CFG_PLAYER_HURT(hp,src) doom_playerDamage(hp,(Object *)(src))   /* AI.C:34 player_func  */
 #define CFG_WOVERLAY_FROM      0x7fffffff                        /* SEQUENCE.C:252: no palette swap at wseq 50 */
 #define CFG_WFLASH_OVERLAY     0                                 /* SEQUENCE.C:311: flash = object palette 0   */
@@ -249,6 +250,7 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_FALL_MIN           F(1)
 #define CFG_LEVEL_PLAYER_INIT()
 #define CFG_RUN_WEAPON(n,i,b)  if (!ps_roleNoWeapon()) runWeapon(n,i,b)   /* a worn monster carries no gun */
+#define CFG_ROLE_FIRE()        (ps_roleNoWeapon()? (ps_roleFire(),1): 0)   /* WEAPON.C fireWeapon: ... it throws what the monster throws */
 #define CFG_PLAYER_HURT(hp,src) ps_playerHurt(hp,(struct __object *)(src))   /* PSMULTI.C: no damage between allies, and the frag goes on a name */
 #define CFG_WOVERLAY_FROM      50
 #define CFG_WFLASH_OVERLAY     0x4000

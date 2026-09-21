@@ -116,16 +116,21 @@ int  decompressOverPic(const unsigned char *picData,const unsigned short *pallet
 		       int xsize,int ysize,unsigned short *outData);
 
 void initOverPics(void)
-{int w,h,scratchSize;
- unsigned char *rle=(unsigned char *)picScratch(&scratchSize);
+{
 #ifndef JAPAN
  vramUsed=1024*256;
 #else
  vramUsed=1024*200;
 #endif
- /* GCC14: open the set and step over picture 0, which is resident -- the callers ask for
-    1..40 and the file only reads forward */
- endOverPics();
+ endOverPics();                 /* GCC14: a pass left open is over */
+}
+
+/* GCC14: open the set and step over picture 0, which is resident -- the inventory asks for
+   1..40 next and the file only reads forward.  The inventory's alone: the message boxes call
+   initOverPics too, and draw on picture 0 only -- they must not go to the disc for it. */
+static void openOverPics(void)
+{int w,h,scratchSize;
+ unsigned char *rle=(unsigned char *)picScratch(&scratchSize);
  menuStreamPics=0;
  overFd=fs_open("+INITLOAD.DAT");
  if (overFd<0)
@@ -1118,6 +1123,7 @@ void runInventory(int inventory,int keyMask,int *mapState,
  slidePos[2]=bitScanForward(inventory&0x3f,-1);
  dontDisplayVDP2Pic();
  initOverPics();
+ openOverPics();
  for (i=1;i<41;i++)
     loadOverPic(i);
  endOverPics();                 /* GCC14: the set is in VRAM; the disc is not held open */
