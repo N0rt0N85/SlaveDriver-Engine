@@ -77,7 +77,7 @@ _project_point:
 !	       Fixed32 nearFloor);	! GCC14: last arg, @(48,r14)
 
 !	xref level_vertexLight   -> _level_vertexLight
-!	xref greyTable           -> _greyTable
+!	xref greyTable           -> _worldGrey (UTIL.H: the world reads the tinted ramp)
 	.align 2
 _rectTransform:
 	mov.l r14,@-r15
@@ -229,7 +229,7 @@ _rectTransform:
 !	littab
 .Lrt_vlight:	.long _level_vertexLight	! GCC14: literal pool of rectTransform
 .Lrt_divu:	.long 0xffffff00
-.Lrt_grey:	.long _greyTable
+.Lrt_grey:	.long _worldGrey	! GCC14: the WORLD's ramp -- the fog may have a tint (UTIL.H)
 .Lrt_fog:	.long _fogTable		! GCC14: 256 bytes, indexed by z>>24 (WALLS.C)
 .Lrt_focal:	.long _focalDist
 
@@ -267,7 +267,7 @@ _rectTransform:
 !	       Fixed32 nearFloor);	! GCC14: last arg, kept in r8
 
 !	xref level_vertex        (unused)
-!	xref greyTable           -> _greyTable
+!	xref greyTable           -> _worldGrey (UTIL.H: the world reads the tinted ramp)
 	.align 2
 _normTransform:
 	! r4=sVertexType *vertex
@@ -445,6 +445,6 @@ _normTransform:
 	! GCC14: literals at the end of the section, i.e. right here.
 	.align 2
 .Lnt_divu:	.long 0xffffff00	! GCC14: literal pool of normTransform
-.Lnt_grey:	.long _greyTable
+.Lnt_grey:	.long _worldGrey	! GCC14: the WORLD's ramp -- the fog may have a tint (UTIL.H)
 .Lnt_fog:	.long _fogTable		! GCC14: 256 bytes, indexed by z>>24 (WALLS.C)
 .Lnt_focal:	.long _focalDist

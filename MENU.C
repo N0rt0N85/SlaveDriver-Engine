@@ -13,6 +13,7 @@
 #include "local.h"
 #include "sound.h"
 #include "bup.h"
+#include "picset.h"
 
 #include "weapon.h"
 #include "gamestat.h"
@@ -47,8 +48,22 @@ static int cancelCode,hasCancel;
 
 #define MAXNMPICS 48
 
-static unsigned short *picPals[MAXNMPICS];
-static unsigned int *picDatas[MAXNMPICS];
+/* GCC14: the menu picture set is no longer RESIDENT.  loadPicSet used to read the whole
+   57 KB block into low RAM and lock it there for the run; PowerSlave cannot spare that --
+   a heavy level is left with ten kilobytes, which is why the split screen has neither a gun
+   of its own (PIC.C picWeaponSprites) nor its traversal sets (WALLS.C wallsSplitAlloc).
+   What stays is each picture's SIZE, and picture 0, out of which dlg_addBase rebuilds the
+   backing of every dialogue.  The other forty are read back from the disc, one at a time,
+   when the inventory opens (initOverPics/loadOverPic), straight into VDP1 VRAM. */
+#define PIC0MAX 5120            /* picture 0's compressed bytes (4132 on the retail disc) */
+static short picW[MAXNMPICS],picH[MAXNMPICS];
+static unsigned char picData0[PIC0MAX];
+static unsigned short picPal0[256];
+static unsigned short overPal[256];     /* the palette in force while the set is streamed */
+static int overFd=-1,overLeft,overNext; /* the pass: file, bytes to go, next picture due */
+/* GCC14: what the last pass managed, for the STATUSTEXT overlay ("P:" in SRUINS.C) --
+   <pictures decompressed>,<picture 39's width>.  40,32 is a pass that worked. */
+int menuStreamPics,menuStreamW;
 static int picVram[MAXNMPICS];
 static int vramUsed;
 
@@ -96,25 +111,40 @@ void dlg_centerStuff(void)
     }
 }
 
+void endOverPics(void);
+int  decompressOverPic(const unsigned char *picData,const unsigned short *pallete,
+		       int xsize,int ysize,unsigned short *outData);
+
 void initOverPics(void)
-{
+{int w,h,scratchSize;
+ unsigned char *rle=(unsigned char *)picScratch(&scratchSize);
 #ifndef JAPAN
  vramUsed=1024*256;
 #else
  vramUsed=1024*200;
 #endif
+ /* GCC14: open the set and step over picture 0, which is resident -- the callers ask for
+    1..40 and the file only reads forward */
+ endOverPics();
+ menuStreamPics=0;
+ overFd=fs_open("+INITLOAD.DAT");
+ if (overFd<0)
+    return;
+ overLeft=picSetBegin(overFd);
+ overNext=0;
+ picSetNext(overFd,&overLeft,&w,&h,rle,scratchSize,overPal);
+ overNext=1;
 }
 
-int decompressOverPic(int picNm,unsigned short *outData)
-{unsigned char *picData=(unsigned char *)picDatas[picNm];
- unsigned short *pallete=picPals[picNm];
- int xsize,ysize;
- xsize=*(int *)picData;
- ysize=*(((int *)picData)+1);
- picData+=8;
+/* GCC14: the run-length form the picture set is stored in -- alternating counts, a run of
+   transparent pixels then a run of opaque ones whose palette indexes follow.  Expanded
+   straight into VDP1 VRAM: nothing holds the picture in RAM on either side. */
+int decompressOverPic(const unsigned char *picData,const unsigned short *pallete,
+		      int xsize,int ysize,unsigned short *outData)
+{
  {register int outSize=0,i;
   register int nmPixels=xsize*ysize;
-  register unsigned char *inPos=picData;
+  register const unsigned char *inPos=picData;
   while (outSize<nmPixels)
      {/* decode blank space */
       i=*(inPos++);
@@ -135,10 +165,49 @@ int decompressOverPic(int picNm,unsigned short *outData)
  return xsize*ysize*2;
 }
 
+/* The next picture of the pass, expanded where it will be drawn from.  Called in order, 1..40
+   (runInventory): the file cannot seek (FILE.H), so the set is read front to back. */
 void loadOverPic(int picNm)
-{picVram[picNm]=vramUsed;
- vramUsed+=decompressOverPic(picNm,(unsigned short *)(VRAMSTART+vramUsed));
+{int w,h,size,scratchSize;
+ unsigned char *rle=(unsigned char *)picScratch(&scratchSize);
+ if (overFd<0)
+    return;
+ assert(picNm==overNext);
+ size=picSetNext(overFd,&overLeft,&w,&h,rle,scratchSize,overPal);
+ overNext++;
+ picVram[picNm]=vramUsed;       /* set FIRST: a picture that does not arrive must be drawn
+				   from somewhere harmless, not from whatever picVram held */
+ if (size<0 || w<=0 || h<=0 || w*h*2>512*1024-vramUsed)
+    {picW[picNm]=0;             /* nothing to draw: plotOverPicW gets a zero-sized sprite */
+     picH[picNm]=0;
+     return;
+    }
+ picW[picNm]=(short)w;
+ picH[picNm]=(short)h;
+ vramUsed+=decompressOverPic(rle,overPal,w,h,
+			     (unsigned short *)(VRAMSTART+vramUsed));
+ menuStreamPics++;
  assert(vramUsed<512*1024);
+}
+
+/* GCC14: a clean copy of a picture the inventory is about to scribble over.  It used to be
+   decompressed a second time from the resident set; the set is not resident any more, and the
+   copy loadOverPic already put in VDP1 VRAM is the same pixels -- taken back before whatever
+   is about to overwrite them does. */
+void grabOverPic(int picNm,unsigned short *out)
+{int i,n=picW[picNm]*picH[picNm];
+ const volatile unsigned short *v=
+    (const volatile unsigned short *)(VRAMSTART+picVram[picNm]);
+ for (i=0;i<n;i++)
+    out[i]=v[i];
+}
+
+/* the pass is over: the disc is not held open across the menu */
+void endOverPics(void)
+{menuStreamW=picW[39];
+ if (overFd>=0)
+    fs_close(overFd);
+ overFd=-1;
 }
 
 typedef struct
@@ -152,10 +221,10 @@ int loadOverBase(unsigned char *picData,unsigned short *pallete,int xsize,
  extern unsigned short doorwayCache;
  unsigned short *tempData=&doorwayCache;
  checkStack();
- width=*(int *)picData;
- height=*(((int *)picData)+1);
+ width=picW[0];                 /* GCC14: the picture is pure RLE now, its size is tabled */
+ height=picH[0];
  assert(width*height<=1024*4);
- decompressOverPic(0,tempData);
+ decompressOverPic(picData,pallete,width,height,tempData);
  txstart=MTH_GetRand() % (width-1);
  ty=MTH_GetRand() % (height-1);
  txstart=0;
@@ -267,17 +336,17 @@ void plotOverPicW(int x,int y,int w,int h,int vram,int drawWord)
 }
 
 void plotOverPic(int x,int y,int picNm)
-{plotOverPicW(x,y,*(int *)picDatas[picNm],*(((int *)picDatas[picNm])+1),
+{plotOverPicW(x,y,picW[picNm],picH[picNm],
 	      picVram[picNm],COLOR_5|ECD_DISABLE);
 }
 
 void plotOverPicShadow(int x,int y,int picNm)
-{plotOverPicW(x,y,*(int *)picDatas[picNm],*(((int *)picDatas[picNm])+1),
+{plotOverPicW(x,y,picW[picNm],picH[picNm],
 	      picVram[picNm],COLOR_5|ECD_DISABLE|COMPO_SHADOW);
 }
 
 void plotOverPicHarf(int x,int y,int picNm)
-{plotOverPicW(x,y,*(int *)picDatas[picNm],*(((int *)picDatas[picNm])+1),
+{plotOverPicW(x,y,picW[picNm],picH[picNm],
 	      picVram[picNm],COLOR_5|ECD_DISABLE|COMPO_TRANS);
 }
 
@@ -289,9 +358,25 @@ void dlg_clear(void)
  fontHeight=getFontHeight(DLGFONT);
 }
 
+/* One pass over the set at boot: every picture's size, and picture 0 kept.  Nothing is
+   allocated, so there is nothing left to lock -- the caller's mem_lock stays for the text
+   that loadLocalText puts under it. */
 void dlg_init(int fd)
-{loadPicSet(fd,picPals,picDatas,MAXNMPICS);
- mem_lock();
+{int w,h,size,scratchSize,left,pic;
+ unsigned char *rle=(unsigned char *)picScratch(&scratchSize);
+ left=picSetBegin(fd);
+ for (pic=0;pic<MAXNMPICS;pic++)
+    {size=picSetNext(fd,&left,&w,&h,rle,scratchSize,overPal);
+     if (size<0)
+	break;
+     picW[pic]=(short)w;
+     picH[pic]=(short)h;
+     if (pic==0)
+	{assert(size<=PIC0MAX);
+	 memcpy(picData0,rle,size);
+	 memcpy(picPal0,overPal,sizeof(picPal0));
+	}
+    }
  dlg_clear();
 }
 
@@ -300,7 +385,7 @@ void dlg_addBase(int x,int y,int w,int h,BevelData *bevel,int nmBevels)
  texY=y;
  texWidth=w;
  texHeight=h;
- texVramPos=loadOverBase((char *)(picDatas[0]),picPals[0],w,h,bevel,
+ texVramPos=loadOverBase((char *)picData0,picPal0,w,h,bevel,
 			 nmBevels);
 }
 
@@ -1035,6 +1120,7 @@ void runInventory(int inventory,int keyMask,int *mapState,
  initOverPics();
  for (i=1;i<41;i++)
     loadOverPic(i);
+ endOverPics();                 /* GCC14: the set is in VRAM; the disc is not held open */
 
  data=lastInputSample;
  lastData=data;
@@ -1044,22 +1130,22 @@ void runInventory(int inventory,int keyMask,int *mapState,
  dlg_addBase(-INVWIDTH/2,-INVHEIGHT/2,INVWIDTH,INVHEIGHT,inventoryBevel,3);
  selectedButton=0;
 
- commScreenSize=(*(int *)picDatas[39]) * *(((int *)picDatas[39])+1);
+ commScreenSize=picW[39]*picH[39];
  if (fade)
     {selectedButton=fadeButton;
      if (fadeButton!=3)
 	slidePos[selectedButton]=fadeSelection;
      fadePic=inventoryPicStart[selectedButton]+fadeSelection;
      fadeReg=1;
-     fadeWidth=*(int *)picDatas[fadePic];
-     fadeHeight=*(((int *)picDatas[fadePic])+1);
+     fadeWidth=picW[fadePic];
+     fadeHeight=picH[fadePic];
      fadeSize=fadeWidth*fadeHeight;
      fadeCount=0;
      dustHead=dustTail=0;
+     grabOverPic(fadePic,tempData);     /* GCC14: before the erase below takes it */
      for (i=0;i<fadeSize*2;i+=2)
 	{POKE_W(VRAMSTART+picVram[fadePic]+i,0);
 	}
-     decompressOverPic(fadePic,tempData);
      {struct soundSlotRegister ssr;
       initSoundRegs(level_staticSoundMap[ST_INTERFACE]+2,0,0,&ssr);
       ssr.reg[4]=(0<<11)+(16<<6)+5; /* dd2r, d1r, and ar */
@@ -1182,8 +1268,8 @@ void runInventory(int inventory,int keyMask,int *mapState,
 	 if (selectedButton!=3)
 	    {/* do normal pictures */
 	     p=inventoryPicStart[selectedButton]+slidePos[selectedButton];
-	     px=PICX-((*(int *)picDatas[p])>>1);
-	     py=PICY-((*(((int *)picDatas[p])+1))>>1);
+	     px=PICX-(picW[p]>>1);
+	     py=PICY-(picH[p]>>1);
 	     if (selectedButton!=4)
 		plotOverPicShadow(px+2,py+2,p);
 	     plotOverPic(px,py,p);
@@ -1210,7 +1296,7 @@ void runInventory(int inventory,int keyMask,int *mapState,
 	     if (!fade && (currentState.inventory&INV_TRANSMITTER)==0xff0000)
 		{/* unsigned short *pallete=picPals[38]; */
 		 if (!gotScreenPic)
-		    {decompressOverPic(39,tempData);
+		    {grabOverPic(39,tempData);
 		     gotScreenPic=1;
 		    }
 		 if (staticCount)

@@ -129,6 +129,11 @@ void switchWeapons(int on)
 }
 
 /* GCC14: the engine weapon's state belongs to a player (MPLAYER.H) */
+/* GCC14: the weapon machine asks "is fire still held?" in five places -- the sword's swing,
+   the ring's charge, the flamer's burn and the Ra-Volt's hold.  It asked `lastInputSample`,
+   which is PAD 1: in split screen every player's weapon obeyed player 1's button, so nobody
+   else could swing, charge or keep burning.  lastInputSampleP[mpCur] is the loaded player's
+   own sample, and lastInputSampleP[0] IS lastInputSample (V_BLANK.C), so solo is unchanged. */
 void weaponMpRegister(void)
 {MPREG(weaponPos); MPREG(weaponVel); MPREG(currentWeapon);
  MPREG(grenadeHoldTime); MPREG(swordForeSwing); MPREG(recoverInProgress);
@@ -148,7 +153,13 @@ static int weaponOK(void)
 }
 
 void fireWeapon(void)
-{if (currentWeapon>=WP_NMWEAPONS)
+{/* GCC14: a player wearing a monster (PSMULTI.C, MPLAYER.H mpRole) fires what the monster
+    throws, not what it carries -- it carries nothing. */
+ if (ps_roleNoWeapon())
+    {ps_roleFire();
+     return;
+    }
+ if (currentWeapon>=WP_NMWEAPONS)
     return;
  if (weaponMaxAmmo[currentWeapon] && !currentState.weaponAmmo[currentWeapon])
     {int w;
@@ -349,7 +360,7 @@ static void weaponFire(void)
 	 hand^=1;
 
 	 if (currentState.weaponAmmo[WP_RING] &&
-	     !(lastInputSample & IMASK(ACTION_FIRE)))
+	     !(lastInputSampleP[mpCur] & IMASK(ACTION_FIRE)))
 	    currentState.weaponAmmo[WP_RING]--;
 	 else
 	    {if (weaponSequenceQEmpty())
@@ -502,7 +513,7 @@ static void weaponFire(void)
 	    }
 	 playStaticSound(ST_FLAMER,2);
 
-	 if (!(lastInputSample & IMASK(ACTION_FIRE)))
+	 if (!(lastInputSampleP[mpCur] & IMASK(ACTION_FIRE)))
 	    currentState.weaponAmmo[WP_FLAMER]--;
 	 else
 	    {clearWeaponQ();
@@ -856,7 +867,7 @@ void runWeapon(int nmFrames,int invisible,int boost)
 
      if (currentWeapon==WP_SWORD &&
 	 getCurrentWeaponSequence()==-1)
-	{if (!(lastInputSample & IMASK(ACTION_FIRE)))
+	{if (!(lastInputSampleP[mpCur] & IMASK(ACTION_FIRE)))
 	    {swordForeSwing=!swordForeSwing;
 	     recoverInProgress=0;
 	     fireWeapon();
@@ -876,7 +887,7 @@ void runWeapon(int nmFrames,int invisible,int boost)
      if (currentWeapon==WP_RAVOLT &&
 	 getCurrentWeaponSequence()==weaponMap[WP_RAVOLT]+3 &&
 	 getWeaponSequenceQSize()==0)
-	if (lastInputSample & IMASK(ACTION_FIRE))
+	if (lastInputSampleP[mpCur] & IMASK(ACTION_FIRE))
 	   {queueWeaponSequence(weaponMap[WP_RAVOLT]+4,
 				weaponCenter[WP_RAVOLT].x,
 				weaponCenter[WP_RAVOLT].y);
@@ -908,7 +919,7 @@ void runWeapon(int nmFrames,int invisible,int boost)
 
      if (currentWeapon==WP_GRENADE &&
 	 getCurrentWeaponSequence()==-1)
-	if (lastInputSample & IMASK(ACTION_FIRE))
+	if (lastInputSampleP[mpCur] & IMASK(ACTION_FIRE))
 	   {queueWeaponSequence(weaponMap[WP_GRENADE]+4,
 				weaponCenter[WP_GRENADE].x,
 				weaponCenter[WP_GRENADE].y-17);

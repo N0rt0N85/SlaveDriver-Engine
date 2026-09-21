@@ -151,15 +151,18 @@ static const unsigned char mpTimeChoice[5]={0,5,10,15,20};
 static unsigned char mpMenuTeam[MPMAX]={0,1,0,1};
 static unsigned char mpMenuRole[MPMAX]={0,1,0,1};
 static unsigned char mpMenuBoss[MPMAX]={0,1,0,1};
+static int mpMenuPlayers;       /* the count the screen showed last: mpArmed goes back to 1 as
+				   soon as a one-player game starts, and the screen still remembers */
 int mpSkill=CFG_MP_SKILLDEFAULT;
 
 static int mpRowShown(int r,int players,int multi)
 {if (!multi)
-    return r==MR_SKILL || r==MR_PLAYERS || r==MR_START || r==MR_BACK;
+    return (r==MR_SKILL && CFG_MP_NMSKILLS>1) || r==MR_PLAYERS || r==MR_START || r==MR_BACK;
  if (r==MR_BOSS)
     return mpMode==MP_BOSS;
  if (r==MR_SKILL)
-    return mpMode==MP_COOP || mpMode==MP_MONSTERS || mpMode==MP_HORDE;   /* the modes with monsters */
+    return CFG_MP_NMSKILLS>1 &&
+	   (mpMode==MP_COOP || mpMode==MP_MONSTERS || mpMode==MP_HORDE);   /* the modes with monsters, in a game that has skills */
  if (r==MR_FRAGS || r==MR_TIME)
     return mpCompetitive();
  if (r>=MR_P1 && r<MR_P1+MPMAX)
@@ -278,7 +281,7 @@ static int mpGameMenu(int multi)
  char text[40];
  if (!multi)
     mpMode=MP_COOP;
- players=(mpArmed>1)? mpArmed: (multi && mpPadsPresent>1)? mpPadsPresent: lo;
+ players=(mpMenuPlayers>1)? mpMenuPlayers: (multi && mpPadsPresent>1)? mpPadsPresent: lo;
  if (players>MPMAX)
     players=MPMAX;
  level=multi? mpStartLevel: 0;
@@ -353,7 +356,7 @@ static int mpGameMenu(int multi)
 	continue;
      playSound(0,1);
      switch (row)
-	{case MR_MODE:    mpMode=mpCycle(mpMode,MP_NMMODES,d); break;
+	{case MR_MODE:    mpMode=mpCycle(mpMode,CFG_MP_NMMODES,d); break;   /* a game may not have them all (SPRITE.H) */
 	 case MR_SKILL:   mpSkill=mpCycle(mpSkill,CFG_MP_NMSKILLS,d); break;
 	 case MR_PLAYERS: players=lo+mpCycle(players-lo,MPMAX+1-lo,d); break;
 	 case MR_MAP:     level=mpNextLevel(level,d); break;
@@ -385,6 +388,7 @@ static int mpGameMenu(int multi)
  if (!mpCompetitive())
     mpFragLimit=mpTimeLimit=0;
  mpArmed=players;
+ mpMenuPlayers=players;
  mpStartLevel=level;
  fadeEnd=0;
  fadeDir=5;
@@ -402,6 +406,7 @@ int mpNewGameMenu(void)
 /* A new game from the title's own path (PowerSlave's, a loaded game): one player's rules */
 void mpSoloRules(void)
 {int k;
+ mpArmed=1;                     /* a game the multiplayer screen did not arm is one player's */
  mpMode=MP_COOP;
  mpStartLevel=0;
  mpFragLimit=mpTimeLimit=0;
@@ -487,11 +492,12 @@ void mpIntermission(const char *title,int seconds,int tics)
  for (t=0;!tics || t<tics;t++)
     {EZ_openCommand();
      EZ_sysClip();
-     EZ_localCoord(320/2,224/2);
-     quad[0].x=-160; quad[0].y=-112;
-     quad[1].x=159;  quad[1].y=-112;
-     quad[2].x=159;  quad[2].y=111;
-     quad[3].x=-160; quad[3].y=111;
+     /* GCC14: the frame's own centre -- 224 lines under Doom, 240 under PowerSlave (SPRITE.H) */
+     EZ_localCoord(320/2,CFG_YCENTER);
+     quad[0].x=-160; quad[0].y=-CFG_YCENTER;
+     quad[1].x=159;  quad[1].y=-CFG_YCENTER;
+     quad[2].x=159;  quad[2].y=CFG_YCENTER-1;
+     quad[3].x=-160; quad[3].y=CFG_YCENTER-1;
      EZ_polygon(ECDSPD_DISABLE|COLOR_5,RGB(0,0,0),quad,NULL);
      mpTextCentred(-92,1,title);
      sprintf(text,"TIME %d:%02d",seconds/60,seconds%60);

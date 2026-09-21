@@ -122,6 +122,10 @@ ifeq ($(shell $(PYTHON) tools/gameparams.py --get GAME $(PARAMS)),doom)
   GAME_CFLAGS  := -ffunction-sections -fdata-sections
   MAIN_LDFLAGS  = -Wl,--gc-sections $$($(PYTHON) tools/sbl_refs.py --roots $(NM) $(LIBDIR)/SEGA_SAT.A $(filter %.o,$^))
   MAIN_GCCHECK := 1
+else
+  # PowerSlave's own runtime answers the CFG_MP_* hooks from PSMULTI.C, as game/doom does on
+  # Doom's (SPRITE.H).  It is the game's file, not the engine's, so it joins MAIN only here.
+  GAME_C   := PSMULTI
 endif
 
 # ---------------------------------------------------------------------------------------------
@@ -198,7 +202,7 @@ INIT_C       := DMA FILE INITMAIN LOCAL MOV PICSET PRINT SOUND SPR UTIL $(COMMON
 MAIN_C       := AI AI2 AICOMMON ART BIGMAP BUP DMA FILE HITSCAN INTRO LOCAL MAP MENU OBJECT PIC \
                 PICSET PLAX PRINT PROFILE ROUTE SEQUENCE SOUND SPR SPRITE SRUINS UTIL WEAPON $(COMMON4) WALLS MPLAYER MPRULES MPSKY   CRASH $(PLAYER_C)
 KEYGEN_C     := DMA FILE KEYGEN LOCAL MOV PICSET PRINT SOUND SPR UTIL LEVEL SCL_FUNC SCL_VBLV V_BLANK
-MAIN_C       += $(GAME_C)              # game/doom/*.C when GAME = doom (empty otherwise)
+MAIN_C       += $(GAME_C)              # game/doom/*.C when GAME = doom, PSMULTI otherwise
 vpath %.C game/doom
 
 # crt0 first (its .text.crt0 section is placed first by saturn.ld anyway, but keep the order

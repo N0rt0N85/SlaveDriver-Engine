@@ -141,6 +141,48 @@ unsigned short greyTable[33]=
  0x8000|(31<<10)|(31<<5)|31
  };
 
+/* GCC14: the world's ramp, neutral until a level gives the fog a tint (UTIL.H). */
+unsigned short worldGrey[33]=
+{0x8000,
+ RGB( 1, 1, 1),RGB( 2, 2, 2),RGB( 3, 3, 3),RGB( 4, 4, 4),RGB( 5, 5, 5),RGB( 6, 6, 6),
+ RGB( 7, 7, 7),RGB( 8, 8, 8),RGB( 9, 9, 9),RGB(10,10,10),RGB(11,11,11),RGB(12,12,12),
+ RGB(13,13,13),RGB(14,14,14),RGB(15,15,15),RGB(16,16,16),RGB(17,17,17),RGB(18,18,18),
+ RGB(19,19,19),RGB(20,20,20),RGB(21,21,21),RGB(22,22,22),RGB(23,23,23),RGB(24,24,24),
+ RGB(25,25,25),RGB(26,26,26),RGB(27,27,27),RGB(28,28,28),RGB(29,29,29),RGB(30,30,30),
+ RGB(31,31,31),RGB(31,31,31)
+};
+
+unsigned char fogColour[3];
+unsigned short fogFar=RGB(0,0,0);
+unsigned short fogFloorGour;
+
+/* One channel at light level i, 0..16: the fog's colour at no light, the surface's own at 16,
+   straight between.  c = 0 gives i back, so a black fog IS the original ramp. */
+static int fogRamp(int i,int c)
+{int v=c+(((16-c)*i)>>4);
+ if (v<0) v=0;
+ if (v>31) v=31;
+ return v;
+}
+
+void setFogColour(int r,int g,int b)
+{int i;
+ r=CLAMP(r,0,15);                       /* 16 would be a fog that changes nothing */
+ g=CLAMP(g,0,15);
+ b=CLAMP(b,0,15);
+ fogColour[0]=(unsigned char)r;
+ fogColour[1]=(unsigned char)g;
+ fogColour[2]=(unsigned char)b;
+ for (i=0;i<=16;i++)
+    worldGrey[i]=RGB(fogRamp(i,r),fogRamp(i,g),fogRamp(i,b));
+ for (;i<33;i++)
+    worldGrey[i]=greyTable[i];
+ fogFar=RGB(r,g,b);
+ /* the asm clears bit 15 on a vertex it did not clip (wallasm_gnu.s .Lrt_retFromLit), so the
+    floor of the ramp reaches the gouraud table as this -- 0 when the fog is black */
+ fogFloorGour=worldGrey[0] & 0x7fff;
+}
+
 #if 0
 void setGreyTableBalance(int r,int g,int b) /* 0-31 */
 {int i;

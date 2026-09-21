@@ -41,6 +41,8 @@ void runInventory(int inventory,int keyMask,int *mapState,
 		  int fade,int fadeButton,int fadeSelection);
 
 void dlg_init(int fd);
+/* GCC14: what the menu picture stream managed last time (SRUINS.C overlay "P:") */
+extern int menuStreamPics,menuStreamW;
 
 void dlg_setupSlideIn(void);
 void dlg_setupSlideOut(void);

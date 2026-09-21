@@ -225,7 +225,7 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_TIC_CAP          8
 #define CFG_PLACE(t)         0
 #define CFG_ENGINE_PLACE
-#define CFG_PLAYER_TIC()
+#define CFG_PLAYER_TIC()     ps_playerTic()      /* PSMULTI.C: the round's limits, and a death counted */
 #define CFG_DOOR_FIT         80
 #define CFG_SPRITE_NEARCLIP  F(32)
 #define CFG_LIFT_RESET(o)
@@ -247,8 +247,8 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_BOWLDOTS()         redrawBowlDots()
 #define CFG_FALL_MIN           F(1)
 #define CFG_LEVEL_PLAYER_INIT()
-#define CFG_RUN_WEAPON(n,i,b)  runWeapon(n,i,b)
-#define CFG_PLAYER_HURT(hp,src) playerHurt(hp)
+#define CFG_RUN_WEAPON(n,i,b)  if (!ps_roleNoWeapon()) runWeapon(n,i,b)   /* a worn monster carries no gun */
+#define CFG_PLAYER_HURT(hp,src) ps_playerHurt(hp,(struct __object *)(src))   /* PSMULTI.C: no damage between allies, and the frag goes on a name */
 #define CFG_WOVERLAY_FROM      50
 #define CFG_WFLASH_OVERLAY     0x4000
 #define CFG_ENGINE_FIRE        1
@@ -302,6 +302,20 @@ short doom_playerBodySeq(Sprite *body,Sprite *viewer,int health);
 #define CFG_MP_BODYSEQ(b,v,h) doom_playerBodySeq(b,v,h)       /* SRUINS.C mpShowBodies: the frame of a player's body seen from a view */
 const unsigned char *doom_playerTranslation(int k);
 #define CFG_MP_TRANSLATION(k) doom_playerTranslation(k)          /* MPLAYER.C mpSetBanks: player k's palette remap, NULL = none */
+#define CFG_MP_TINT(k)        0                                  /* ... or a colour filter, when the game has no ramp to remap (PowerSlave) */
+#define CFG_MP_BANKS          {7,5,4}                            /* ... the CRAM banks it may take: the sky's, the spectre's, the last fog step */
+#define CFG_MP_FOGBANKS(e)    ((e)>=3? 4: (e)==2? 5: NMOBJECTPALLETES)   /* ... what is left for buildObjectFogBanks */
+/* GCC14: the split sky (MPSKY.C).  STORM = it throws bolts and sheets of lightning; DISC = the
+   thing hanging in it, 0 = a dark moon with its seas, 1 = a bright sun.  Doom's night sky keeps
+   both; PowerSlave is Egypt in daylight and wants neither storm nor moon. */
+#define CFG_SKY_STORM          1
+#define CFG_SKY_SUN            0
+/* GCC14: how many lines the split layout covers (SRUINS.C mpViewGeometry).  Solo leaves the
+   bottom of the screen to the status bar; in split there is no bar, so whatever the views do
+   not cover is a hole.  Doom's 3-4 player quadrants already reach the bottom; its 2-player
+   halves stop at 192 and leave 32 lines empty -- kept as it is, because that layout is tuned.
+   Raise it to CFG_YCENTER*2 to close Doom's hole too. */
+#define CFG_SPLIT_H            192
 /* GCC14: game modes (MPLAYER.H mpMode; the rules in game/doom/DOOM_MODES.C) */
 const char *doom_levelLabel(int l);
 int  doom_bossLevel(int l);
@@ -314,6 +328,7 @@ int  doom_bossCount(int l);
 const char *doom_bossName(int l);
 void doom_levelEnd(int action);
 #define CFG_MP_MENU            1                                 /* INTRO.C: the title's MULTIPLAYER button */
+#define CFG_MP_NEWGAME_MENU    1                                 /* ... and NEW GAME opens the skill/players screen: Doom never saves */
 #define CFG_GFX_OPTIONS        1                                 /* INTRO.C optionMenu: FOG and LIGHTS (WALLS.H) */
 #define CFG_LIGHT_MENU()       doom_lightMenu()                  /* ... LIGHTS opens the tuner  */
 #define CFG_MENU_PITCH         24                                /* INTRO.C: four title buttons fit the screen */
@@ -324,6 +339,7 @@ void doom_levelEnd(int action);
 #define CFG_MP_BOSSNAME(l)     doom_bossName(l)                  /* ... and what they are (bigFont's letters) */
 #define CFG_MP_MONSTERS_NAME   "DEMONS"
 #define CFG_MP_MONSTER_ROLE    "DEMON"
+#define CFG_MP_NMMODES         MP_NMMODES                        /* MPRULES.C mpMenu: every mode */
 const char *doom_skillName(int s);
 extern unsigned char doomSectorDamage[];
 #define CFG_MP_NMSKILLS        4                                 /* Doom's but NIGHTMARE */
@@ -347,6 +363,8 @@ extern unsigned char doomSectorDamage[];
 #define CFG_ROUTE_INIT()       ((void)0)                         /* SRUINS.C:1987                 */
 #define CFG_CAMEL              0                                 /* SRUINS.C:2439                 */
 #define CFG_RUN_MAP(l)         (l)                               /* SRUINS.C:2656                 */
+#define CFG_START_LEVEL()      mpStartLevel                      /* SRUINS.C: straight into doomLevelNames[], no map screen */
+#define CFG_LEVEL_PLACED()                                       /* SRUINS.C: Doom adds its spots as it places (DOOM_MODES.C doom_modePlace) */
 #else
 #define CFG_NMFONTS            3
 #define CFG_FONTLIST_DEF       static unsigned char *fontList[]={brianFont,brianFont,bigFont,NULL};
@@ -364,32 +382,71 @@ extern unsigned char doomSectorDamage[];
 #define CFG_BOWLDOTS_GUARD
 #define CFG_DRAW_MESSAGE()
 #define CFG_DRAW_STATBAR(f)    drawStatBar(f)
-#define CFG_MP_REGISTER()                                        /* the engine's player is all PowerSlave has */
-#define CFG_MP_NEWPLAYER()
-#define CFG_DRAW_SPLITHUD(k,n)
-#define CFG_MP_BODYSEQ(b,v,h) (-1)                              /* PowerSlave has no body to show */
-#define CFG_MP_TRANSLATION(k) ((const unsigned char *)0)
-#define CFG_MP_MENU            0                                 /* PowerSlave has no multiplayer game */
+/* Local multiplayer on PowerSlave's own runtime (PSMULTI.C).  The engine's service is the same
+   one Doom uses; what a game must bring is a body, a colour, a HUD that fits a quarter of the
+   screen, spawn spots and a score.  PowerSlave brought none of them -- see PSMULTI.C's head.
+   The modes stop at MP_MONSTERS: co-operation, deathmatch and teams need nothing of the game
+   but its own rules, while a player WEARING a monster needs that monster's attack, and
+   PowerSlave's attacks are written one by one inside each AI function (AI.C), not in a table
+   like Doom's info.c.  Until they are, the multiplayer screen does not offer what is not
+   there. */
+struct __object;
+void ps_mpRegister(void);
+void ps_mpNewPlayer(void);
+void ps_drawSplitHud(int view,int nmViews);
+short ps_playerBodySeq(struct __sprite *body,struct __sprite *viewer,int health);
+int  ps_playerTint(int k);
+const char *ps_levelLabel(int l);
+int  ps_startLevel(void);
+void ps_levelPlaced(void);
+void ps_mpRespawned(int k);
+void ps_mpJoined(int k);
+void ps_levelEnd(int action);
+void ps_playerTic(void);
+void ps_playerHurt(int hpLost,struct __object *source);
+void ps_mpLevelStart(void);
+int  ps_mpRespawnHold(int k);
+int  ps_bossLevel(int l);
+int  ps_bossCount(int l);
+const char *ps_bossName(int l);
+int  ps_roleNoWeapon(void);                              /* WEAPON.C/SRUINS.C: a worn monster */
+void ps_roleFire(void);
+#define CFG_MP_REGISTER()      ps_mpRegister()                   /* PowerSlave's player IS the engine's: nothing more to swap */
+#define CFG_MP_NEWPLAYER()     ps_mpNewPlayer()
+#define CFG_DRAW_SPLITHUD(k,n) ps_drawSplitHud(k,n)
+#define CFG_MP_BODYSEQ(b,v,h)  ps_playerBodySeq(b,v,h)           /* a monster of the level, worn as a skin */
+#define CFG_MP_TRANSLATION(k)  ((const unsigned char *)0)        /* no fixed ramp: the object palette changes every level */
+#define CFG_MP_TINT(k)         ps_playerTint(k)                  /* ... a colour filter on a CRAM bank instead */
+#define CFG_MP_BANKS           {5,4,3}                           /* NOT bank 7: SEQUENCE.C loads the grenade and manacle palettes there */
+#define CFG_MP_FOGBANKS(e)     (NMOBJECTPALLETES-(e))            /* ... so the banks come off the fog's top instead */
+#define CFG_SKY_STORM          0                                /* no lightning over the desert */
+#define CFG_SKY_SUN            1                                /* ... and a sun, not a moon */
+#define CFG_SPLIT_H            (CFG_YCENTER*2)                  /* no status bar in split: the views take the screen */
+#define CFG_MP_MENU            1                                 /* INTRO.C: the title's MULTIPLAYER button */
+#define CFG_MP_NEWGAME_MENU    0                                 /* ... but NEW GAME keeps PowerSlave's save-slot menu: one player */
 #define CFG_GFX_OPTIONS        0                                 /* PowerSlave's options as they were */
 #define CFG_LIGHT_MENU()
 #define CFG_MENU_PITCH         30
-#define CFG_MP_NMLEVELS        1
-#define CFG_MP_LEVELLABEL(l)   ""
-#define CFG_MP_BOSSLEVEL(l)    0
-#define CFG_MP_BOSSCOUNT(l)    0
-#define CFG_MP_BOSSNAME(l)     ""
+#define CFG_MP_NMLEVELS        23                                /* PSMULTI.C psMpLevel[]: the 24 .LEV on the disc, less TEST */
+#define CFG_MP_LEVELLABEL(l)   ps_levelLabel(l)
+#define CFG_MP_BOSSLEVEL(l)    ps_bossLevel(l)                   /* MAGMANTIS, SELKIS, SET */
+#define CFG_MP_BOSSCOUNT(l)    ps_bossCount(l)
+#define CFG_MP_BOSSNAME(l)     ps_bossName(l)
 #define CFG_MP_MONSTERS_NAME   "MONSTERS"
 #define CFG_MP_MONSTER_ROLE    "MONSTER"
+#define CFG_MP_NMMODES         MP_HORDE                          /* every mode but the horde */
 #define CFG_MP_NMSKILLS        1
 #define CFG_MP_SKILLDEFAULT    0
 #define CFG_MP_SKILLNAME(s)    ""
 #define CFG_MP_SPOTSAFE(s)     1
-#define CFG_MP_LEVELSTART()
-#define CFG_MP_RESPAWNED(k)
-#define CFG_MP_RESPAWN_HOLD(k) 0
-#define CFG_MP_JOINED(k)
-#define CFG_LEVEL_END(a)
-#define CFG_LEVEL_END_SHOWN(a) 0
+#define CFG_MP_LEVELSTART()    ps_mpLevelStart()                 /* the roles take their monster */
+#define CFG_MP_RESPAWNED(k)    ps_mpRespawned(k)
+#define CFG_MP_RESPAWN_HOLD(k) ps_mpRespawnHold(k)
+#define CFG_MP_JOINED(k)       ps_mpJoined(k)
+#define CFG_LEVEL_END(a)       ps_levelEnd(a)
+#define CFG_LEVEL_END_SHOWN(a) (mpPlayers>1 && ((a)>=200 || (a)==2))
+#define CFG_START_LEVEL()      ps_startLevel()
+#define CFG_LEVEL_PLACED()     ps_levelPlaced()                   /* the fog's colour, the skin, and the monsters that become spots */
 #define CFG_DRAW_AIRMETER(f)   drawAirMeter(f)
 #define CFG_AIR_PICS(x)        x
 #define CFG_WATER              1

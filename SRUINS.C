@@ -179,9 +179,12 @@ void playerHurt(int hpLost)
  hpLost=(hpLost*3)>>2;
 #endif
  currentState.health-=hpLost;
- colorOffset[0]=63;
- colorOffset[1]=-63;
- colorOffset[2]=-63;
+ if (mpPlayers==1)              /* GCC14: the VDP2 colour offset is the whole screen's -- in
+				   split screen one player's wound would flash all four views */
+    {colorOffset[0]=63;
+     colorOffset[1]=-63;
+     colorOffset[2]=-63;
+    }
  if (ouchTime<=0)
     {i=getNextRand()&0x1;
      playStaticSound(ST_JOHN,3+i);
@@ -1886,18 +1889,23 @@ static void mpRegisterEngine(void)
  CFG_MP_REGISTER();             /* the game's own player */
 }
 
-/* The views.  Solo: the original window, 320 x 192 over the 32-line status bar, focal 160 (90 deg).
-   2 players: two 160 x 192 halves side by side, each over half of the bar.  3-4 players:
-   quadrants of 160 x 112, a 160 x 96 view over a 16-line band; the 4th quadrant stays black
-   in 3p.  Split screen uses focal 126, 65 deg over 160 pixels.  The horizon sits where solo
-   puts it, 112/192 of the way down, so a view is the same picture at any size. */
+/* The views.  Solo: the original window, 320 x 192 over the 32-line status bar, focal 160
+   (90 deg).  Split screen has NO status bar, so the views take the lines the bar had
+   (CFG_SPLIT_H, SPRITE.H): 2 players are two halves side by side, 3-4 players quadrants over a
+   16-line band each, and the 4th quadrant stays black in 3p.  Split uses focal 126, 65 degrees
+   over 160 pixels -- the focal and the WIDTH set the field of view, the height only says how
+   much of the vertical cone a view shows, so a taller view adds sky and floor and stretches
+   nothing.  The horizon sits where solo puts it, 7/12 of the way down. */
 typedef struct {short x0,y0,w,h,cy;} MpView;
 static void mpViewGeometry(int k,MpView *v)
 {if (mpPlayers==1)
     {v->x0=0; v->y0=0; v->w=320; v->h=192; v->cy=CFG_YCENTER;}
  else if (mpPlayers==2)
-    {v->x0=160*k; v->y0=0; v->w=160; v->h=192; v->cy=CFG_YCENTER;}
+    {/* the horizon stays on the line solo puts it on: a taller view adds FLOOR below it */
+     v->x0=160*k; v->y0=0; v->w=160; v->h=CFG_SPLIT_H; v->cy=CFG_YCENTER;}
  else
+    /* 3-4 players are left alone: the split sky's bands are cut to these very lines
+       (MPSKY.C bandRect, VAULT_ROWS), so moving a quadrant moves it off its sky. */
     {v->x0=160*(k&1); v->y0=112*(k>>1); v->w=160; v->h=96; v->cy=56;}
 }
 
@@ -2387,6 +2395,8 @@ int runLevel(char *filename,int levelNm)
  playerAngle.yaw=F(0);
  mpLevelReset();                   /* GCC14: the score and the spawn spots the placement adds */
  placeObjects();
+ CFG_LEVEL_PLACED();               /* GCC14: the level stands, no player is built yet -- where a
+				      game turns its monsters into spawn spots (SPRITE.H) */
  if (!player)
     player=constructPlayer(0,0);
  assert(player);
@@ -2455,6 +2465,11 @@ int runLevel(char *filename,int levelNm)
  colorOffset[0]=0; colorOffset[1]=0; colorOffset[2]=0;
 #endif
 
+ /* GCC14: split screen -- cut the VDP2 weapon sheet into VDP1 tiles, after every other tile so
+    the level's own indices (LEVEL.C tileBase) do not move.  Armed at the menu, or simply a
+    second pad plugged in: a player may still join in the middle of a level. */
+ if (mpArmed>1 || mpPadsPresent>1)
+    picWeaponSprites();
  mipBase=createMippedPics();
  setFog((fogDist<fogCap)? fogDist: fogCap);   /* fills the table; fogDist survives from one level
 						  to the next, under the options' ceiling */
@@ -2739,7 +2754,8 @@ int runLevel(char *filename,int levelNm)
 	    CFG_DRAW_SPLITHUD(mpView,mpPlayers);
 	 CFG_PROF_END();
 
-	 CFG_DRAW_AIRMETER(framesElapsed);
+	 if (mpPlayers==1)
+	    CFG_DRAW_AIRMETER(framesElapsed);   /* GCC14: it is drawn on the solo frame's own HUD */
 	}
      /* the rest of the image is player 1's, drawn over the whole screen: the toggles' message,
 	the overlay, the kick of view 0's next traversal */
@@ -2891,6 +2907,20 @@ int runLevel(char *filename,int levelNm)
 		  picLastSmall,picLastFull,fogDist);
       if (mpPlayers==1)
 	 drawStringf(-158,-110,1,"B:%d",mpBudget);
+      /* LEGEND  W : the VDP2 weapon sheet cut into VDP1 tiles (PIC.C picWeaponSprites) --
+		     <times asked>,<tiles produced>,<LWRAM free in KB when asked>,<sub-tiles
+		     the gun put down in the last image>.  The split sky waits on the cut
+		     (MPSKY.C skyAllowed), so 0 tiles means no sky either.
+		 S : the split sky is built and owns RBG0, NBG0 and NBG1.
+		 last: the colour the light ramp bottoms out at, r.g.b in 0..15 (UTIL.C
+		     setFogColour) -- 0.0.0 is the black fog the engine shipped with.
+	 Its own row -- every other line here can run the width of the screen -- and that row
+	 is PowerSlave's top one (240 lines, CFG_YCENTER 120); on Doom's 224 it falls off the
+	 top, which is where this probe is not needed. */
+      drawStringf(-158,-118,1,"W:%d,%d,%d,%d S:%d last:%d.%d.%d P:%d,%d",
+		  weaponSpriteTry,weaponSpriteTiles,weaponSpriteKb,weaponSpriteShown,
+		  mpSkyOn,fogColour[0],fogColour[1],fogColour[2],
+		  menuStreamPics,menuStreamW);
 #endif
 #ifndef NDEBUG
 #ifdef STATUSTEXT
@@ -3118,7 +3148,7 @@ void main(void)
 		 "+JINITLOD.DAT"
 #endif
 		 );
-  dlg_init(fd); /* warning, locks memory */
+  dlg_init(fd); /* GCC14: no longer keeps the set -- it tables the sizes (MENU.C) */
 #ifndef JAPAN
   loadLocalText(fd); /* locks memory */
 #else
@@ -3196,15 +3226,10 @@ void main(void)
  dPrint("3\n");
 
 #ifndef TESTCODE
-#ifdef GP_GAME_DOOM
- level=mpStartLevel; /* Doom: straight into doomLevelNames[], no map screen (SPEC_RUNTIME section 9) */
-#else
- if ((currentState.gameFlags & GAMEFLAG_JUSTTELEPORTED) &&
-     !(currentState.inventory & INV_MUMMY))
-    level=3;
- else
-    level=runMap(currentState.currentLevel);
-#endif
+ /* GCC14: where a game begins when the title hands over (CFG_START_LEVEL, SPRITE.H).  Doom goes
+    straight to the map its menu chose; PowerSlave keeps its map screen, unless a multiplayer
+    game was armed (PSMULTI.C ps_startLevel). */
+ level=CFG_START_LEVEL();
  currentState.inventory&=~INV_MUMMY;
 #else
  level=22;

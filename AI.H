@@ -582,6 +582,19 @@ void torch_func(Object *this, int message, int param1, int param2);
 void player_func(Object *this, int message, int param1, int param2);
 
 Object *constructSpider(int sector,int suckParams,MthXyz *pos,MthXyz *vel);
+/* GCC14: the monsters' projectiles, declared because a player may now throw them too -- a role
+   wears a monster and fires what it fires (PSMULTI.C ps_roleFire) */
+Object *constructGenproj(int sector,MthXyz *pos,MthXyz *vel,
+			 SpriteObject *owner,int heading,
+			 int flat,int type,int damage,
+			 int explosionColor,
+			 char r,char g,char b,
+			 int armTime);
+Object *constructAnuball(int sector,MthXyz *pos,MthXyz *vel,
+			 SpriteObject *owner,int heading);
+Object *constructSball(int sector,MthXyz *pos,MthXyz *vel,
+		       SpriteObject *owner,int heading,int seq,
+		       int scale);
 PlayerObject *constructPlayer(int sector,int suckParams);
 Object *constructAnubis(int sector);
 Object *constructSelkis(int sector);

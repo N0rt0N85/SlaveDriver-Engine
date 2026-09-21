@@ -272,7 +272,28 @@ int advanceWeaponSequence(int xbase,int ybase,int hack)
 	  chunk<level_wFrame[gframe+1].chunkIndex;
 	  chunk++)
 	{sChunkType *c=level_wChunk+chunk;
-	 if (getPicClass(c->tile)==TILEVDP)
+	 if (getPicClass(c->tile)==TILEVDP && weaponSpritesOn)
+	    {/* GCC14: split screen -- the gun is not a background plane here but the sub-tiles
+		PIC.C cut out of the sheet, half resolution, so 128 frame pixels go down as a
+		64 x 64 tile.  Same placement as the VDP1 chunks below, one scale up.  The two
+		weapons with a palette of their own (grenade, manacle) take the object palette
+		here: their CRAM bank is NBG0's, and NBG0 is the sky's now. */
+	     int vw=viewXmax-viewXmin,cx,cy,sub;
+	     XyInt sp[2];
+	     for (cy=0;(sub=picVdp2Sub(c->tile,0,cy))>=0;cy++)
+		for (cx=0;(sub=picVdp2Sub(c->tile,cx,cy))>=0;cx++)
+		   {sp[0].x=((xo+c->chunkx+(cx<<7)-320/2)*vw)/320;
+		    sp[0].y=viewYmax+((yo+c->chunky+(cy<<7)-CFG_WCLIP_BOTTOM)*vw)/320;
+		    sp[1].x=(128*vw)/320;
+		    sp[1].y=(128*vw)/320;
+		    EZ_scaleSpr(ZOOM_TL,UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE,
+				overlay,mapPic(sub),sp,NULL);
+		    weaponSpriteDrawn++;   /* the overlay's "W:" fourth field */
+		   }
+	     if (hack)
+		break;
+	    }
+	 else if (getPicClass(c->tile)==TILEVDP)
 	    {unsigned short *colorRam=(unsigned short *)SCL_COLRAM_ADDR;
 	     SCL_SET_N0CAOS(0);
 	     if (sequence>=30 && sequence<35)

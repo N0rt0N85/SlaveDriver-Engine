@@ -67,6 +67,23 @@ int fixSqrt(int n,int frac);
 MthXyz *getVertex(int vindex,MthXyz *out);
 void setGreyTableBalance(int r,int g,int b); /* 0-31 */
 extern unsigned short greyTable[];
+/* GCC14: the WORLD's light ramp.  greyTable stays the neutral one -- the menus, the messages,
+   a thing's own glow -- and the geometry reads this one (walls, floors, water and things:
+   WALLS.C, and _worldGrey in wallasm_gnu.s), so that the fog can have a COLOUR of its own. */
+extern unsigned short worldGrey[];
+/* GCC14: the colour the fog fades TO, 0..31 a channel, in gouraud units (16 = the surface's own
+   colour).  (0,0,0) is the original fog -- black -- and rebuilds greyTable byte for byte.
+   worldGrey[] then runs from that colour at no light to neutral at 16, so a surface does not go
+   dark with distance, it goes SAND (or azure under water: PSMULTI.C picks per level).
+   The light LOD is not in the way: it never dropped a fogged cell, it welds a run of them into
+   one flat quad and PAINTS it (WALLS.C LODCOL_RECT/MESH), so the quad simply takes `fogFar`, the
+   same colour the ramp bottoms out at.  What the LOD tests is the RAMP'S FLOOR, not zero --
+   `fogFloorGour` is that floor as the wall asm stores it (bit 15 cleared for a valid vertex),
+   which IS zero when the fog is black. */
+void setFogColour(int r,int g,int b);
+extern unsigned char fogColour[3];
+extern unsigned short fogFar;           /* what a fully fogged surface is painted (absolute RGB) */
+extern unsigned short fogFloorGour;     /* worldGrey[0] as a vertex word: the LOD's test value */
 
 int findCeilDistance(int s,MthXyz *p);
 int findFloorDistance(int s,MthXyz *p);

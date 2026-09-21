@@ -3840,8 +3840,11 @@ void thing_func(Object *_this,int msg,int param1,int param2)
 	       }
 	   }
 	if (collide & COLLIDE_SPRITE)
-	   {if (&(sprites[collide&0xffff])==camera)
-	       {/* player picked us up */
+	   {/* GCC14: whoever walked into it, not whoever the globals hold (MPLAYER.H): a pickup
+	       fills the inventory of the player that touched it */
+	    int who=mpIndexOfSprite(&(sprites[collide&0xffff]));
+	    if (who>=0)
+	       {int prev=mpBegin(who);
 		if (playerGetObject(this->type))
 		   {switch (this->type)
 		       {case OT_PYRAMID:
@@ -3856,6 +3859,7 @@ void thing_func(Object *_this,int msg,int param1,int param2)
 			  }
 		    delayKill(_this);
 		   }
+		mpEnd(prev);
 	       }
 	   }
 	break;
@@ -5104,9 +5108,9 @@ void camel_func(Object *_this,int msg,int param1,int param2)
 	collide=moveSprite(this->sprite);
 	fflags=spriteAdvanceFrame(this->sprite);
 	if (collide & COLLIDE_SPRITE)
-	   {if (&(sprites[collide&0xffff])==camera)
-	       {/* player picked us up */
-		playSound((int)this,level_objectSoundMap[OT_CAMEL]);
+	   {/* GCC14: any player may hail the camel; the travel it asks for is the game's */
+	    if (mpIsPlayer(&(sprites[collide&0xffff])))
+	       {playSound((int)this,level_objectSoundMap[OT_CAMEL]);
 		currentState.gameFlags&=~GAMEFLAG_FIRSTLEVEL;
 		kilmaatPuzzleNumber=0;
 		playerGetCamel(this->toLevel);

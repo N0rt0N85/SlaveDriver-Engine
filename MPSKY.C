@@ -532,6 +532,17 @@ static void mapBolt(int band,int bolt,int on)
 #define MOON_EDGE 3
 #define MOON_DARK 12                    /* the disc's gouraud level; 16 is the sky untouched */
 #define MOON_SEA  4                     /* a sea, that much darker again */
+/* GCC14: the same disc, lit the other way (SPRITE.H CFG_SKY_SUN).  A moon is DARKER than the
+   sky it sits in and carries its seas and an uneven ground; a sun is BRIGHTER and perfectly
+   smooth -- above 16 the gouraud brightens instead of darkening, so one constant and two
+   omissions turn the one into the other, and the fog still takes it down with the sky. */
+#if CFG_SKY_SUN
+#define DISC_LEVEL  26                  /* brighter than the sky: a sun */
+#define DISC_RELIEF NULL                /* ... with no ground to speak of */
+#else
+#define DISC_LEVEL  MOON_DARK
+#define DISC_RELIEF moonRelief
+#endif
 static int moonOk;
 static Fixed32 moonDir[3];
 static short skyBB[MPMAX][4];
@@ -678,8 +689,11 @@ static void registers(void)
 }
 
 /* ---- entry points ---- */
+/* GCC14: the sky owns VDP2 VRAM B0-B1.  Doom leaves them empty; PowerSlave puts its weapon
+   sheet there, and the sky may only have them once nothing reads the sheet any more -- that is,
+   once PIC.C has cut the weapon into VDP1 tiles (picWeaponSprites). */
 static int skyAllowed(void)
-{return vdp2PicCount()==0;
+{return vdp2PicCount()==0 || weaponSpritesOn;
 }
 
 void mpSkyPlayers(int players)
@@ -768,7 +782,9 @@ static int flashCurve(int t,int bolt)
 static void events(int ticks)
 {if (!evType && now>=evNext)
     {int r=rnd()%100;
-     evType=r<50? 1: r<85? 2: 3;
+     /* GCC14: a game without storms keeps only the gust -- no bolt, no sheet of lightning
+        (SPRITE.H CFG_SKY_STORM).  Egypt at noon does not flicker. */
+     evType=CFG_SKY_STORM? (r<50? 1: r<85? 2: 3): 3;
      evT=0;
      evBand=layout>2? rnd()&1: 0;
      if (evType==1)
@@ -901,9 +917,10 @@ void mpSkyMoon(int view,MthMatrix *m)
   sky.g=clamp8(sky.g+lastB[1]);
   sky.b=clamp8(sky.b+lastB[2]);
   c=pack(&sky,0,0);
-  moonFan(p.x,p.y,MOON_R+MOON_EDGE,c,MOON_DARK,16,NULL);
-  moonFan(p.x,p.y,MOON_R,c,MOON_DARK,MOON_DARK,moonRelief);
-  moonSeas(p.x,p.y,MOON_R,c,MOON_DARK);
+  moonFan(p.x,p.y,MOON_R+MOON_EDGE,c,DISC_LEVEL,16,NULL);
+  moonFan(p.x,p.y,MOON_R,c,DISC_LEVEL,DISC_LEVEL,DISC_RELIEF);
+  if (!CFG_SKY_SUN)
+     moonSeas(p.x,p.y,MOON_R,c,DISC_LEVEL);
  }
  r[0].x=viewCx+viewXmin;   r[0].y=viewCy+viewYmin;
  r[1].x=viewCx+viewXmax-1; r[1].y=viewCy+viewYmax-1;

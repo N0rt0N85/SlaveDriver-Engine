@@ -76,3 +76,48 @@ int loadPicSet(int fd,unsigned short **palletes,
     }
  return pic;
 }
+
+/* GCC14: le picset des menus EN FLUX ---------------------------------------------------------
+   loadPicSet ci-dessus garde les 57 Ko du bloc en aire 0, verrouilles pour toute la partie
+   (MENU.C dlg_init, puis mem_lock).  Sur PowerSlave ces 57 Ko sont le sixieme de ce qui reste
+   a un niveau lourd : KARNAK n'a que 11 Ko de libre une fois charge, et le split n'a donc ni
+   de quoi decouper l'arme ni de quoi se payer ses propres jeux de parcours (WALLS.C
+   wallsSplitAlloc).  On ne garde plus que la TAILLE de chaque image, plus la premiere -- celle
+   dont dlg_addBase refait le fond de chaque dialogue.  Les autres sont relues du disque au
+   moment ou l'inventaire s'ouvre, une a la fois, dans un tampon d'emprunt.
+
+   Le systeme de fichiers ne sait pas se deplacer (FILE.H n'a pas de fs_seek), donc tout se lit
+   SEQUENTIELLEMENT, du debut, exactement comme loadPicSet le faisait deja.
+
+   Disposition d'une image, telle que loadPicSet la parcourt :
+      [taille:4][largeur:4][hauteur:4][taille octets de RLE][fanion:4][palette:512 si fanion&1]
+   Une image sans palette propre reprend la derniere lue. */
+
+/* ouvre la passe : lit la taille du bloc et rend le nombre d'octets qu'il contient */
+int picSetBegin(int fd)
+{int size;
+ fs_read(fd,(char *)&size,4);
+ return size;
+}
+
+/* lit l'image suivante.  `rle` recoit ses octets compresses (rleMax doit tenir la plus grosse :
+   7560 sur le disque du commerce), `pal` la palette en vigueur -- inchangee si l'image reprend
+   celle d'avant.  Rend la taille compressee, ou -1 si le bloc est fini. */
+int picSetNext(int fd,int *left,int *w,int *h,
+	       unsigned char *rle,int rleMax,unsigned short *pal)
+{int chunk,flag;
+ if (*left<=0)
+    return -1;
+ fs_read(fd,(char *)&chunk,4);
+ fs_read(fd,(char *)w,4);
+ fs_read(fd,(char *)h,4);
+ assert(chunk>0 && chunk<=rleMax);
+ fs_read(fd,(char *)rle,chunk);
+ fs_read(fd,(char *)&flag,4);
+ *left-=chunk+16;
+ if (flag & 1)
+    {fs_read(fd,(char *)pal,512);
+     *left-=512;
+    }
+ return chunk;
+}

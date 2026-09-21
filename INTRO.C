@@ -585,7 +585,7 @@ void playIntro(void)
       switch (menuSel)
 	 {case 0:
 	     mpSoloRules();
-	     if (CFG_MP_MENU)       /* GCC14: skill and players (MPRULES.C); a Doom level never saves */
+	     if (CFG_MP_NEWGAME_MENU)   /* GCC14: skill and players (MPRULES.C); a Doom level never saves */
 		{if (mpNewGameMenu())
 		    {bup_initCurrentGame();
 		     EZ_clearScreen();

@@ -17,6 +17,7 @@
 #include "file.h"
 #include "gamestat.h"
 #include "bigmap.h"
+#include "mplayer.h"
 
 #define GRAVITY (6<<12)
 #define HB 0x8000
@@ -128,14 +129,31 @@ Fixed32 spriteDistApprox(Sprite *s1,Sprite *s2)
 }
 
 
+/* GCC14: THE place PowerSlave's monsters look for someone to fight -- every AI function reaches
+   an enemy through here (normalMonster_idle, decideWhatToDo).  It used to answer `player`, the
+   one the globals hold, which in split screen is whichever player the swap left loaded: the
+   monsters would have fought player 1 and walked past the others.  It now answers the NEAREST
+   player it can see, whoever is loaded, which is what MPLAYER.H asks of the few sites that must
+   see them all.  Solo: mpPlayers is 1 and mpObj[0] IS `player`, so the answer is the old one. */
 MonsterObject *findPlayer(Sprite *sprite,int dist)
-{assert(sprite);
+{Fixed32 d,best=0;
+ MonsterObject *found=NULL;
+ int k;
+ assert(sprite);
  assert(player->sprite);
- if (spriteDistApprox(sprite,player->sprite)>dist)
-    return NULL;
- if (canSee(sprite,player->sprite))
-    return player;
- return NULL;
+ for (k=0;k<mpPlayers;k++)
+    {Sprite *body=mpBody[k]? mpBody[k]: (k? NULL: player->sprite);
+     if (!body || mpPeekInt(k,&currentState.health)<=0)
+	continue;
+     d=spriteDistApprox(sprite,body);
+     if (d>dist || (found && d>=best))
+	continue;
+     if (!canSee(sprite,body))
+	continue;
+     best=d;
+     found=(MonsterObject *)(mpObj[k]? mpObj[k]: (Object *)player);
+    }
+ return found;
 }
 
 int randomAngle(int spreadlog2)

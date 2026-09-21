@@ -26,9 +26,19 @@ int getPicClass(int p);
 void displayVDP2Pic(int picNm,int xo,int yo);
 void updateVDP2Pic(void);
 int vdp2PicCount(void);         /* GCC14: 0 = VRAM B0-B1 unused (MPSKY.C) */
+/* GCC14: the weapon cut into VDP1 tiles for split screen -- see PIC.C.  Once it is on, nothing
+   reads the VDP2 sheet any more and B0-B1 is the split sky's (MPSKY.C skyAllowed). */
+int picWeaponSprites(void);     /* cut it: 1 = done, 0 = no room, leave the gun off */
+int picVdp2Sub(int picNm,int cx,int cy);   /* a sub-tile, 128 x 128 frame pixels; -1 = none */
+extern int weaponSpritesOn;
+/* what the last cut did, for the STATUSTEXT overlay ("W:" in SRUINS.C) */
+extern int weaponSpriteTry,weaponSpriteTiles,weaponSpriteKb,weaponSpriteDrawn,
+	   weaponSpriteShown;
 void dontDisplayVDP2Pic(void);
 void delay_dontDisplayVDP2Pic(void);
 void resetPics(void);
+/* GCC14: the tile-upload buffer, lent while the world is not drawn (MENU.C) */
+void *picScratch(int *size);
 
 void setDrawModeBit(int class,int bit,int onOff);
 
@@ -44,6 +54,7 @@ extern int nmObjectFogBanks;                    /* banks 0..n-1 carry the things
 extern int spectreBank;                         /* bank n: grey and dark, SPRITEFLAG_MESH */
 void buildObjectFogBanks(int n);                /* rebuild 1..n-1 from bank 0, and n for the spectre */
 void buildRemappedBank(int bank,const unsigned char *remap);   /* bank = bank 0 through remap[] */
+void buildTintedBank(int bank,int tr,int tg,int tb);            /* bank = bank 0 under a colour filter, 0..31 a channel */
 
 /* GCC14: which slot a miss takes (PIC.C map).  lastUse is a clock, one tick per use: the least
    recently used goes first, within an image too -- the painter goes far to near, so an image's

@@ -54,6 +54,16 @@ static int nmVDP2Pics;
 #if MIPMAP
 #define PICFLAG_MIP 8
 #endif
+/* GCC14: the pic is a 64x64 WINDOW on the packed weapon source, not a buffer of its own
+   (picWeaponSprites below); it is cut into rleBuffer at upload, the way an RLE tile is
+   expanded there.  `flags` is a byte and every other bit is taken, so this takes the one the
+   Japanese build spends on RLE2 -- and is simply off there, which costs that build the
+   split-screen gun and, with it, the split sky (MPSKY.C skyAllowed). */
+#ifdef JAPAN
+#define PICFLAG_WSUB 0
+#else
+#define PICFLAG_WSUB 4
+#endif
 #define PICFLAG_ANIM 0xf0
 typedef struct
 {void *data; /* data = NULL if not in use */
@@ -206,6 +216,9 @@ static void wallRank(void)
 
 void pic_nextFrame(int *swaps,int *used)
 {
+ weaponSpriteShown=weaponSpriteDrawn;   /* the sub-tiles the gun put down in the image
+				  that just ended -- the overlay prints it below */
+ weaponSpriteDrawn=0;
  /* Measurement discs are NDEBUG builds: without this, the only two counters that say
     whether the tile cache overflows exist only in the build nobody measures. */
 #if !defined(NDEBUG) || defined(STATUSTEXT)
@@ -256,6 +269,11 @@ int initPicSystem(int _picNmBase,int *classSizes)
  picLodNow=picLodPx;
  palletes=NULL;
  nmVDP2Pics=0;
+ /* GCC14: the pic table is being rebuilt, so every sub-tile index the weapon cut recorded is
+    stale -- it has to be cut again for this level (picWeaponSprites). */
+ weaponSpritesOn=0;
+ weaponSpriteTiles=0;
+ weaponSpriteTry=0;
  rleBuffer=(unsigned char *)0x6001000; /*mem_malloc(1,4096);*/
  for (c=0;c<NMCLASSES;c++)
     {classType[c].nmSlots=*(classSizes++);
@@ -299,6 +317,14 @@ void resetPics(void)
    not sit in map()'s frame: the next calls' frames overwrote its last row while the DMA was still
    reading it.  Static, and every writer of it or of rleBuffer first waits for the DMA. */
 static unsigned short picBuff[1024*4];
+/* GCC14: the tile buffer, lent out.  The menus decompress one picture at a time through it
+   (MENU.C loadOverPic) instead of keeping the whole set in low RAM; the world is not being
+   drawn while a menu is open, so nothing else wants it then. */
+void *picScratch(int *size)
+{if (size)
+    *size=sizeof(picBuff);
+ return picBuff;
+}
 
 static unsigned char *unRle(Pic *p)
 {register int outSize;
@@ -328,6 +354,7 @@ static unsigned char *unRle(Pic *p)
 }
 
 static void upload(Pic *p);
+static unsigned char *wpnCut(const void *d);  /* the gun: below, with picWeaponSprites */
 
 /* GCC14: safe (a wall): never a slot this image uses -- 0 then -- and one the image on screen
    uses is filled at pic_flush */
@@ -385,7 +412,9 @@ static void upload(Pic *p)
 #if COMPRESS16BPP && MIPMAP
  unsigned short pbuff[1024*4];   /* a mip pic's full-size tile, halved into picBuff */
 #endif
- if (p->flags & PICFLAG_RLE)
+ if (p->flags & PICFLAG_WSUB)
+    srcData=wpnCut(p->data);    /* the gun: a window on the packed sheet (picWeaponSprites) */
+ else if (p->flags & PICFLAG_RLE)
     srcData=unRle(p);
  else
     srcData=p->data;
@@ -630,6 +659,132 @@ void displayVDP2Pic(int picNm,int xo,int yo)
 #endif
 }
 
+/* GCC14: the weapon as VDP1 sprites, for split screen -------------------------------------------
+   PowerSlave's weapon is not a sprite: loadVDP2Sprites (SRUINS.C) reads a 512x512 8 bpp BITMAP
+   into VDP2 VRAM B0/B1 and NBG0 shows it, scrolled to the frame wanted (displayVDP2Pic above).
+   A background plane has ONE scroll, so in split screen the gun can only be in one place -- it
+   sits across the views -- and it holds the 256 KB the split sky wants (MPSKY.C).
+   Doom has no such thing: its gun is 64x64 VDP1 tiles like everything else, and SEQUENCE.C
+   already knows how to lay those out in a view (advanceWeaponSequence, the vw != 320 branch).
+   So the sheet is CUT into the same kind of tile, at HALF resolution -- which is exactly the
+   scale a 160-pixel view draws the gun at, so a tile goes down 1:1 and the VDP1 never scales.
+   Measured on the retail STATIC.DAT: 18 pictures, 27 tiles, 108 KB of LWRAM, and at most THREE
+   tiles for one weapon frame (the widest gun is 340 px = 3 half-tiles across).
+   Built once a level, after every other tile: the level's own indices are based on the weapon
+   tile count (LEVEL.C loadLevel tileBase), so these have to come last. */
+int weaponSpritesOn;                    /* the cut succeeded: the sheet is free (MPSKY.C) */
+/* GCC14: what the cut did, for the overlay (SRUINS.C "W:").  try = times it was asked this
+   run, tiles = sub-tiles it produced, kb = LWRAM free when it was asked. */
+int weaponSpriteTry,weaponSpriteTiles,weaponSpriteKb,weaponSpriteDrawn,weaponSpriteShown;
+static short vdp2Sub[MAXNMVDP2PICS];    /* first sub-tile of a VDP2 picture, -1 = not cut */
+static unsigned char vdp2Cols[MAXNMVDP2PICS],vdp2Rows[MAXNMVDP2PICS];
+
+/* The packed source: every picture of the sheet, halved, laid end to end.  Measured on the
+   retail STATIC.DAT: 47 KB, where cutting the same pictures into aligned 64x64 tiles up front
+   cost 108 KB -- 60 KB of that was the alignment's own waste, and PowerSlave has no 60 KB to
+   waste (a heavy level leaves ten). */
+static unsigned char *wpnPack;
+static int   wpnOff[MAXNMVDP2PICS];     /* a picture's first byte in wpnPack */
+static short wpnW[MAXNMVDP2PICS];       /* ... and its size once halved */
+static short wpnH[MAXNMVDP2PICS];
+#define WPNMAXSUB 64
+static struct {short pic; unsigned char cx,cy;} wpnSub[WPNMAXSUB];
+
+/* the 64x64 window `d` of the packed source, built where an RLE tile is expanded (rleBuffer is
+   4096 bytes and a sub-tile is 64x64: the same buffer, and the same rule -- wait for the DMA
+   that may still be reading it) */
+static unsigned char *wpnCut(const void *d)
+{const struct {short pic; unsigned char cx,cy;} *sub=d;
+ int i=sub->pic,x0=sub->cx<<6,y0=sub->cy<<6,x,y;
+ const unsigned char *src=wpnPack+wpnOff[i];
+ int w=wpnW[i],h=wpnH[i];
+ while (dmaActive())
+    ;
+ for (y=0;y<64;y++)
+    {int sy=y0+y;
+     for (x=0;x<64;x++)
+	{int sx=x0+x;
+	 rleBuffer[(y<<6)+x]=(sx<w && sy<h)? src[sy*w+sx]: 0;
+	}
+    }
+ return rleBuffer;
+}
+
+int picWeaponSprites(void)
+{const unsigned char *sheet=(const unsigned char *)(SCL_VDP2_VRAM+1024*256);
+ int i,cx,cy,x,y,c,r,first,bytes=0,nsub=0;
+ weaponSpriteTry++;
+ weaponSpriteKb=mem_coreleft(0)>>10;
+ if (!PICFLAG_WSUB)             /* no bit to mark a window with: see above */
+    return 0;
+ if (weaponSpritesOn)
+    return 1;
+ for (i=0;i<MAXNMVDP2PICS;i++)
+    vdp2Sub[i]=-1;
+ /* Count first, then ONE block for the lot.  mem_nocheck_malloc keeps a stack of eight
+    records an area (UTIL.C STACKSIZE): a call per tile would wrap that ring three times
+    over and lose every record the level load left underneath. */
+ for (i=0;i<nmVDP2Pics;i++)
+    {wpnW[i]=(short)((vdp2PicData[i].w+1)>>1);
+     wpnH[i]=(short)((vdp2PicData[i].h+1)>>1);
+     wpnOff[i]=bytes;
+     bytes+=wpnW[i]*wpnH[i];
+    }
+ if (bytes<=0)
+    {weaponSpritesOn=1;         /* no sheet to cut: B0-B1 is free either way */
+     return 1;
+    }
+ /* GCC14: nocheck -- LWRAM also holds the level's tiles, and a level with no room for the
+    gun must lose the gun, not the level */
+ wpnPack=(unsigned char *)mem_nocheck_malloc(0,bytes);
+ if (!wpnPack)
+    return 0;
+ for (i=0;i<nmVDP2Pics;i++)
+    {int sx0=vdp2PicData[i].x,sy0=vdp2PicData[i].y;
+     unsigned char *dst=wpnPack+wpnOff[i];
+     int w=wpnW[i],h=wpnH[i];
+     for (y=0;y<h;y++)
+	for (x=0;x<w;x++)
+	   dst[y*w+x]=sheet[((sy0+(y<<1))<<9)+sx0+(x<<1)];
+     c=(w+63)>>6;
+     r=(h+63)>>6;
+     first=-1;
+     for (cy=0;cy<r;cy++)
+	for (cx=0;cx<c;cx++)
+	   {int pn;
+	    if (nsub>=WPNMAXSUB)         /* more windows than the table holds: stop clean */
+	       {c=cx+1; r=cy+1; break;}
+	    wpnSub[nsub].pic=(short)i;
+	    wpnSub[nsub].cx=(unsigned char)cx;
+	    wpnSub[nsub].cy=(unsigned char)cy;
+	    pn=addPic(TILE8BPP,wpnSub+nsub,NULL,PICFLAG_WSUB);
+	    if (first<0)
+	       first=pn;
+	    nsub++;
+	   }
+     vdp2Sub[i]=(short)first;
+     vdp2Cols[i]=(unsigned char)c;
+     vdp2Rows[i]=(unsigned char)r;
+    }
+ weaponSpriteTiles=nsub;
+ weaponSpritesOn=1;
+ return 1;
+}
+
+/* the sub-tile of VDP2 picture `picNm` at column cx, row cy -- -1 = the picture was not cut.
+   A sub-tile covers 128 x 128 pixels of the 320-wide frame the gun is laid out in. */
+int picVdp2Sub(int picNm,int cx,int cy)
+{int i;
+ if (!weaponSpritesOn || getPicClass(picNm)!=TILEVDP)
+    return -1;
+ i=(struct _vdp2PicData *)pics[picNm].data-vdp2PicData;
+ if (i<0 || i>=nmVDP2Pics || vdp2Sub[i]<0)
+    return -1;
+ if (cx<0 || cy<0 || cx>=vdp2Cols[i] || cy>=vdp2Rows[i])
+    return -1;
+ return vdp2Sub[i]+cy*vdp2Cols[i]+cx;
+}
+
 void delay_dontDisplayVDP2Pic(void)
 {vxmin=0; vymin=0; vxmax=0; vymax=0;
 }
@@ -785,6 +940,19 @@ static void buildSpectreBank(int bank)
     }
 }
 
+/* GCC14: one channel of a fog bank at fog step `sub` (UTIL.H setFogColour).  The walls carry the
+   fog's colour in their gouraud ramp; a thing has no gouraud of its own -- its bank IS the ramp,
+   baked -- so it is darkened as it always was and then lifted towards the fog's colour by the
+   same step, and a monster in the haze goes the way its surroundings go.  A black fog lifts by
+   nothing: the original banks, byte for byte. */
+static int fogBankChan(int v,int sub,int c)
+{v-=sub;
+ if (v<0) v=0;
+ v+=(c*sub)/16;
+ if (v>31) v=31;
+ return v;
+}
+
 void buildObjectFogBanks(int n)
 {unsigned short *colorRam=(unsigned short *)SCL_COLRAM_ADDR;
  int i,c,r,g,b,sub;
@@ -795,16 +963,31 @@ void buildObjectFogBanks(int n)
     {sub=(SPRITEFOGMAX*i)/(n-1);
      for (c=0;c<256;c++)
 	{unsigned short v=colorRam[c];
-	 r=(v & 0x1f)-sub;
-	 g=((v>>5) & 0x1f)-sub;
-	 b=((v>>10) & 0x1f)-sub;
-	 if (r<0) r=0;
-	 if (g<0) g=0;
-	 if (b<0) b=0;
+	 r=fogBankChan(v & 0x1f,sub,fogColour[0]);
+	 g=fogBankChan((v>>5) & 0x1f,sub,fogColour[1]);
+	 b=fogBankChan((v>>10) & 0x1f,sub,fogColour[2]);
 	 colorRam[i*256+c]=RGB(r,g,b);
 	}
     }
  buildSpectreBank(n);
+}
+
+/* GCC14: bank `bank` = bank 0 under a colour filter, for a game whose palette carries no ramp
+   to remap.  Doom reads the green marine ramp as another of PLAYPAL's (buildRemappedBank);
+   PowerSlave's object palette is a different one in every level, so a fixed index table would
+   paint a different thing each time.  A filter needs no table: tint is 0..31 a channel, 31 =
+   keep, and the shading of each pixel survives -- only its hue moves.  MPLAYER.C mpSetBanks. */
+void buildTintedBank(int bank,int tr,int tg,int tb)
+{unsigned short *colorRam=(unsigned short *)SCL_COLRAM_ADDR;
+ int c;
+ assert(bank>0 && bank<8 && bank!=NMOBJECTPALLETES);
+ for (c=0;c<256;c++)
+    {unsigned short v=colorRam[c];
+     int r=((v & 0x1f)*tr)/31;
+     int g=(((v>>5) & 0x1f)*tg)/31;
+     int b=(((v>>10) & 0x1f)*tb)/31;
+     colorRam[bank*256+c]=RGB(r,g,b);
+    }
 }
 
 /* GCC14: bank `bank` = bank 0 seen through an index remap (Doom's player translations: the

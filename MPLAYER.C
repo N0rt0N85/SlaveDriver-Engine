@@ -26,32 +26,78 @@ static int mpNmBlocks,mpUsed;
 static char mpStore[MPMAX][MPSTORE] __attribute__((aligned(4)));
 int mpRegisterLost;             /* blocks refused for lack of room: must read 0 (STATUSTEXT) */
 
+/* GCC14: the registry is walked twice per swap, and its TURNS cost as much as its bytes -- a swap
+   moves at most 1 KB each way and still takes 0.34-0.48 ms on console.  Globals declared side by
+   side land side by side, so a block is kept in address order and merged with a neighbour it
+   touches exactly: the same bytes move in far fewer turns, and a run of ints stays on mpCopy's
+   word path.  Offsets are rebuilt at every insertion, which is why registration must be over
+   before a slot holds anything (MPLAYER.H) -- mpLive says it is not. */
+static int mpLive;              /* a player's state is in the store: the registry must not move */
+
+/* block j swallows block j+1 when it ends exactly where that one starts */
+static void mpMerge(int j)
+{int k;
+ if (j+1>=mpNmBlocks ||
+     (char *)mpBlock[j].addr+mpBlock[j].size!=(char *)mpBlock[j+1].addr ||
+     mpBlock[j].size+mpBlock[j+1].size>32767)
+    return;
+ mpBlock[j].size+=mpBlock[j+1].size;
+ mpNmBlocks--;
+ for (k=j+1;k<mpNmBlocks;k++)
+    mpBlock[k]=mpBlock[k+1];
+}
+
 /* The two limits are checked in NDEBUG too: a block past MPSTORE would be written into the
    next player's slot at every switch, silently.  Refused and counted instead. */
 void mpRegister(void *addr,int size)
-{int i;
- for (i=0;i<mpNmBlocks;i++)
-    if (mpBlock[i].addr==addr)
+{char *a=(char *)addr;
+ int i,j;
+ for (i=0;i<mpNmBlocks;i++)          /* already covered, merged into a neighbour or not */
+    if (a>=(char *)mpBlock[i].addr &&
+	a+size<=(char *)mpBlock[i].addr+mpBlock[i].size)
        return;
  if (mpNmBlocks>=MPMAXBLOCKS || mpUsed+size>MPSTORE)
     {mpRegisterLost++;
      return;
     }
- mpBlock[mpNmBlocks].addr=addr;
- mpBlock[mpNmBlocks].size=(short)size;
- mpBlock[mpNmBlocks].offs=(short)mpUsed;
- mpUsed+=(size+3)&~3;
+ assert(!mpLive);                    /* a block registered now would have no copy in the slots */
+ if (mpLive)                         /* too late to move an offset: keep the appended shape */
+    {mpBlock[mpNmBlocks].addr=addr;
+     mpBlock[mpNmBlocks].size=(short)size;
+     mpBlock[mpNmBlocks].offs=(short)mpUsed;
+     mpUsed+=(size+3)&~3;
+     mpNmBlocks++;
+     return;
+    }
+ for (i=0;i<mpNmBlocks && (char *)mpBlock[i].addr<a;i++)
+    ;
+ for (j=mpNmBlocks;j>i;j--)
+    mpBlock[j]=mpBlock[j-1];
+ mpBlock[i].addr=addr;
+ mpBlock[i].size=(short)size;
  mpNmBlocks++;
+ mpMerge(i);                         /* with the block after, then with the one before */
+ if (i>0)
+    mpMerge(i-1);
+ mpUsed=0;
+ for (i=0;i<mpNmBlocks;i++)
+    {mpBlock[i].offs=(short)mpUsed;
+     mpUsed+=(mpBlock[i].size+3)&~3;
+    }
 }
 
 /* GCC14: most blocks are one int or a few.  A memcpy call for each made a swap cost 0.34-0.48 ms
    on console (POSTTIC, where the swaps are nearly all the work), ~37 swaps an image in 4p:
-   aligned words are copied one by one, only the rest goes through memcpy. */
+   aligned words are copied four at a time, only the rest goes through memcpy. */
 static __inline__ void mpCopy(void *dst,const void *src,int size)
 {if (!(((int)dst|(int)src|size)&3))
     {int *d=(int *)dst;
      const int *s=(const int *)src;
-     for (size>>=2;size>0;size--)
+     for (size>>=2;size>=4;size-=4)
+	{d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3];
+	 d+=4; s+=4;
+	}
+     for (;size>0;size--)
 	*d++=*s++;
     }
  else if (size==2 && !(((int)dst|(int)src)&1))
@@ -64,6 +110,7 @@ static __inline__ void mpCopy(void *dst,const void *src,int size)
 
 static void mpCopyOut(int k)
 {int i;
+ mpLive=1;                      /* from here a slot holds a player: no more registering */
  for (i=0;i<mpNmBlocks;i++)
     mpCopy(mpStore[k]+mpBlock[i].offs,mpBlock[i].addr,mpBlock[i].size);
 }
@@ -158,25 +205,38 @@ int mpIndexOfObject(Object *o)
    Back to solo: six fog banks and the sky's palette again. */
 unsigned char mpBank[MPMAX];
 
+/* GCC14: does player k wear a colour of its own?  A game answers with an index remap (Doom's
+   translation tables) or with a colour filter (PowerSlave, whose object palette changes every
+   level: CFG_MP_TINT, 0 = none, else RGB()).  A player that wears neither keeps bank 0 and its
+   fog banks -- which is what player 1 does in every mode but team play. */
+static int mpWearsColour(int k)
+{return CFG_MP_TRANSLATION(k)!=0 || CFG_MP_TINT(k)!=0;
+}
+
 void mpSetBanks(void)
-{static const unsigned char take[MPMAX-1]={7,5,4};
+{static const unsigned char take[MPMAX-1]=CFG_MP_BANKS;
  static char tookSky;           /* PowerSlave loads weapon palettes into bank 7 (SEQUENCE.C):
 				   only give back what was taken */
- int k,extra=0;
+ int k,extra=0,tint;
  for (k=0;k<MPMAX;k++)
     mpBank[k]=0;
- /* GCC14: any player may wear a remap (player 1 too, on a team's colours): the banks go to
-    those that do, in order, three at most */
+ /* GCC14: any player may wear a colour (player 1 too, on a team's): the banks go to those that
+    do, in order, three at most */
  for (k=0;k<mpPlayers;k++)
-    if (CFG_MP_TRANSLATION(k) && extra<MPMAX-1)
+    if (mpWearsColour(k) && extra<MPMAX-1)
        extra++;
- buildObjectFogBanks(extra>=3? 4: extra==2? 5: NMOBJECTPALLETES);
+ buildObjectFogBanks(CFG_MP_FOGBANKS(extra));
  for (k=0,extra=0;k<mpPlayers && extra<MPMAX-1;k++)
-    if (CFG_MP_TRANSLATION(k))
-       {buildRemappedBank(take[extra],CFG_MP_TRANSLATION(k));
+    if (mpWearsColour(k))
+       {if (CFG_MP_TRANSLATION(k))
+	   buildRemappedBank(take[extra],CFG_MP_TRANSLATION(k));
+	else
+	   {tint=CFG_MP_TINT(k);
+	    buildTintedBank(take[extra],tint & 0x1f,(tint>>5) & 0x1f,(tint>>10) & 0x1f);
+	   }
 	mpBank[k]=take[extra++];
        }
  if (!extra && tookSky)
     retryPlaxPal();             /* bank 7 is the sky's again */
- tookSky=(extra>0);
+ tookSky=(extra>0 && take[0]==7);
 }

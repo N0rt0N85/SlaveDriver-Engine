@@ -783,7 +783,7 @@ unsigned short getLight(char vlight,
 	wavyIndex++;
     }
  if (!nmWallLights)
-    return greyTable[(int)vlight];
+    return worldGrey[(int)vlight];
  r=g=b=vlight;
  for (i=0;i<nmLights;i++)
     if (wallLightP[i])
@@ -807,7 +807,7 @@ unsigned short sgetLight(char vlight,
 	sWavyIndex++;
     }
  if (!snmWallLights)
-    return greyTable[(int)vlight];
+    return worldGrey[(int)vlight];
  r=g=b=vlight;
  for (i=0;i<nmLights;i++)
     if (swallLightP[i])
@@ -895,7 +895,7 @@ void drawClippedFace(sFaceType *face,Fixed32 *shades,MthMatrix *view,
 	 assert(poly[z].y<121);
 	 assert(f(shade2[z+i*4])>=0);
 	 assert(f(shade2[z+i*4])<32);
-	 gtable.entry[z]=greyTable[f(shade2[z+i*4])];
+	 gtable.entry[z]=worldGrey[f(shade2[z+i*4])];
 	}
      EZ_polygon(DRAW_GOURAU|DRAW_MESH|ECD_DISABLE|SPD_DISABLE,
 		WATERCOLOR,poly,&gtable);
@@ -993,7 +993,7 @@ void drawWater(sWallType *theWall,MthXyz *coords)
 	 assert(poly[z].y<121);
 	 assert(f(shade2[z+i*4])>=0);
 	 assert(f(shade2[z+i*4])<32);
-	 gtable.entry[z]=greyTable[f(shade2[z+i*4])];
+	 gtable.entry[z]=worldGrey[f(shade2[z+i*4])];
 	}
      EZ_polygon(DRAW_MESH|ECD_DISABLE|SPD_DISABLE,
 		field?RGB(15,10,0):WATERCOLOR,poly,&gtable);
@@ -1300,21 +1300,25 @@ int lodFused,lodCells,lodFlat; /* fused walls, cells saved, cells flattened */
 static int slave_lodFused,slave_lodCells,slave_lodFlat;
 extern unsigned char fogTable[256];
 
-/* GCC14: flat cells -- what fusion cannot take.  A wall fading into the fog is black far and lit
-   near, never fusable whole, but its far cells go black one by one.
-   Exact and free: the asm stores the final gouraud word in vCalc[].light (greyTable[light], bit 15
-   flipped in front of the near plane, .Lrt_retFromLit); greyTable[0] = 0x8000, so a valid
-   all-black vertex is exactly 0.  The OR of the four is zero when the cell has nothing to show.
-   Kept: the VDP1 command.  Dropped: the tile (mapPic, a cache slot), the gouraud table, the
-   texture mapping. */
+/* GCC14: flat cells -- what fusion cannot take.  A wall fading into the fog reaches the fog's
+   own colour far and stays lit near, never fusable whole, but its far cells reach it one by one.
+   Exact and free: the asm stores the final gouraud word in vCalc[].light (worldGrey[light], bit 15
+   flipped in front of the near plane, .Lrt_retFromLit), so a cell whose four corners all sit at
+   worldGrey[0] has one flat colour and nothing else to show.  WHICH colour does not matter to
+   the test: `fogFloorGour` is the floor of the ramp as the asm stores it (UTIL.C setFogColour),
+   and it is 0 -- the original test, an OR against zero -- while the fog is black.
+   Kept: the VDP1 command, painted in `fogFar`.  Dropped: the tile (mapPic, a cache slot), the
+   gouraud table, the texture mapping. */
+#define CELLATFOG(a,b,c,d) (!(((a)^fogFloorGour)|((b)^fogFloorGour)| \
+					      ((c)^fogFloorGour)|((d)^fogFloorGour)))
 #define CELLISBLACK(g) (lodEnable && \
-			!((g).entry[0]|(g).entry[1]|(g).entry[2]|(g).entry[3]))
+			CELLATFOG((g).entry[0],(g).entry[1],(g).entry[2],(g).entry[3]))
 
 /* Same test on a GRID cell, before the loop permutes the corners for the texture: the four
    vertices are at grid indices, not in pattern order. */
 #define LODCELLDARK(V) (lodEnable && \
-			!((V)[row1+w].light|(V)[row1+w+1].light| \
-			  (V)[row2+w].light|(V)[row2+w+1].light))
+			CELLATFOG((V)[row1+w].light,(V)[row1+w+1].light, \
+				  (V)[row2+w].light,(V)[row2+w+1].light))
 
 /* GCC14: weld a run of black cells in a grid row.  Exact: a grid row is a world LINE (a
    parallelogram row along the width vector) and perspective maps lines to lines, so the
@@ -1486,7 +1490,7 @@ static void farCorners(sWallType *w,MthXyz *coords,struct gourTable *g)
 	l=0;
      if (l>32)
 	l=32;
-     g->entry[c]=greyTable[l];
+     g->entry[c]=worldGrey[l];
     }
 }
 #define LODFARTILE(p) (-16-(p))     /* a slave record painted flat, of pic p (drawSlaveWalls) */
@@ -1495,9 +1499,11 @@ static void farCorners(sWallType *w,MthXyz *coords,struct gourTable *g)
          BLUE   a weld of black cells in a wall grid
          RED    a mesh face -- floor, ceiling or curved wall
          YELLOW the far LOD, folded wall or welded faces */
-#define LODCOL_FUSE ((lodEnable>1)? RGB(0,24,0): RGB(0,0,0))
-#define LODCOL_RECT ((lodEnable>1)? RGB(0,0,24): RGB(0,0,0))
-#define LODCOL_MESH ((lodEnable>1)? RGB(24,0,0): RGB(0,0,0))
+/* GCC14: a wall, or a run of cells, the fog has taken whole is painted in the fog's own far
+   colour (UTIL.C fogFar) -- RGB(0,0,0), the original, while the fog is black. */
+#define LODCOL_FUSE ((lodEnable>1)? RGB(0,24,0): fogFar)
+#define LODCOL_RECT ((lodEnable>1)? RGB(0,0,24): fogFar)
+#define LODCOL_MESH ((lodEnable>1)? RGB(24,0,0): fogFar)
 #define LODCOL_FAR(p) ((lodEnable>1)? RGB(24,24,0): picFirstColour(p))   /* YELLOW: the far LOD */
 
 /* GCC14: a mesh face -- a floor, a ceiling -- that leaves the view, fitted by fitCorner's law.  A
@@ -2011,7 +2017,7 @@ void drawWaterSurface(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
  assert(wall->lastVertex-wall->firstVertex<MAXVPERWALL);
  for (i=wall->firstVertex;i<=wall->lastVertex;i++)
     {getVertex(i,&original);
-     vCalc[v].light=greyTable[GETWATERBRIGHT(original.x,original.z)];
+     vCalc[v].light=worldGrey[GETWATERBRIGHT(original.x,original.z)];
 #if WAVYWATER
      /* wavy water */
      original.y+=F(GETWATERBRIGHT(original.x,original.z)-16);
@@ -4241,7 +4247,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		 else
 		    {int g=16-light*2-spriteFog;   /* softened fog, see above */
 		     if (g<0) g=0;
-		     gtable.entry[0]=greyTable[g];
+		     gtable.entry[0]=worldGrey[g];
 		    }
 		 }
 	      gtable.entry[1]=gtable.entry[0];
