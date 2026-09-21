@@ -318,17 +318,21 @@ MARGE_POOL = 32 * 1024
 
 
 def verrou_initload(path=os.path.join(ROOT, "cd", "INITLOAD.DAT")):
-    """Ce que le demarrage VERROUILLE dans le pool avant tout niveau : le jeu d'images des menus
-    (dlg_init -> loadPicSet, mem_malloc(0, size) puis mem_lock, MENU.C:266-268) et le texte local
-    (loadLocalText, 7 Ko, LOCAL.C:25-26). `resident_pool` ne les retire pas ; le budget de tuiles,
-    qui remplit le pool, doit le faire. -> (octets, source)."""
-    try:
-        with open(path, "rb") as f:
-            size = struct.unpack(">i", f.read(4))[0]
-        return align4(size) + LOCAL_TEXT, "%s (jeu d'images %d o + texte %d)" % (
-            os.path.relpath(path, ROOT), size, LOCAL_TEXT)
-    except (OSError, struct.error):
-        return 4096 + LOCAL_TEXT, "INITLOAD.DAT absent, 4 Ko supposes + texte %d" % LOCAL_TEXT
+    """Ce que le demarrage VERROUILLE dans le pool avant tout niveau -> (octets, source).
+
+    Depuis ca98c1c (2026-09-21) : le texte local SEUL (loadLocalText, mem_malloc(0, 7 Ko) puis
+    mem_lock, LOCAL.C:25-26). Le jeu d'images des menus n'est plus garde en RAM : dlg_init
+    (MENU.C) ne fait que tabuler la taille de chaque image et garde l'image 0 dans un tableau
+    STATIQUE (picData0, deja compte dans _end) ; l'inventaire de PowerSlave relit les autres du
+    disque quand il s'ouvre, et Doom ne l'ouvre jamais. Avant, loadPicSet gardait tout le bloc :
+    58 752 o sur le disque du commerce, 14 tuiles de geometrie que chaque carte laissait vides.
+    `path` ne sert plus qu'a dire d'ou vient le chiffre : le fichier doit exister (le disque le
+    porte), mais sa taille ne compte plus."""
+    src = ("texte local %d (le jeu d'images des menus est lu en flux, MENU.C dlg_init)"
+           % LOCAL_TEXT)
+    if not os.path.exists(path):
+        src += " ; %s absent" % os.path.relpath(path, ROOT)
+    return align4(LOCAL_TEXT), src
 
 
 def budget_tuiles(G, W, ids, sinfo, sky, palette, remap, objects, params, sounds, present):
