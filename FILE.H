@@ -17,7 +17,8 @@ void playWholeCD(void);
 void playCDTrack(int track,int repeat);
 void stopCD(void);
 int cdMark(void);               /* GCC14: resume the music after a data read */
-void cdResume(int fad);
+int cdResume(int mark);
+void playCDTrackFrom(int track,int mark);
 void cdTic(void);
 
 int getTrackStartFAD(int track);

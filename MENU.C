@@ -1094,7 +1094,7 @@ void runInventory(int inventory,int keyMask,int *mapState,
  int data,lastData,changeData;
  int slidePos[MAXNMPICS];
  int quitEnable=0;
- int frameCount,musicFad;
+ int frameCount,musicMark;
  int commScreenSize,staticCount=0;
  struct soundSlotRegister *tinkleSound;
  extern unsigned short doorwayCache;
@@ -1122,13 +1122,13 @@ void runInventory(int inventory,int keyMask,int *mapState,
  slidePos[1]=bitScanForward((inventory>>8)&0xff,-1);
  slidePos[2]=bitScanForward(inventory&0x3f,-1);
  dontDisplayVDP2Pic();
- musicFad=cdMark();             /* GCC14: the reads below take the drive off the music */
+ musicMark=cdMark();            /* GCC14: the reads below take the drive off the music */
  initOverPics();
  openOverPics();
  for (i=1;i<41;i++)
     loadOverPic(i);
  endOverPics();                 /* GCC14: the set is in VRAM; the disc is not held open */
- cdResume(musicFad);
+ cdResume(musicMark);
 
  data=lastInputSample;
  lastData=data;

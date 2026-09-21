@@ -317,28 +317,29 @@ static int cdPlaying(CdcStat *st)
 	!(CDC_STAT_FLGREP(st)&0x80);
 }
 
-/* GCC14: where the music is, 0 if none is playing */
+/* GCC14: where the music is, 0 if none is playing: its FAD, and its track in the top byte, so
+   the mark outlives a stopCD (a level load) */
 int cdMark(void)
 {CdcStat st;
  if (!cdTrack || !cdPlaying(&st))
     return 0;
- return CDC_STAT_FAD(&st);
+ return cdTrack<<24|CDC_STAT_FAD(&st);
 }
 
 /* GCC14: after a data read, the music from where cdMark found it to the end of its track.  A
    range that starts at a FAD must END at one too, given as a sector count (SBL p.107): a track
    number there is refused (p.110).  The end is the next track's start, or the lead-out. */
-void cdResume(int fad)
+int cdResume(int mark)
 {CdcPly cp;
  Uint32 toc[102];
- int end;
- if (!fad)
-    return;
+ int end,fad=mark&0x00ffffff;
+ if (!mark)
+    return 0;
  CDC_TgetToc(toc);
  end=(cdTrack<99 && toc[cdTrack]!=0xffffffff)? toc[cdTrack]: toc[101];
  end&=0x00ffffff;
  if (end<=fad)
-    return;
+    return 0;
  CDC_PLY_STYPE(&cp)=CDC_PTYPE_FAD;
  CDC_PLY_SFAD(&cp)=fad;
  CDC_PLY_ETYPE(&cp)=CDC_PTYPE_FAD;
@@ -346,6 +347,19 @@ void cdResume(int fad)
  CDC_PLY_PMODE(&cp)=0x00;
  CDC_CdPlay(&cp);
  cdResumed=cdRepeat;           /* a looped track loops again from its start (cdTic) */
+ return 1;
+}
+
+/* GCC14: a track, looped -- from the mark when the mark was taken on it: a level that plays the
+   track the last one was playing picks it up where it was, the load in between only paused it */
+void playCDTrackFrom(int track,int mark)
+{if ((unsigned)mark>>24==track)
+    {cdTrack=track;
+     cdRepeat=1;
+     if (cdResume(mark))
+	return;
+    }
+ playCDTrack(track,1);
 }
 
 /* GCC14: once a frame (sound_nextFrame); reads the drive's report once a second, and only after

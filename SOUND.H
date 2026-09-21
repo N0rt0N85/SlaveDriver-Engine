@@ -35,6 +35,7 @@ int getSoundTop(void);
 extern char mapMusic,titleMusic,endMusic,firstVoiceTrack;
 
 void playCDTrackForLevel(int lev);
+void playCDTrackForLevelFrom(int lev,int mark);
 
 #define playStaticSound(group,offs) \
    playSound(0,level_staticSoundMap[group]+(offs))

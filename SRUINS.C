@@ -2244,7 +2244,7 @@ static void mpBalance(void)
 
 int runLevel(char *filename,int levelNm)
 {XyInt noUserClip[2]={{0,0},{320-1,240-1}};
- int i,monsterMoveCounter;
+ int i,monsterMoveCounter,musicMark;
  int nmWeaponTiles,nmStaticSounds;
  int lastDraw=0,lastCalc=0;
  int framesElapsed,inputEnd;
@@ -2259,6 +2259,7 @@ int runLevel(char *filename,int levelNm)
  dPrint("vroom!\n");
  nmFullBowls=0;
  healthMeterPos=0;
+ musicMark=cdMark();            /* GCC14: the same track picks up there after the load */
  stopCD();
  initSound();
 
@@ -2418,7 +2419,7 @@ int runLevel(char *filename,int levelNm)
  hitPyramid=0;
  hitTeleport=0;
  initInput();
- playCDTrackForLevel(levelNm);
+ playCDTrackForLevelFrom(levelNm,musicMark);
 
  initWater();
 #if 0

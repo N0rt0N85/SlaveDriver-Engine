@@ -448,11 +448,16 @@ char endMusic=GP_MUSIC_TRACK;
 char firstVoiceTrack=S_MAP+1;
 
 void playCDTrackForLevel(int lev)
+{playCDTrackForLevelFrom(lev,0);
+}
+
+/* GCC14: from a cdMark taken before the load, when it is the same track (FILE.C playCDTrackFrom) */
+void playCDTrackForLevelFrom(int lev,int mark)
 {if (enable_music)
 #ifndef GP_MUSIC_TRACK
-    playCDTrack(trackMap[lev],1);
+    playCDTrackFrom(trackMap[lev],mark);
 #else
-    playCDTrack(GP_MUSIC_TRACK,1);
+    playCDTrackFrom(GP_MUSIC_TRACK,mark);
 #endif
 }
 
