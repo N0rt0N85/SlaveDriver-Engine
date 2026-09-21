@@ -161,6 +161,16 @@ void doom_weaponDraw(int nmFrames)
  advanceWeaponSequence(bx,by,0);
 }
 
+/* GCC14: SRUINS.C, once the tics have set every gun and before the things of views 1.. are drawn:
+   player k's gun takes its tiles then (SEQUENCE.C reserveWeaponTiles, PIC.H mapSpritePic).  Not
+   over the automap (CFG_RUN_WEAPON), not for a role: a role's gun is pinned at its draw, above,
+   and a role without one draws none. */
+void doom_weaponReserve(int k)
+{if (mapOn || doomRoleMt[k])
+    return;
+ reserveWeaponTiles(k);
+}
+
 /* --- P_BringUpWeapon, P_CheckAmmo, P_FireWeapon --------------------------------------------- */
 
 void doom_bringUpWeapon(void)

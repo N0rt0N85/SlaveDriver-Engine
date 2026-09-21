@@ -123,8 +123,19 @@ static const int picLodPx=GP_PIC_LOD_PX;
 int picLodNow,picLastSmall,picLastFull;
 static int picSmall,picFull;
 static unsigned char picSize[WALLPICS],picKeep[WALLPICS/8];
-static Pic *picPending[48];     /* slots a wall took from the image on screen: pic_flush fills them */
+static Pic *picPending[64];     /* slots a wall or a thing took from the image on screen: pic_flush
+				   fills them.  One per slot at most, 32 + 31 */
 static int picNmPending;
+/* GCC14: the things' tiles under the same rule (PIC.H mapSpritePic) */
+static unsigned char sprSize[60];               /* per TILE8BPP slot (__TILE8BPPSPACE's bound): its
+						   tile's largest size in this image */
+static unsigned char sprRef[60];                /* ... and the largest size refused for the tile it
+						   holds while this image did not use it, 0 = none */
+static unsigned char sprOut[PIC_ALWAYS+1];      /* the image's tiles by size, for the ranking: the
+						   refused out of a slot go in as they are refused,
+						   once each (lastUse marks them) */
+static int sprNmOut;
+int picSpriteLod,picLastSpriteOut;
 
 
 #define MAXNMANIMSETS 15
@@ -214,6 +225,39 @@ static void wallRank(void)
  memset(picSize,0,sizeof(picSize));
 }
 
+/* GCC14: the things' bar (PIC.H).  0 while the image just closed refused nothing.  Else its tiles,
+   in a slot or refused, are ranked by size and the slots less PICSPARE largest set it.  PICSPARE
+   for the walls' reason: a new frame or a monster turning must find a slot no image still reads.
+   A model on E1M6's tiles, 2 and 4 players, 8-30 monsters seen by every view, guns IDLE: the last
+   view's gun found every slot taken in up to 26 % of the images at 0 spare, 4 % at 2, none at 4.
+   Guns that FIRE (up to 4 tiles more at once, the bar one image late): still 1 to 2.5 % at 4 --
+   hence the guns' own reservation (PIC.H, SEQUENCE.C reserveWeaponTiles). */
+static void spriteRank(void)
+{ClassType *c=classType+TILE8BPP;
+ int s,n,keep,v;
+ picLastSpriteOut=sprNmOut;
+ if (!sprNmOut)
+    {picSpriteLod=0;
+     return;
+    }
+ /* a slot counts once: at its tile's largest size if this image used it, else at the largest
+    size refused for it (a far pack of one monster is ONE tile, not one per monster) */
+ for (s=0;s<c->nmSlots;s++)
+    {v=(c->slots[s] && c->slots[s]->lastUse>=picThis)? sprSize[s]: sprRef[s];
+     if (v && sprOut[v]<255)
+	sprOut[v]++;
+     sprRef[s]=0;
+    }
+ keep=c->nmSlots-PICSPARE;
+ for (s=PIC_ALWAYS,n=0;s>0 && n+sprOut[s]<=keep;s--)
+    n+=sprOut[s];
+ picSpriteLod=s? s+1: 0;
+ if (picSpriteLod>PIC_ALWAYS)
+    picSpriteLod=PIC_ALWAYS;    /* the guns and the shadow alone overflow: they still pass */
+ memset(sprOut,0,sizeof(sprOut));
+ sprNmOut=0;
+}
+
 void pic_nextFrame(int *swaps,int *used)
 {
  weaponSpriteShown=weaponSpriteDrawn;   /* the sub-tiles the gun put down in the image
@@ -238,7 +282,9 @@ void pic_nextFrame(int *swaps,int *used)
        }
 #endif
  if (picLodPx)
-    wallRank();
+    {wallRank();
+     spriteRank();
+    }
  picLastSmall=picSmall;
  picLastFull=picFull;
  picSmall=picFull=0;
@@ -267,6 +313,10 @@ int initPicSystem(int _picNmBase,int *classSizes)
  memset(picSize,0,sizeof(picSize));
  memset(picKeep,0,sizeof(picKeep));
  picLodNow=picLodPx;
+ picSpriteLod=0;
+ sprNmOut=0;
+ memset(sprOut,0,sizeof(sprOut));
+ memset(sprRef,0,sizeof(sprRef));
  palletes=NULL;
  nmVDP2Pics=0;
  /* GCC14: the pic table is being rebuilt, so every sub-tile index the weapon cut recorded is
@@ -600,6 +650,46 @@ int mapWallPic(int picNm,int size)
 	{picFull++;
 	 return -1;
 	}
+    }
+ p->lastUse=++picClock;
+ return p->charNm;
+}
+
+/* GCC14: the things' tiles, PIC.H.  A refused tile out of a slot is counted once per image: its
+   lastUse, which nothing reads while it holds no slot, marks it.  One in a slot keeps its lastUse
+   -- its slot's age, which the LRU reads -- and its slot remembers the largest size refused
+   (sprRef, counted once by spriteRank).  A tile this image already holds is drawn whatever its
+   size: its slot is spent either way. */
+int mapSpritePic(int picNm,int size)
+{Pic *p=pics+picNm;
+ int k;
+ if (!picLodPx || p->class!=TILE8BPP)
+    return mapPic(picNm);
+ if (p->flags & PICFLAG_ANIM)
+    p=pics+level_chunk[animTileChunk[(p->flags>>4)-1]].tile;
+ if (size>PIC_ALWAYS)
+    size=PIC_ALWAYS;
+ if (p->charNm==-1)
+    {if (size<picSpriteLod || !map(p,1))
+	{sprNmOut++;
+	 if (p->lastUse<picThis && sprOut[size]<255)
+	    {p->lastUse=picThis;
+	     sprOut[size]++;
+	    }
+	 return -1;
+	}
+     sprSize[p->charNm-classType[TILE8BPP].picNmBase]=size;
+    }
+ else
+    {k=p->charNm-classType[TILE8BPP].picNmBase;
+     if (size<picSpriteLod && p->lastUse<picThis)
+	{sprNmOut++;
+	 if (size>sprRef[k])
+	    sprRef[k]=size;
+	 return -1;
+	}
+     if (p->lastUse<picThis || size>sprSize[k])
+	sprSize[k]=size;
     }
  p->lastUse=++picClock;
  return p->charNm;

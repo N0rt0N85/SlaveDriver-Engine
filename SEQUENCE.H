@@ -32,4 +32,5 @@ int getWeaponSequenceQSize(void);
 void addWeaponSequence(int seqNm);
 void clearWeaponQ();
 void setWeaponSequence(int seqNm,int cx,int cy);   /* GP_GAME_DOOM only: pin, not queue (SPEC_PLAYER 2.3) */
+void reserveWeaponTiles(int k);  /* GP_GAME_DOOM only: player k's gun takes its tiles (PIC.H mapSpritePic) */
 #endif

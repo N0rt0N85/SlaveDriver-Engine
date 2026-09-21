@@ -323,6 +323,10 @@ int advanceWeaponSequence(int xbase,int ybase,int hack)
 	    }
 	 else
 	    {int vw=viewXmax-viewXmin;
+	     int pic=mapSpritePic(c->tile,PIC_ALWAYS);     /* GCC14: the gun passes any bar; -1 = every
+							     sprite slot is this image's (PIC.H) */
+	     if (pic<0)
+		continue;
 	     flip=0;
 	     if (c->flags & 1)
 		flip|=DIR_LRREV;
@@ -333,7 +337,7 @@ int advanceWeaponSequence(int xbase,int ybase,int hack)
 		{pos.x=xo-320/2+c->chunkx;
 		 pos.y=yo-CFG_YCENTER+c->chunky;
 		 EZ_normSpr(flip,UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE,
-			    overlay,mapPic(c->tile),&pos,NULL);
+			    overlay,pic,&pos,NULL);
 		}
 	     else
 		{/* GCC14: split screen.  The gun is laid out for 320 x 192; scaled by the view's
@@ -344,7 +348,7 @@ int advanceWeaponSequence(int xbase,int ybase,int hack)
 		 sp[1].x=(64*vw)/320;
 		 sp[1].y=(64*vw)/320;
 		 EZ_scaleSpr(ZOOM_TL|flip,UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE,
-			     overlay,mapPic(c->tile),sp,NULL);
+			     overlay,pic,sp,NULL);
 		}
 	    }
 	}
@@ -380,5 +384,27 @@ void setWeaponSequence(int seqNm,int cx,int cy)
  frame=0;
  clock=0;
  sequenceOver=(seqNm<0);
+}
+
+/* GCC14: player k's gun takes its tiles now (PIC.H mapSpritePic), read from k's copy of the queue
+   without switching to k (MPLAYER.H mpPeek).  A Doom state is one frame (the pin above), so once
+   the tics have run the queue holds what advanceWeaponSequence will draw: the pinned sequence at
+   frame 0, then its flash. */
+void reserveWeaponTiles(int k)
+{QType e;
+ int qt,i,s,g,c;
+ mpPeek(k,&qTail,sizeof(qTail),&qt);
+ mpPeek(k,sequenceQ+qt,sizeof(e),&e);
+ if (e.seq<0)
+    return;
+ for (i=0;i<2;i++)
+    {s=i? e.seqWith: e.seq;
+     if (s<0 || (i && s==e.seq))
+	continue;
+     g=level_wSequence[s];
+     for (c=level_wFrame[g].chunkIndex;c<level_wFrame[g+1].chunkIndex;c++)
+	if (getPicClass(level_wChunk[c].tile)==TILE8BPP)
+	   mapSpritePic(level_wChunk[c].tile,PIC_ALWAYS);
+    }
 }
 #endif

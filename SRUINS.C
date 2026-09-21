@@ -2718,6 +2718,13 @@ int runLevel(char *filename,int levelNm)
 			}
 		    } CFG_PROF_END();
 		}
+#ifdef GP_GAME_DOOM
+	     /* GCC14: the tics have set every gun: each takes its tiles now, before the things of
+		views 1.. could take the last slots (DOOM_WEAPON.C doom_weaponReserve, PIC.H) */
+	     if (mpPlayers>1)
+		for (k=0;k<mpPlayers;k++)
+		   doom_weaponReserve(k);
+#endif
 	     mpSwitch(mpView);
 	     popProfile();
 	    }
@@ -2775,10 +2782,17 @@ int runLevel(char *filename,int levelNm)
 		       is -- it keeps its VDP1 command and loses only its texture.
 		       Black under the fog, or painted beyond the far LOD (FAR_LOD;
 		       YELLOW under L+R+B's LOD PAINTED).
+		 th  : the things' tiles (PIC.H mapSpritePic) -- requests left out in the
+		       last image / the bar in force, px.  0/0 = every thing drawn.  Else the
+		       31 sprite slots overflowed: the things smaller on screen than the
+		       bar are not drawn, nor their shadow.  The guns take their tiles
+		       before views 1..: a gun is refused only when view 0's things alone
+		       filled every slot.  Before, the slots were given over under the list.
 	 The fps line used nine of the ~40 readable columns, and -50 to -30
 	 are taken (time, mem, then the profile tree): the LOD fits here. */
-     CFG_PROF("Overlay"); drawStringf(-158,-60,1,"fps:%d lod:%d/%d/%d",
-				      60/framesElapsed,lodFused,lodCells,lodFlat);
+     CFG_PROF("Overlay"); drawStringf(-158,-60,1,"fps:%d lod:%d/%d/%d th:%d/%d",
+				      60/framesElapsed,lodFused,lodCells,lodFlat,
+				      picLastSpriteOut,picSpriteLod);
 
      CFG_STATUS_SECTOR();
 

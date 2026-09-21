@@ -79,4 +79,30 @@ int picFirstColour(int picNm);  /* its first texel's colour: the flat cells and 
 extern int picLodNow,picLastSmall,picLastFull;  /* the image just closed: the bar, and the cells
 						   painted flat under it / for want of a slot */
 
+/* GCC14: the same slot rule for the things' tiles, TILE8BPP: the things, their shadow and the gun
+   share 31 slots (params/doom.cfg PIC_SLOTS).  A command holds its slot's ADDRESS (SPR.C
+   setCharPara) and the VDP1 reads the texels when it draws it; mapPic's plain LRU gave a slot the
+   list already used to the next tile asked for, and uploaded at once.  In split screen every view
+   asks its own rotation of each monster, then its gun: past 31 tiles an image, the next views'
+   things took the slots of a gun already emitted -- the gun gone from its view, small copies of
+   monsters and players in its place (a thing is one 64 x 64 tile, drawn at the gun's 32 px).
+   Under the rule (PIC_LOD_PX > 0) every TILE8BPP tile goes through mapSpritePic, never mapPic:
+   - no slot the image being built uses is taken, and one the image on screen uses is filled at
+     pic_flush -- the walls' rule, above;
+   - -1, not drawn: a tile smaller on screen than picSpriteLod pixels -- unless this image
+     already holds it, which costs no slot -- or one that finds every slot taken by this image.
+     The bar is 0 while an image refuses nothing: below 31 tiles an image, every thing is drawn
+     as before.  Once an image refuses, its tiles -- held or refused, each ONCE at its largest --
+     are ranked by size and the slots less PICSPARE largest set the bar: the farthest things go,
+     the gun and the shadow (PIC_ALWAYS) never do;
+   - the bar is one image late, and a gun that fires asks for up to 4 tiles more from one image
+     to the next (DOOM1.WAD: pistol 1 -> 4 + its flash, shotgun 2 -> 4 -> 6): past the slots, the
+     LAST requests of the image are the ones refused, and the last is a gun.  So in split
+     screen every gun takes its tiles once the tics have set it, before the things of views 1..
+     (SEQUENCE.C reserveWeaponTiles, SRUINS.C after Motion): what is refused then is a thing. */
+#define PIC_ALWAYS 127
+int mapSpritePic(int picNm,int size);
+extern int picSpriteLod,picLastSpriteOut;       /* the bar, px; tiles refused in the image just
+						   closed */
+
 #endif

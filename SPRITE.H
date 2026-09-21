@@ -180,6 +180,7 @@ void doom_playerFrame(unsigned short input,unsigned short pushed);   /* 60 Hz, m
 void doom_playerDamage(int damage,Object *source);   /* replaces playerHurt                    */
 void doom_weaponNext(int dir);                       /* +1 / -1: next / previous owned weapon   */
 void doom_weaponDraw(int nmFrames);                  /* the pinned psprite (advanceWeaponSequence) */
+void doom_weaponReserve(int k);                      /* player k's gun takes its tiles (SRUINS.C, after Motion) */
 #define CFG_CONTROL(in,ch,p)   doom_playerFrame(in,p)           /* SRUINS.C:960                  */
 #define CFG_DEATH_SFX          11                                /* SRUINS.C:967: PLDETH (1 = SHOTGN in the Doom static list) */
 #define CFG_WEAPON_UP(m)       doom_weaponNext(1)                /* SRUINS.C:983                  */

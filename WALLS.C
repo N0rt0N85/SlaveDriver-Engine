@@ -4148,13 +4148,15 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	     autoTarget=o;
 	    }
 	}
-     /* draw shadow */
-     if (!(o->flags & SPRITEFLAG_NOSHADOW))
+     /* draw shadow -- GCC14: not under a thing the tile cache's bar leaves out (PIC.H
+	mapSpritePic): alone, it would mark a monster that is not drawn */
+     if (!(o->flags & SPRITEFLAG_NOSHADOW) && width64>=picSpriteLod)
 	{Fixed32 shadowHeight;
 	 Fixed32 shadowWidth;
 	 Fixed32 shadowScale;
 	 XyInt shadowScreenPos;
 	 MthXyz shadowPos;
+	 int sh;
 	 shadowPos.x=feetPos.x;
 	 shadowPos.z=feetPos.z;
 	 shadowPos.y=feetPos.y-findFloorDistance(o->s,&feetPos);
@@ -4182,9 +4184,10 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		 if (pos[0].x+(pos[1].x>>1)>=viewXmin && pos[0].x-(pos[1].x>>1)<=viewXmax &&
 		     pos[0].y+(pos[1].y>>1)>=viewYmin && pos[0].y-(pos[1].y>>1)<=viewYmax &&
 		     abs(pos[0].x)+(pos[1].x>>1)<=VDP1LIM &&
-		     abs(pos[0].y)+(pos[1].y>>1)<=VDP1LIM)
+		     abs(pos[0].y)+(pos[1].y>>1)<=VDP1LIM &&
+		     (sh=mapSpritePic(0,PIC_ALWAYS))>=0)
 		    EZ_scaleSpr(ZOOM_MM,UCLPIN_ENABLE|COLOR_4|COMPO_SHADOW,
-				0,mapPic(0),pos,NULL);
+				0,sh,pos,NULL);
 		}
 	    }
 	}
@@ -4230,7 +4233,9 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 #endif
 
 	 assert(getPicClass(level_chunk[chunk].tile!=TILEVDP));
-	 {int pic=mapPic(level_chunk[chunk].tile);
+	 /* GCC14: the tile is asked for once sprRect has kept the chunk: no slot for what is off the
+	    view, and the tile cache's bar ranks only what is drawn (PIC.H mapSpritePic, -1 = left out) */
+	 {int pic;
 
 	  i=getPicClass(level_chunk[chunk].tile);
 	  if (i!=TILE8BPP && i!=TILESMALL8BPP)
@@ -4253,7 +4258,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	      gtable.entry[1]=gtable.entry[0];
 	      gtable.entry[2]=gtable.entry[0];
 	      gtable.entry[3]=gtable.entry[0];
-	      if (sprRect(pos))
+	      if (sprRect(pos) && (pic=mapSpritePic(level_chunk[chunk].tile,width64))>=0)
 		 EZ_scaleSpr(ZOOM_TL|flip,
 			     UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|
 			     DRAW_GOURAU|
@@ -4265,7 +4270,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		 {pos[1].x>>=1;
 		  pos[1].y>>=1;
 		 }
-	      if (sprRect(pos))
+	      if (sprRect(pos) && (pic=mapSpritePic(level_chunk[chunk].tile,width64))>=0)
 		 EZ_scaleSpr(ZOOM_TL | flip,
 			     UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE|
 			     ((o->flags & SPRITEFLAG_MESH)? DRAW_MESH: 0),
