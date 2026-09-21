@@ -2945,6 +2945,13 @@ int runLevel(char *filename,int levelNm)
 			-camera->pos.x,
 			-camera->pos.y+playerHeightOffset+CFG_VIEW_BOB,
 			-camera->pos.z);
+#ifdef GP_GAME_DOOM
+	 /* the bodies as view 0 will draw them (mpShowBodies, drawWalls' own call gives the same):
+	    the slave picks their leaves now (WALLS.C doom_spriteLeaves), and the last view left
+	    them turned to its viewer, its own body hidden */
+	 if (mpPlayers>1)
+	    mpShowBodies(0);
+#endif
 	 wallsPipeKick(viewTransform.current);
 	 MTH_PopMatrix(&viewTransform);
 	}

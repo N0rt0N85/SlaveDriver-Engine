@@ -97,6 +97,8 @@ struct
  short spriteCommandStart; /* for slave rendered sectors only */
  char nmAncestors;
  char nmChildren;
+ short spriteHead;         /* GP_GAME_DOOM: the sprites drawn after this leaf, index into
+			      sprites[] (doom_spriteLeaves), -1 = none; was padding */
 } SectorDrawRecord; /* size of this structure is 60 */
 
 int nmPolys;
@@ -3552,7 +3554,7 @@ void wallsTraverse(MthMatrix *view,int onSlave)
     updateList[i]=drawList[updateListSize-i-1];
 
  if (onSlave!=2)                /* 2: split screen, during the logic -- see TravSet */
-    CFG_SPRITE_LEAVES();
+    CFG_SPRITE_LEAVES(view,&viewPos);  /* tr->pos: the camera drawWalls will signal from */
  if (!onSlave) CFG_PROF_SUB_END();
 }
 
@@ -3706,7 +3708,9 @@ void drawWalls(int k,MthMatrix *view)
  bestAutoAimRating=INT_MAX;
 
  if (queued)
-    CFG_SPRITE_LEAVES();        /* the sprites as they are now, on the master (TravSet) */
+    CFG_SPRITE_LEAVES(view,&camera->pos);  /* the sprites as they are now, on the master
+					     (TravSet); SIGNAL_VIEW sees the camera as it is now,
+					     not as the traversal saw it */
  else
     {trDC=doorwayCache;
 #if WALLPIPE>=2
@@ -4285,95 +4289,281 @@ void initWallRenderer(void)
 
 #ifdef GP_GAME_DOOM
 /* Which leaf draws a sprite (CFG_SPRITE_LEAVES, CFG_SPR_FIRST/NEXT).  The painter draws a sprite
-   right after the leaf holding its centre, and every leaf drawn later paints over it.  A Doom map
-   is cut into many small BSP leaves (E1M1: 237), so a monster standing near a leaf boundary has
-   half its billboard over the neighbour; when that neighbour is drawn later, its FLOOR covers the
-   monster up to the horizon -- the monster looks sunk or squat.  Doom draws every floor before
-   any sprite, so a floor never hides one.  Here a sprite is drawn with the LATEST-drawn visible
-   leaf it touches: its own, or a neighbour across a portal less than one radius away, its centre
-   in front of the portal.  updateList[0] is drawn last (the master draws from the top, the slave
-   the rest, WALLS.C:2422-2436).
-   Only across a FLUSH portal: same floor and same ceiling on both sides, no step, no lintel --
-   a BSP chord through one room.  Moving the sprite after a leaf also stops that leaf's WALLS
-   from covering it; across a doorway or a window the jambs and the lintel belong to the
-   neighbour and stand in front of the monster (seen on console: monster parts over a wall). */
-static int doomFlatY(int s,int up)
-{int f;
- for (f=level_sector[s].firstWall;f<=level_sector[s].lastWall;f++)
-    if (up? level_wall[f].normal[1]>0: level_wall[f].normal[1]<0)
-       return level_vertex[level_wall[f].v[0]].y;
- return 0x7fff;                                      /* no face: a sky ceiling */
-}
+   right after the leaf holding its centre, and every leaf drawn later paints over it, floors as
+   well as walls: there is no depth buffer.  A Doom map is cut into many small BSP leaves (E1M1:
+   219), and the converter paints whole 64-unit squares of floor across the chords of a Doom
+   sector (doom3d.sols_pleins): on the disc of 2026-09-21, 2 957 of the episode's 25 045 floor
+   faces stick out of their leaf by more than 2 u, 32 u at the median and 84 at most.  The
+   neighbour drawn next paints the very tile the monster stands on over its feet (console,
+   2026-09-21).  Doom draws every floor before any sprite.
+   The first promotion moved a sprite to the latest-drawn flush neighbour within one radius plus
+   the spill, looking only at the portal it crossed: it jumped whole leaves, and the walls of the
+   leaf it landed in went under the sprite -- things seen through walls on console.
+   Here a sprite walks the leaves drawn after its own, in draw order, and passes one only when
+   that leaf can paint NOTHING in front of it: its window misses the sprite's screen box (RECTCLIP
+   clips the leaf to it), or none of its faces may hide the billboard -- the whole billboard is on
+   the eye's side of the face's plane, or the face's screen box misses the sprite's.  The first
+   leaf that fails stops the walk, and the sprite is drawn after the last leaf that passed.  A
+   sprite moved past faces that cannot hide it is drawn over what is behind it, never through a
+   wall; it is moved, never copied, so no sprite command is added (a leaf that gains its first
+   sprite gains drawSprites' user clip, one that loses its last loses it).
+   The billboard tested is the one drawn.  drawSprites sends SIGNAL_VIEW before it reads the
+   frame, and a Doom actor picks its ROTATION there (DOOM_ACTOR.C doomSetSequence): from the
+   camera as the image is drawn, and from the monster's angle after its last action (A_Chase and
+   A_FaceTarget turn it after doom_setState chose the sequence).  The leaves are chosen before
+   that, in the last image's tail: o->sequence is still the last image's rotation, and two
+   rotations of one frame differ by up to 64 chunk pixels (DOOM1.WAD: SARG F 3/7, BOSS E 1/8; a
+   mirrored A2A8 view moves the box by w - 2 lo).  doom_drawSeq gives the rotation SIGNAL_VIEW
+   will give, from the same camera.  The shadow drawSprites lays under the feet is in the box
+   too: it sticks out of the chunks on the left (5-14 chunk pixels: TROO, POSS, SARG, BAR1) and
+   below the feet within 60-110 u.
+   MEASURED on a model of this painter (findDoorways, buildTree, sortLeafList, RECTCLIP; the .LEV
+   of the disc; 18 318 views at 96-512 u around the 926 monsters; billboard = the opaque box of
+   the spawn frame): sprite samples covered by something BEHIND them 13 605 -> 4 718 (-65 %),
+   samples shown over something NEARER 1 817 -> 1 837, all of it one view (E1M7: a step's top
+   drawn before the monster's leaf, hidden until now by the next leaf's floor).  The first
+   promotion gave 3 183 / 7 110.  The walk passes 2.1 leaves on average (p90 5, max 17) and
+   projects 1.2 faces.  Not measured on console: the order of the leaves is the model's. */
+#define DOOM_WALK     16                 /* leaves a sprite may pass (the model's walk: 17 at most) */
+#define DOOM_LISTMAX  64                 /* drawSprites takes 100 sprites a leaf: a full list keeps
+					    the rest where they are */
+short doomDrawNext[MAXNMSPRITES];        /* the leaf lists (spriteHead): sprite index, -1 = end */
 
-/* portal w of leaf s into n: bottom = both floors, top = both ceilings */
-static int doomFlush(int s,int n,int w)
-{int ceil=doomFlatY(s,0),bot=level_vertex[level_wall[w].v[2]].y;
- return bot==doomFlatY(s,1) && bot==doomFlatY(n,1) && ceil==doomFlatY(n,0) &&
-	(ceil==0x7fff || level_vertex[level_wall[w].v[1]].y==ceil);
-}
-/* The reach is one radius PLUS the spill: a leaf paints whole 64-unit squares of floor over its
-   neighbour when both are the same Doom sector (doom3d.sols_pleins), so a monster up to a cell
-   away from the chord can be covered too. */
-#define DOOM_FLOOR_SPILL F(64)
-#define DOOM_MAXDRAWSPRITES 450                      /* SPRITE.C:12 MAXNMSPRITES */
-Sprite *doomDrawHead[MAXNMSECTORS];
-Sprite *doomDrawNext[DOOM_MAXDRAWSPRITES];
-static short doomDrawRank[MAXNMSECTORS];             /* updateList index + 1, 0 = not drawn */
-static short doomRanked[MAXNMSECTORS];
-static int doomNmRanked;
+typedef struct
+{MthMatrix *m;
+ MthXyz x,y;                             /* the view's right and up axes, in world units */
+ MthXyz *eye;                            /* the camera SIGNAL_VIEW will see (doom_drawSeq) */
+} DoomView;
+
+typedef struct
+{MthXyz feet;                            /* drawSprites' feetPos */
+ Fixed32 lo,rw,up;                       /* the frame's chunks about the feet: left, right, above */
+ int x0,y0,x1,y1;                        /* its screen box, view-local like the leaf windows */
+ int dist;                               /* drawSprites' sort key */
+} DoomSprBox;
 
 /* reads the set the traversal just filled (tr): on the slave in the tail, on the master for
    a split-screen view (drawWalls) */
 #define sectorDraw     (tr->sd)
 #define updateList     (tr->ul)
 #define updateListSize (tr->ulSize)
-void doom_spriteLeaves(void)
-{int i,s,t,n,w;
- Sprite *o;
- MthXyz p;
- Fixed32 d,c;
- for (i=0;i<doomNmRanked;i++)
-    {doomDrawRank[doomRanked[i]]=0;
-     doomDrawHead[doomRanked[i]]=NULL;
+
+static int doomSprDist(Sprite *o)
+{return f(abs(o->pos.x-tr->pos.x))+f(abs(o->pos.y-tr->pos.y))+f(abs(o->pos.z-tr->pos.z));
+}
+
+/* The billboard drawSprites will draw, as the box of the 64-unit chunks of the frame it will
+   draw (the opaque patch is narrower: an imp is 41 wide in a 64 chunk -- the box is only ever
+   too big), and of its shadow.  1 = boxed; 0 = nothing drawn; -1 = drawn, its box unknown -- a
+   line, an unscaled or a foot-clipped sprite (FOOTCLIP clips to the window of the leaf that
+   draws it), a frame doom_drawSeq cannot name, a shadow away from the feet (a flier's): it
+   stays home, and a farther sprite does not pass the leaf that draws it (doomSprOver). */
+static int doomSprBox(Sprite *o,DoomView *v,DoomSprBox *b)
+{int c,seq,frame,x0=0,x1=0,y0=0,y1=0;
+ Fixed32 dn,top,sh,fd;
+ MthXyz t,p;
+ XyInt a,z;
+ if (o->sequence==-1 || (o->flags & SPRITEFLAG_INVISIBLE))
+    return 0;                           /* drawSprites does not list it */
+ if (o->flags & SPRITEFLAG_LINE)
+    return -1;
+ b->feet=o->pos;
+ b->feet.y-=o->radius;
+ if (mpIsPlayer(o))
+    b->feet.y-=SPR_HOVER(o);
+ MTH_CoordTrans(v->m,&b->feet,&t);
+ if (t.z<CFG_SPRITE_NEARCLIP ||
+     f(abs(t.x))>(f(t.z)<<2)+256 || f(abs(t.y))>(f(t.z)<<2)+256)
+    return 0;                           /* not drawn, or far off the view (project_point is 16-bit) */
+ if (o->flags & (SPRITEFLAG_NOSCALE|SPRITEFLAG_FOOTCLIP))
+    return -1;
+ seq=doom_drawSeq(o,v->eye);            /* the rotation SIGNAL_VIEW will pick, not the last one */
+ if (seq<0)
+    return -1;
+ frame=o->frame+level_sequence[seq];
+ for (c=level_frame[frame].chunkIndex;c<level_frame[frame+1].chunkIndex;c++)
+    {if (level_chunk[c].chunkx<x0) x0=level_chunk[c].chunkx;
+     if (level_chunk[c].chunkx+64>x1) x1=level_chunk[c].chunkx+64;
+     if (level_chunk[c].chunky<y0) y0=level_chunk[c].chunky;
+     if (level_chunk[c].chunky+64>y1) y1=level_chunk[c].chunky+64;
     }
- doomNmRanked=updateListSize;
- for (i=0;i<updateListSize;i++)
-    {s=updateList[i]-sectorDraw;
-     doomRanked[i]=(short)s;
-     doomDrawRank[s]=(short)(i+1);
+ b->lo=-x0*o->scale;
+ b->rw=x1*o->scale;
+ b->up=-y0*o->scale;
+ dn=y1*o->scale;
+ top=b->up;
+ if (!(o->flags & SPRITEFLAG_NOSHADOW))
+    {/* drawSprites' shadow: centred on the floor under the feet, at most 48 chunk pixels wide,
+	and as tall as that width times dy/z, dy from the camera's pos to that floor.  Its width
+	joins the billboard's (a row at the feet); its height only the screen box: flat on the
+	floor, it crosses the plane of a face the billboard stands in front of only by its ends,
+	as it crosses the walls of its own leaf. */
+     fd=findFloorDistance(o->s,&b->feet);
+     if (abs(fd)<F(128))
+	{if (abs(fd)>F(1))
+	    return -1;                  /* the shadow is not at the feet */
+	 sh=24*o->scale;
+	 if (b->lo<sh) b->lo=sh;
+	 if (b->rw<sh) b->rw=sh;
+	 sh=MTH_Mul(sh,MTH_Div(abs(b->feet.y-fd-tr->pos.y),t.z))+abs(fd);  /* + its centre's
+					   offset: on the floor, up to a unit off the feet */
+	 if (dn<sh) dn=sh;
+	 if (top<sh) top=sh;
+	}
     }
+ p=t; p.x-=b->lo; p.y+=top;
+ project_point(&p,&a);
+ p=t; p.x+=b->rw; p.y-=dn;
+ project_point(&p,&z);
+ b->x0=a.x-1; b->y0=a.y-1;
+ b->x1=z.x+1; b->y1=z.y+1;
+ if (b->x1<tr->xmin || b->x0>tr->xmax || b->y1<tr->ymin || b->y0>tr->ymax)
+    return 0;                           /* off the view: sprRect drops every chunk */
+ b->dist=doomSprDist(o);
+ return 1;
+}
+
+/* 1 when face w of leaf n may paint some of the sprite that is in front of it */
+static int doomFaceHides(int w,SectorDrawRecord *n,DoomSprBox *b,DoomView *v)
+{sWallType *wl=level_wall+w;
+ MthXyz p,t;
+ Fixed32 d,xn,yn;
+ int i,code,all,x0,y0,x1,y1;
+ long long fx,fy;
+ if (wl->flags & (WALLFLAG_INVISIBLE|WALLFLAG_PARALLAX))
+    return 0;                           /* drawSector draws no polygon for it */
+ getVertex(wl->v[0],&p);
+ if (f(tr->pos.x-p.x)*wl->normal[0]+f(tr->pos.y-p.y)*wl->normal[1]+
+     f(tr->pos.z-p.z)*wl->normal[2]<0)
+    return 0;                           /* back face: drawSector's own test */
+ /* The billboard is feet + u.x + h.y, u in [-lo,rw], h in [0,up]: its rows under the feet (3-5 u
+    of Doom's frames) are left to the floor, as they are on the floor of its own leaf.  Its point
+    nearest the plane, measured towards the eye's side: */
+ t.x=b->feet.x-p.x; t.y=b->feet.y-p.y; t.z=b->feet.z-p.z;
+ d=MTH_Product((Fixed32 *)&t,(Fixed32 *)wl->normal);
+ xn=MTH_Product((Fixed32 *)&v->x,(Fixed32 *)wl->normal);
+ yn=MTH_Product((Fixed32 *)&v->y,(Fixed32 *)wl->normal);
+ d+=(xn>0)? -MTH_Mul(b->lo,xn): MTH_Mul(b->rw,xn);
+ if (yn<0)
+    d+=MTH_Mul(b->up,yn);
+ if (d>=(wl->normal[1]? -(F(1)>>1): F(1)))
+    return 0;                           /* all of it on the eye's side (a unit to spare, the
+					   model's): the face is behind it.  A floor under the feet
+					   and a ceiling over the head pass whatever their outline
+					   -- the spilled squares with them */
+ /* the plane passes in front of part of it: does the face reach the sprite's box, inside the
+    window n is clipped to?  Screen x = focal.x/z, y = -focal.y/z, compared as products. */
+ x0=(b->x0>n->xmin)? b->x0: n->xmin;
+ x1=(b->x1<n->xmax)? b->x1: n->xmax;
+ y0=(b->y0>n->ymin)? b->y0: n->ymin;
+ y1=(b->y1<n->ymax)? b->y1: n->ymax;
+ all=15;
+ for (i=0;i<4;i++)
+    {getVertex(wl->v[i],&p);
+     MTH_CoordTrans(v->m,&p,&t);
+     if (t.z<NEARCLIP)
+	return 1;                        /* the near-plane repair moves it: taken as everywhere */
+     fx=(long long)focalDist*t.x;
+     fy=-(long long)focalDist*t.y;
+     code=0;
+     if (fx<(long long)x0*t.z) code|=1;
+     if (fx>(long long)x1*t.z) code|=2;
+     if (fy<(long long)y0*t.z) code|=4;
+     if (fy>(long long)y1*t.z) code|=8;
+     all&=code;
+    }
+ return !all;                           /* all four corners past one edge: it misses the box */
+}
+
+/* 1 when leaf n, drawn after the sprite's own, paints nothing in front of it */
+static int doomLeafPasses(SectorDrawRecord *n,DoomSprBox *b,DoomView *v)
+{int w,s=n-sectorDraw;
+ if (b->x1<n->xmin || b->x0>n->xmax || b->y1<n->ymin || b->y0>n->ymax)
+    return 1;                           /* RECTCLIP: n paints nothing of the sprite's box */
+ for (w=level_sector[s].firstWall;w<=level_sector[s].lastWall;w++)
+    if (doomFaceHides(w,n,b,v))
+       return 0;
+ return 1;
+}
+
+/* 1 when u, another sprite, is nearer than o (drawSprites' key) and overlaps it on screen --
+   or may: a sprite drawn without a box is taken as over it */
+static int doomSprOver(Sprite *u,Sprite *o,DoomSprBox *b,DoomView *v)
+{DoomSprBox c;
+ int r;
+ if (u==o || doomSprDist(u)>=b->dist)
+    return 0;
+ r=doomSprBox(u,v,&c);
+ if (r<0)
+    return 1;
+ return r && c.x0<=b->x1 && c.x1>=b->x0 && c.y0<=b->y1 && c.y1>=b->y0;
+}
+
+/* 1 when a sprite of home list h or of leaf list k is over o: o must not be drawn after the
+   leaf that draws them.  *len: how far k was read (its length when 0 is returned). */
+static int doomSprNearer(Sprite *h,int k,Sprite *o,DoomSprBox *b,DoomView *v,int *len)
+{*len=0;
+ for (;h;h=h->next)
+    if (doomSprOver(h,o,b,v))
+       return 1;
+ for (;k>=0;k=doomDrawNext[k],(*len)++)
+    if (doomSprOver(sprites+k,o,b,v))
+       return 1;
+ return 0;
+}
+
+void doom_spriteLeaves(MthMatrix *view,MthXyz *eye)
+{int i,j,t,k,len;
+ Sprite *o,*home;
+ SectorDrawRecord *a,*n;
+ DoomSprBox b;
+ DoomView v;
+ MthXyz e,o0,ax[3];
+ /* the view's axes in world units, from the matrix as MTH_CoordTrans applies it */
+ v.m=view;
+ v.eye=eye;
+ e.x=e.y=e.z=0;
+ MTH_CoordTrans(view,&e,&o0);
+ e.x=F(1); MTH_CoordTrans(view,&e,ax+0); e.x=0;
+ e.y=F(1); MTH_CoordTrans(view,&e,ax+1); e.y=0;
+ e.z=F(1); MTH_CoordTrans(view,&e,ax+2);
+ v.x.x=ax[0].x-o0.x; v.x.y=ax[1].x-o0.x; v.x.z=ax[2].x-o0.x;
+ v.y.x=ax[0].y-o0.y; v.y.y=ax[1].y-o0.y; v.y.z=ax[2].y-o0.y;
  for (i=0;i<updateListSize;i++)
-    {s=doomRanked[i];
-     for (o=sectorSpriteList[s];o;o=o->next)
-	{t=s;
-	 for (w=level_sector[s].firstWall;w<=level_sector[s].lastWall;w++)
-	    {n=level_wall[w].nextSector;
-	     if (n==-1)
-		break;                          /* portals come first (SPRITE.C:412) */
-	     if (!doomDrawRank[n] || doomDrawRank[n]>=doomDrawRank[t])
-		continue;
-	     if (F(level_vertex[level_wall[w].v[2]].y)>=o->pos.y+o->radius ||
-		 F(level_vertex[level_wall[w].v[1]].y)<=o->pos.y-o->radius)
-		continue;                       /* portal above or below the body */
-	     getVertex(level_wall[w].v[0],&p);
-	     d=MTH_Mul(o->pos.x-p.x,level_wall[w].normal[0])+
-	       MTH_Mul(o->pos.z-p.z,level_wall[w].normal[2]);
-	     if (d>=o->radius+DOOM_FLOOR_SPILL)
-		continue;
-	     c=MTH_Mul(p.x-o->pos.x,level_wall[w].normal[2])+
-	       MTH_Mul(o->pos.z-p.z,level_wall[w].normal[0]);
-	     if (c<0 || c>F(level_wall[w].pixelLength))
-		continue;                       /* beside the portal, not across it */
-	     if (doomFlush(s,n,w))
-			t=n;
-	    }
-	 assert(o-sprites>=0 && o-sprites<DOOM_MAXDRAWSPRITES);
-	 doomDrawNext[o-sprites]=doomDrawHead[t];
-	 doomDrawHead[t]=o;
+    updateList[i]->spriteHead=-1;
+ /* The leaves in draw order (updateList[updateListSize-1] first).  Of two sprites that overlap
+    on screen, the nearer is drawn with the farther or after it, as drawSprites sorts them: a
+    sprite stays home when a nearer one is over it there, and stops in the first leaf that draws
+    one -- sectorSpriteList holds the sprites not yet placed, the leaf lists the ones placed. */
+ for (i=updateListSize-1;i>=0;i--)
+    {a=updateList[i];
+     home=sectorSpriteList[a-sectorDraw];
+     for (o=home;o;o=o->next)
+	{t=i;
+	 if (doomSprBox(o,&v,&b)>0 && !doomSprNearer(home,a->spriteHead,o,&b,&v,&len))
+	    for (j=i-1;j>=0 && j>=i-DOOM_WALK;j--)
+	       {n=updateList[j];
+		if (!doomLeafPasses(n,&b,&v))
+		   break;
+		k=doomSprNearer(sectorSpriteList[n-sectorDraw],n->spriteHead,o,&b,&v,&len);
+		if (len>=DOOM_LISTMAX)
+		   break;
+		t=j;
+		if (k)
+		   break;               /* a nearer sprite over it: drawn with it, drawSprites sorts */
+	       }
+	 k=o-sprites;
+	 doomDrawNext[k]=updateList[t]->spriteHead;
+	 updateList[t]->spriteHead=(short)k;
 	}
     }
 }
 #undef sectorDraw
 #undef updateList
 #undef updateListSize
+
+/* CFG_SPR_FIRST: the list drawWalls draws after leaf s (drawSprites) */
+Sprite *doom_sprFirst(int s)
+{return (sectorDraw[s].spriteHead<0)? NULL: sprites+sectorDraw[s].spriteHead;
+}
 #endif

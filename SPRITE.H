@@ -160,12 +160,18 @@ char *doom_levelName(int lNm);                       /* DOOM_GAME.C, doomLevelNa
 #define CFG_LIFT_STOP_SND    3                       /* AI.C:4674: ST_PUSHBLOCK+3 = PSTOP       */
 void doom_pbBlockBits(int pb);                       /* DOOM_GAME.C                             */
 #define CFG_LIFT_MOVED(o)    doom_pbBlockBits((o)->pbNum)   /* AI.C:4670: lift portals follow the floor */
-void doom_spriteLeaves(void);                        /* WALLS.C (end): the leaf that draws each sprite */
-extern Sprite *doomDrawHead[];
-extern Sprite *doomDrawNext[];
-#define CFG_SPRITE_LEAVES()  doom_spriteLeaves()     /* WALLS.C:2415, once the draw order is known */
-#define CFG_SPR_FIRST(s)     doomDrawHead[s]         /* WALLS.C:2593 drawSprites                */
-#define CFG_SPR_NEXT(o)      doomDrawNext[(o)-sprites]
+void doom_spriteLeaves(MthMatrix *view,MthXyz *eye); /* WALLS.C (end): the leaf that draws each sprite */
+Sprite *doom_sprFirst(int s);
+extern short doomDrawNext[];
+short doom_drawSeq(Sprite *o,MthXyz *eye);           /* DOOM_ACTOR.C: the rotation SIGNAL_VIEW will draw */
+/* A sprite is drawn after the last of the leaves drawn after its own that can paint nothing in
+   front of it (WALLS.C doom_spriteLeaves: the method and the model's counts).  Replaces both the
+   first promotion (things seen through walls) and the PowerSlave rule of the 21-09 disc (the
+   neighbour's floor tile over a monster's feet).  eye: where the camera stands when drawSprites
+   sends SIGNAL_VIEW -- the rotation drawn is picked there, after the leaves are. */
+#define CFG_SPRITE_LEAVES(v,e) doom_spriteLeaves(v,e) /* WALLS.C wallsTraverse, drawWalls: once the draw order is known */
+#define CFG_SPR_FIRST(s)      doom_sprFirst(s)       /* WALLS.C drawSprites                     */
+#define CFG_SPR_NEXT(o)       ((doomDrawNext[(o)-sprites]<0)? NULL: sprites+doomDrawNext[(o)-sprites])
 #define CFG_LEVEL_NAME(l)    doom_levelName(l)       /* SRUINS.C:2510 (BIGMAP.C levelGraph)     */
 #define CFG_PLAY_INTRO()                             /* INITMAIN.C:617: no LOGOS.PCS/OPEN.MOV   */
 /* player / weapons (SPEC_PLAYER sections 1-2, 5; DOOM_PLAYER.C, DOOM_WEAPON.C) */
@@ -225,7 +231,7 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_LIFT_RESET(o)
 #define CFG_LIFT_STOP_SND    1
 #define CFG_LIFT_MOVED(o)
-#define CFG_SPRITE_LEAVES()
+#define CFG_SPRITE_LEAVES(v,e)
 #define CFG_SPR_FIRST(s)     sectorSpriteList[s]
 #define CFG_SPR_NEXT(o)      (o)->next
 #define CFG_LIGHTRADIUS      256

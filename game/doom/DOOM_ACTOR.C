@@ -99,16 +99,67 @@ short doom_seq(int sprite,int frame,int view)
  return (short)((m & 0x7fff)+frame*stride+(stride==8?view:0));
 }
 
+/* The rotation (0..7) of `from` seen from the point `at`: AICOMMON.C getFacingAngle, from a
+   position.  doomSetSequence (drawSprites' SIGNAL_VIEW) and doom_drawSeq (WALLS.C's leaf walk,
+   before that signal) share it, so the frame the walk tests is the frame drawn. */
+static int doomFacing(Sprite *from,MthXyz *at)
+{int angle;
+ angle=getAngle(from->pos.x-at->x,
+		from->pos.z-at->z);
+ angle-=from->angle+F(180);
+ if (angle>F(180)) angle-=F(360);
+ if (angle<F(-180)) angle+=F(360);
+ if (angle<0)
+    {if (angle>F(-23))
+	return 0;
+     if (angle>F(-23-45))
+	return 7;
+     if (angle>F(-23-90))
+	return 6;
+     if (angle>F(-23-135))
+	return 5;
+     return 4;
+    }
+ if (angle<F(23))
+    return 0;
+ if (angle<F(23+45))
+    return 1;
+ if (angle<F(23+90))
+    return 2;
+ if (angle<F(23+135))
+    return 3;
+ return 4;
+}
+
 /* sprite->sequence for the current state and the current view; an absent family (-2) leaves
    the sprite undrawn (-1: WALLS.C:2594 skips it) instead of reading outside the block */
 static void doomSetSequence(DoomActor *this)
 {const DoomState *st=&doomStates[this->state];
- int view=camera?getFacingAngle(this->sprite,camera):0;
+ int view=camera?doomFacing(this->sprite,&camera->pos):0;
  int seq=doom_seq(st->sprite,st->frame,view);
  if (seq<0)
     seq=-1;
  assert(seq<level_nmSequences);
  this->sprite->sequence=(short)seq;
+}
+
+/* The sequence drawSprites will draw for o: its SIGNAL_VIEW runs doomSetSequence, which picks
+   the rotation from where the camera stands (eye) and from the actor's angle as its last action
+   left it (A_Chase, A_FaceTarget turn it after doom_setState chose the sequence).  WALLS.C
+   doom_spriteLeaves picks each sprite's leaf BEFORE that signal -- on the slave, in the last
+   image's tail -- when o->sequence may still be the last image's rotation, up to 64 chunk pixels
+   narrower on a side.  The same choice, nothing written: the slave may call it.  o->sequence for
+   a sprite whose owner does not choose it there (a player body: SRUINS.C mpShowBodies). */
+short doom_drawSeq(Sprite *o,MthXyz *eye)
+{Object *ow=o->owner;
+ const DoomState *st;
+ int seq;
+ if (!ow || (ow->func!=game_actor_func && ow->func!=doom_item_func) ||
+     ((DoomActor *)ow)->sprite!=o)
+    return o->sequence;
+ st=&doomStates[((DoomActor *)ow)->state];
+ seq=doom_seq(st->sprite,st->frame,doomFacing(o,eye));
+ return (short)((seq<0 || seq>=level_nmSequences)? -1: seq);
 }
 
 /* --- states (P_SetMobjState, p_mobj.c:49-72) ------------------------------------------------ */
