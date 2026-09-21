@@ -326,24 +326,27 @@ def plane_of(v):
     return [int(round(nx * 65536)), int(round(ny * 65536)), int(round(nz * 65536))], int(round(d * 65536))
 
 
+def tile_count_1d(l, c):
+    """Nombre de cellules sur une arete de longueur `l` pour une taille de cellule VOULUE `c`.
+
+    L'arrondi AU PLUS PROCHE est ce qui tient l'echelle (un mur de 80 u pour une repetition de
+    64 u vaut mieux en 1 cellule de 80 qu'en 2 de 40). Mais il peut rendre une cellule plus
+    grande que la cible -- mesure sur E1L1 : jusqu'a 376 u pour une cible de 256. La loi VDP1
+    s'impose donc comme PLANCHER SUR LE NOMBRE de cellules, pas comme changement d'arrondi.
+
+    UNE SEULE definition : doom3d.wall_tex s'en sert aussi pour savoir, avant d'emettre, quelle
+    largeur la cellule aura -- donc de combien son image sera fausse (fenetres horizontales)."""
+    return max(int((l + c / 2) // c) or 1, int(math.ceil(l / CELL_HARD_MAX)), 1)
+
+
 def tile_counts(v, cu=TILESIZE, cv=TILESIZE):
     """(tileLength, tileHeight) : CONVERT.C:1802-1812, arrondi au plus proche, minimum 1.
 
     `cu`/`cv` sont la taille VOULUE d'une cellule. Le retail se contente de 64 u partout ; nous
     la prenons egale a la repetition de la texture Build, ce qui remet l'echelle d'aplomb sans
     depenser une seule tuile de plus (E4.1b)."""
-    def dist(a, b):
-        return math.dist(a, b)
-    lu, lv = dist(v[0], v[1]), dist(v[1], v[2])
-    tl = int((lu + cu / 2) // cu) or 1
-    th = int((lv + cv / 2) // cv) or 1
-    # L'arrondi AU PLUS PROCHE est ce qui tient l'echelle (un mur de 80 u pour une repetition de
-    # 64 u vaut mieux en 1 cellule de 80 qu'en 2 de 40). Mais il peut rendre une cellule plus
-    # grande que la cible -- mesure sur E1L1 : jusqu'a 376 u pour une cible de 256. La loi VDP1
-    # s'impose donc comme PLANCHER SUR LE NOMBRE de cellules, pas comme changement d'arrondi.
-    tl = max(tl, int(math.ceil(lu / CELL_HARD_MAX)))
-    th = max(th, int(math.ceil(lv / CELL_HARD_MAX)))
-    return max(tl, 1), max(th, 1)
+    return (tile_count_1d(math.dist(v[0], v[1]), cu),
+            tile_count_1d(math.dist(v[1], v[2]), cv))
 
 
 def cell_size(tex):

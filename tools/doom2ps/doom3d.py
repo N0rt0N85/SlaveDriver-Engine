@@ -45,7 +45,8 @@ import cout                                            # noqa: E402
 import doom_specials as sp                             # noqa: E402
 from geom3d import (Emitter, TILESIZE, CAP_CELLS, plane_of, area2, quad_point,     # noqa: E402
                     CELL_MIN_U, CELL_MAX_U, CELL_MIN_V, CELL_MAX_V, SECTOR_LIGHT,
-                    CELL_HARD_MAX, lire_optims, GROS_BLOC as geom3d_GROS_BLOC)
+                    CELL_HARD_MAX, tile_count_1d, lire_optims,
+                    GROS_BLOC as geom3d_GROS_BLOC)
 
 SKYFLAT = "F_SKY1"
 EPS = 1e-6
@@ -88,6 +89,16 @@ PLAYER_STEP_HEIGHT = 24.0
 # imp -- pointInSectorP (SPRITE.C:940-960, qui teste TOUS les plans du secteur) le jugeait dehors.
 # A 8 u l'arrondi tourne encore le plan de 7 degres ; au-dela, le plan des sommets est le bon.
 MUR_COURT = 8.0
+
+# FENETRES HORIZONTALES (wall_tex, choisir_fenetres). Une cellule porte `cu` colonnes de texture
+# sur `L / tileLength` unites de monde : l'image est fausse du rapport des deux. Au-dela de cet
+# ecart la face de linedef devient CANDIDATE a une tuile fabriquee pour elle.
+# MESURE 2026-09-20 sur l'episode 1 : 31 % des murs textures (2 754 sur 8 917) depassent 25 %
+# d'ecart. L'ancienne porte d'entree -- « linedef plus etroit que sa texture » -- n'en voyait
+# qu'une partie : elle ne peut JAMAIS etre vraie pour une texture de 8 u (DOORTRAK, DOORSTOP,
+# DOORBLU/RED/YEL : 381 murs de l'episode montrent 8 motifs la ou Doom en montre 1 ou 2, parce
+# que CELL_MIN_U remonte cu a 64), ni pour les contremarches STEP* de 32 u (430 murs).
+ECART_FENETRE = 0.02
 
 # ----------------------------------------------------------------------------------------
 # geometrie MOBILE (--mobile) : portes fermees + course, push blocks (SPEC_CONVERTER 5.1)
@@ -568,10 +579,13 @@ class DoomConverter:
         self.switch_hits = defaultdict(list)  # linedef -> [dict(leaf, walls, name, bot, top, P, Q)]
         self.switches = []                    # finalize_mobile : objets OT_SW1..4 a emettre
         # fenetres horizontales (wall_tex) : `uwin` = {(linedef, cote)} autorises, None = tous,
-        # en notant pour chacun [gain, {tuiles}] -- le 1er passage de main, voir choisir_fenetres
+        # en notant pour chacun [gain, {cles de tuile AVEC fenetre}, nom de texture,
+        # {cle SANS fenetre: nombre de cellules}] -- le 1er passage de main, voir choisir_fenetres
         self.uwin = uwin
-        self.uwin_use = defaultdict(lambda: [0.0, set(), None])
-        self.door_tex = set()                 # textures posees en FACE de porte (linteau mobile)
+        self.uwin_use = defaultdict(lambda: [0.0, set(), None, Counter()])
+        self.uwin_wall = {}                   # id(mur) -> face de linedef (compter_fenetres)
+        self.uwin_base = Counter()            # cle SANS fenetre -> cellules qui s'en servent
+        self.door_faces = set()               # FACES DE PORTE (linedef, cote) : linteau mobile
         self.anim_keys = []                   # [[cle de tuile de chaque image]] par famille animee
         self.anims = []                       # idem en index de tuile, apres compaction
         # Polygones ETIQUETES + frontieres exactes : voir tools/doom2ps/adjacency.py. La
@@ -670,7 +684,7 @@ class DoomConverter:
         return self.sizes.get(name, (64, 128))[1] or 128
 
     def wall_tex(self, name, hauteur=None, voff=0, cadre=None, masked=False):
-        """Descripteur de placage E4.1c : la cellule porte la HAUTEUR REELLE du mur.
+        """Descripteur de placage E4.1c : la cellule porte SES PROPRES mesures, hauteur et largeur.
 
         E4.1b posait cv = hauteur de la texture, en comptant sur `tile_counts` pour tomber juste.
         Il ne tombe juste que si la hauteur du mur est un multiple de celle de la texture. Sinon
@@ -703,15 +717,37 @@ class DoomConverter:
                  keyed_cell=True, voff=int(voff) % h)
         if masked:
             d["mask"] = True                    # grille : la tuile garde ses trous
-        if cadre is not None and cadre[6] < w - 0.5 and (self.uwin is None or cadre[7] in self.uwin):
-            # LINEDEF plus ETROIT que la texture : une cellule de toute la longueur, dont la tuile
-            # porte seulement les colonnes que Doom y montre (Emitter.cell_tile, cle `uwin`).
-            # Sinon la texture entiere s'ecrase dans le mur -- porte de sortie d'E1M1. Tester le
-            # linedef et non le morceau : les feuilles du BSP coupent les longs linedefs en
-            # morceaux plus courts que leur texture, et fenetrer chacun MESURE 145 -> 223 tuiles.
+        if cadre is not None:
+            # FENETRE HORIZONTALE : la tuile porte les colonnes que Doom montre VRAIMENT sur cette
+            # cellule (Emitter.cell_tile, cle `uwin`), au lieu des `cu` colonnes de la texture.
+            # C'est le jumeau horizontal de la regle de hauteur ci-dessus -- et la cellule reste
+            # celle qu'on aurait posee sans fenetre, donc le NOMBRE de cellules ne bouge pas :
+            # une fenetre coute une tuile, jamais une milliseconde.
+            # La candidature se decide sur l'ECART D'ECHELLE REEL, pas sur « linedef plus etroit
+            # que sa texture » (l'ancienne regle, qui ne pouvait pas etre vraie pour DOORTRAK ou
+            # les contremarches, voir ECART_FENETRE).
             sx, sy, dx, dz, xoff, L, ll, ident = cadre
-            d.update(cu=L, ox=sx, oz=sy, dx=dx, dz=dz, uwin=True, uoff=xoff, uw=int(w),
-                     uwin_id=ident, squash=w / ll)
+            if w < CELL_MIN_U and L <= CELL_MIN_U + 0.5:
+                # TEXTURE ETROITE SUR MUR COURT : UNE repetition par cellule, et la fenetre toujours,
+                # hors selection et hors budget. Sinon CELL_MIN_U fait porter 64 colonnes a la
+                # tuile (8 motifs de DOORRED dans 16 u), et une fenetre par largeur ne suffit pas :
+                # MESURE 2026-09-21 sur le disque, E1M2, 22 murs de cadre sur 60 avaient leur fenetre
+                # FONDUE par doomtiles.reduire avec une variante voisine (DOORRED demande a 16
+                # colonnes, montre a 32 : le double des bandes rouges). Le reducteur pese une fusion
+                # par l'aire du mur, et un cadre de porte est le plus petit mur du niveau -- donc
+                # toujours le premier sacrifie. Une repetition par cellule donne a TOUTES les bandes
+                # d'une texture la meme tuile (a hauteur et calage egaux) : plus rien a fondre.
+                # Ces textures ne sont JAMAIS posees sur plus de 64 u dans l'episode 1 (DOORTRAK,
+                # DOORSTOP, DOORRED/BLU/YEL, LITE*, BRNBIG*) ; les contremarches STEP* le sont et
+                # gardent la regle generale. Prix : des cellules (16 u -> 2, 32 u -> 4), pas de tuile.
+                cu = int(w)
+                d.update(cu=cu, ox=sx, oz=sy, dx=dx, dz=dz, uwin=True, uoff=xoff, uw=int(w))
+                return d, p
+            cell = L / tile_count_1d(L, cu)
+            ecart = max(cell, cu) / min(cell, cu)
+            if ecart - 1.0 > ECART_FENETRE and (self.uwin is None or ident in self.uwin):
+                d.update(ox=sx, oz=sy, dx=dx, dz=dz, uwin=True, uoff=xoff, uw=int(w),
+                         uwin_id=ident, squash=ecart)
         return d, p
 
     def flat_tex(self, name):
@@ -813,15 +849,16 @@ class DoomConverter:
                                invisible=invisible, blocked=(next_sector < 0), light=light,
                                cap_cells=self.cap, stats=self.stats, tex=tex, normale=normale,
                                force_blocked=force_blocked)
-        if tex is not None and tex.get("uwin"):
+        if tex is not None and tex.get("uwin_id") is not None:
+            # GAIN de la fenetre : l'aire fausse, ponderee par l'ecart d'echelle. Les TUILES,
+            # elles, sont comptees a la fin (compter_fenetres) : ici les cellules d'un mur a faces
+            # ne sont pas encore posees, et surtout il faut compter ce qu'une fenetre LIBERE.
             rec = self.uwin_use[tex["uwin_id"]]
             rec[0] += (top - bot) * math.dist(P, Q) * (tex["squash"] - 1.0)
             rec[2] = self.picnames[tex["pic"]][1]
             for wi in idx:
-                w = self.em.walls[wi]
-                if w["flags"] & 0x01:
-                    for c in range(w["tileLength"] * w["tileHeight"]):
-                        rec[1].add(self.em.texture[w["textures"] + 2 * c + 1])
+                # par IDENTITE : emit_leaf remet les portails en tete, les index bougent encore
+                self.uwin_wall[id(self.em.walls[wi])] = tex["uwin_id"]
         if open_height and not invisible:
             self._rekey_height(idx, open_height)
         for (tag, role) in (mob or ()):
@@ -1297,7 +1334,11 @@ class DoomConverter:
                 hb = max(nch, fh)
                 top_ = ch
                 if mn_door and hb == nch:
-                    self.door_tex.add(name)
+                    # CETTE face de linedef est une face de porte -- pas toutes celles qui portent
+                    # la meme texture (choisir_fenetres les laissait toutes passer hors budget :
+                    # MESURE 2026-09-20, STARTAN2 sert UNE fois de linteau en E1M2 et gagnait 58
+                    # fenetres partout dans la carte ; 446 tuiles demandees au lieu de 285).
+                    self.door_faces.add((sg.line, sg.side))
                 if mn_door and hb == nch and ms is None and not self.sky(sec):
                     # FACE DE PORTE : la recette retail, une dalle rigide qui monte avec la porte
                     # (4 coins mobiles). Doom ancre ce `upper` au plafond de la porte (defaut), il
@@ -1431,27 +1472,123 @@ class DoomConverter:
                         w["flags"] |= 0x08
                         self.stats["portails_fermes_a_la_vue"] += 1
 
+    @staticmethod
+    def cle_sans_fenetre(k):
+        """La cle qu'aurait la MEME cellule sans fenetre horizontale. Le decoupage est celui de
+        doomtiles.tile_of_key : 5 elements de sous-tuile, (cv, voff), un marqueur 'mask'
+        facultatif, puis la fenetre (largeur de cellule, colonne de depart)."""
+        n = 7 + (1 if "mask" in k else 0)
+        return tuple(k[:n])
+
+    def compter_fenetres(self):
+        """Ce que chaque face de linedef candidate COUTE et ce qu'elle LIBERE, en cles de tuile.
+
+        Appele a la fin du 1er passage, ou toutes les fenetres sont posees : la cle sans fenetre
+        d'une cellule fenetree est celle qu'elle aurait sans, donc `uwin_base` compte exactement
+        les clients de chaque tuile dans le monde SANS fenetre."""
+        em = self.em
+
+        def cellules(w):
+            if w["flags"] & 0x01:
+                return [em.texture[w["textures"] + 2 * c + 1]
+                        for c in range(w["tileLength"] * w["tileHeight"])]
+            if w["firstFace"] >= 0:
+                return [em.faces[i]["tile"] for i in range(w["firstFace"], w["lastFace"] + 1)]
+            return []
+
+        for w in em.walls:
+            ident = self.uwin_wall.get(id(w))
+            rec = self.uwin_use[ident] if ident is not None else None
+            for t in cellules(w):
+                k = tuple(em.tiles[t])
+                base = self.cle_sans_fenetre(k)
+                if base != k and rec is None:
+                    continue                       # fenetre OBLIGATOIRE (texture etroite, wall_tex) :
+                                                   # jamais cliente de la tuile d'origine
+                self.uwin_base[base] += 1
+                if rec is not None and base != k:
+                    rec[1].add(k)                  # la tuile que la fenetre demande
+                    rec[3][base] += 1              # la cellule qu'elle retire a la tuile d'origine
+
     def choisir_fenetres(self, budget):
-        """Les linedefs a fenetrer, par gain (aire x ecrasement evite) par tuile NOUVELLE, tant que
-        l'ensemble des tuiles fenetrees tient dans `budget`. Chaque fenetre est une tuile a elle :
-        tout fenetrer MESURE 145 -> 187 tuiles sur E1M1, plus que l'index d'une tuile de
-        geometrie ne le permet (unsigned char, + tileBase 95 <= 255) -- et autant de plus dans le
-        cache VDP1 de la vue.
-        Les TEXTURES DE PORTE passent d'abord, hors budget : Doom les dessine au texel pres pour
-        leur cadre, et c'est la que l'ecrasement se voit (le testeur : la porte de sortie d'E1M1,
-        EXITDOOR 128 sur 64 u, et ses montants de 24 u) -- alors que leur petite aire les classe
-        loin derriere de grands murs a peine ecrases (x 1,33)."""
-        pris, tuiles = set(), set()
-        for k, (gain, ts, name) in self.uwin_use.items():
-            if name in self.door_tex:
+        """Les faces de linedef a fenetrer, par gain (aire x ecart d'echelle) par tuile NETTE,
+        tant que la depense nette tient dans `budget`.
+
+        NETTE : une fenetre demande une tuile, mais elle en RETIRE une quand elle etait la seule
+        cliente de la tuile d'origine -- les 4 grandes faces des caissons a planete d'E1M1
+        (PLANET1 256 colonnes ecrasees dans 192 u) sont dans ce cas, et l'ancien compte, qui ne
+        regardait que les tuiles demandees, les classait derriere tout le monde alors qu'elles ne
+        coutent RIEN. Le cout net ne peut que baisser quand d'autres faces sont prises (elles
+        vident les memes tuiles d'origine), donc tout ce qui est gratuit se prend d'abord, jusqu'au
+        point fixe, et le budget n'arbitre que le reste.
+        Le budget reste necessaire : tout fenetrer MESURE 161 -> 528 tuiles sur E1M1, pour un
+        plafond de 159 (l'index d'une tuile de geometrie est un octet, + tileBase <= 255) -- et
+        autant de plus dans le cache VDP1 de la vue.
+        Les FACES DE PORTE passent d'abord, hors budget : Doom les dessine au texel pres pour leur
+        cadre, et c'est la que l'ecrasement se voit (le testeur : la porte de sortie d'E1M1,
+        EXITDOOR 128 sur 64 u) -- alors que leur petite aire les classe loin derriere de grands
+        murs a peine ecrases (x 1,33)."""
+        pris, tuiles, vides, depense = set(), set(), Counter(), 0
+
+        def cout_net(faces):
+            """Tuiles que ces faces AJOUTENT moins celles qu'elles VIDENT, vu l'etat courant."""
+            neuf, ajout = set(), Counter()
+            for k in faces:
+                rec = self.uwin_use[k]
+                neuf |= rec[1]
+                for base, n in rec[3].items():
+                    ajout[base] += n
+            rendu = sum(1 for base, n in ajout.items()
+                        if vides[base] < self.uwin_base[base] <= vides[base] + n)
+            return len(neuf - tuiles) - rendu
+
+        def prendre(faces):
+            nonlocal depense
+            depense += cout_net(faces)
+            for k in faces:
+                rec = self.uwin_use[k]
                 pris.add(k)
-                tuiles |= ts
-        for k, (gain, ts, name) in sorted(self.uwin_use.items(),
-                                          key=lambda kv: -kv[1][0] / max(1, len(kv[1][1]))):
-            if k not in pris and len(tuiles | ts) <= budget:
-                pris.add(k)
-                tuiles |= ts
-        return pris
+                tuiles.update(rec[1])
+                for base, n in rec[3].items():
+                    vides[base] += n
+
+        # UNITE DE DECISION : une face seule, ou l'ensemble des faces qui se partagent une meme
+        # tuile d'origine -- c'est seulement ENSEMBLE qu'elles la vident, donc seulement ensemble
+        # qu'elles peuvent etre gratuites (les 4 grandes faces des caissons a planete d'E1M1).
+        groupes = defaultdict(set)
+        for k, rec in self.uwin_use.items():
+            for base in rec[3]:
+                groupes[base].add(k)
+        unites = [frozenset((k,)) for k in sorted(self.uwin_use)]
+        unites += [frozenset(g) for base, g in sorted(groupes.items(), key=lambda kv: str(kv[0]))
+                   if len(g) > 1]
+
+        for k in sorted(self.uwin_use):                # les faces de porte, hors budget
+            if k in self.door_faces:
+                prendre((k,))
+        while True:
+            change = True
+            while change:                              # tout ce qui est gratuit, au point fixe
+                change = False
+                for u in unites:
+                    r = u - pris
+                    if r and cout_net(r) <= 0:
+                        prendre(r)
+                        change = True
+            meilleure, mieux = None, 0.0               # puis UNE unite payante, la plus rentable
+            for u in unites:
+                r = u - pris
+                if not r:
+                    continue
+                c = cout_net(r)
+                if c <= 0 or depense + c > budget:
+                    continue
+                gain = sum(self.uwin_use[k][0] for k in r) / c
+                if gain > mieux:
+                    meilleure, mieux = r, gain
+            if meilleure is None:
+                return pris
+            prendre(meilleure)
 
     def anim_flat_keys(self):
         """Flats ANIMES de Doom (p_spec.c animdefs, 8 tics par image) : des qu'une face porte une
@@ -1472,6 +1609,7 @@ class DoomConverter:
         for li in self.keep:
             self.emit_leaf(li)
         self.post_flags()
+        self.compter_fenetres()               # AVANT les tuiles qui ne sont pas des cellules
         self.anim_flat_keys()
         if self.mobile or self.switch_lines:
             self.finalize_mobile()
@@ -1913,8 +2051,14 @@ def main(argv=None):
                     help="morceaux convexes : bsp = feuilles du BSP telles quelles (defaut ; MESURE "
                          "console 16-09 : jusqu'a 15 ms de moins que grid, et le debord de carres "
                          "entiers lui rend les memes sols exacts) ; grid = BSP recoupe sur la grille de 64")
-    ap.add_argument("--uwin-budget", type=int, default=12,
-                    help="tuiles accordees aux linedefs plus etroits que leur texture (choisir_fenetres)")
+    ap.add_argument("--uwin-budget", type=int, default=120,
+                    help="tuiles NETTES accordees aux fenetres horizontales (choisir_fenetres). "
+                         "MESURE 2026-09-21, qualite APRES le budget de tuiles de la carte "
+                         "(doomtiles.reduire) : monter de 12 a 120 fait passer les murs a l'echelle "
+                         "juste de 282 a 342 sur E1M1, 209 a 307 sur E1M3, 229 a 361 sur E1M5, "
+                         "370 a 573 sur E1M9 -- contre un ecart de fusion (rms) qui monte de 0,3 a "
+                         "2,5 sur E1M1 et de 0,0 a 1,3 sur E1M9. Au-dela de 120 le gain plafonne "
+                         "et l'ecart continue de monter")
     ap.add_argument("--static-doors", action="store_true",
                     help="portes ouvertes en dur (open_doors, controle visuel) -- le defaut sans --mobile")
     ap.add_argument("--diag-fusion", action="store_true",
@@ -1988,11 +2132,14 @@ def main(argv=None):
     em = conv.build()
     if conv.uwin_use:
         # 2e passage : seulement les fenetres que le budget de tuiles accorde
+        avant, n_cand = len(em.tiles), len(conv.uwin_use)
         pris = conv.choisir_fenetres(a.uwin_budget)
-        print(f"  fenetres horizontales : {len(pris)}/{len(conv.uwin_use)} faces de linedef, "
-              f"budget {a.uwin_budget} tuiles : {sorted(pris)}")
+        portes = len(pris & conv.door_faces)
         conv = mk(pris)
         em = conv.build()
+        print(f"  fenetres horizontales : {len(pris)}/{n_cand} faces de linedef candidates "
+              f"({portes} faces de porte, hors budget), budget {a.uwin_budget} tuiles NETTES ; "
+              f"{len(em.tiles)} tuiles, contre {avant} en fenetrant tout")
     cutplane, sans_plan, pire_plan = plans_de_coupe(conv)
     if cutplane:
         canaux = Counter(s["cutChannel"] for s in em.sectors if s["flags"] & SECFLAG_CUTSORT)
