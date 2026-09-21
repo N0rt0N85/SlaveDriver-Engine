@@ -216,6 +216,7 @@ void sound_nextFrame(void)
      for (i=0;i<nmSounds;i++)
 	sounds[i].lastFrameUsed=0;
     }
+ cdTic();                       /* GCC14: the music's own step (FILE.C) */
 }
 
 void loadSound(int fd)
@@ -417,6 +418,7 @@ enum {S_KARNAK=2,S_TRIBAL,S_SELKIS,S_SWAMP,S_ROCKIN,
 	 S_QUARRY,S_MAGMA,S_SANCTUM,S_ENDCREDIT,
 	 S_KILMAT1,S_KILMAT2,S_WATER2,S_MAP};
 
+#ifndef GP_MUSIC_TRACK
 static char trackMap[]={S_KARNAK,S_TRIBAL,S_QUARRY,S_KARNAK,S_SELKIS,
 			   S_WATER2,S_TRIBAL,S_ROCKIN,S_WATER2,S_SELKIS,
 			   S_MAGMA,S_ROCKIN,S_MAGMA,S_KILMAT1,S_QUARRY,
@@ -428,11 +430,21 @@ static char trackMap[]={S_KARNAK,S_TRIBAL,S_QUARRY,S_KARNAK,S_SELKIS,
 char mapMusic=S_MAP;
 char titleMusic=S_SANCTUM;
 char endMusic=S_ENDCREDIT;
+#else
+/* GCC14: gameparams MUSIC_TRACK -- one CD track for the whole game, every level included */
+char mapMusic=GP_MUSIC_TRACK;
+char titleMusic=GP_MUSIC_TRACK;
+char endMusic=GP_MUSIC_TRACK;
+#endif
 char firstVoiceTrack=S_MAP+1;
 
 void playCDTrackForLevel(int lev)
 {if (enable_music)
+#ifndef GP_MUSIC_TRACK
     playCDTrack(trackMap[lev],1);
+#else
+    playCDTrack(GP_MUSIC_TRACK,1);
+#endif
 }
 
 void posGetSoundParams(MthXyz *pos,int *vol,int *pan)

@@ -16,6 +16,9 @@ void fs_execOne(void);
 void playWholeCD(void);
 void playCDTrack(int track,int repeat);
 void stopCD(void);
+int cdMark(void);               /* GCC14: resume the music after a data read */
+void cdResume(int fad);
+void cdTic(void);
 
 int getTrackStartFAD(int track);
 int getCurrentFAD(void);

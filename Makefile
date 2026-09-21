@@ -384,8 +384,15 @@ endef
 # and no real drive does anything with it.  tools/iso2bin.py adds what ECMA-130 actually puts on the
 # disc (sync, MSF header, EDC, P and Q parities) to make a MODE1/2352 track.  The .iso stays next to
 # it as the intermediate step, so an incremental `make iso` still skips the work it already did.
-%.bin %.cue: %.iso tools/iso2bin.py
-	@$(PYTHON) tools/iso2bin.py $< $*.bin $*.cue
+#
+# CD-DA music: a game's audio tracks are the .wav files of music/<game>/, sorted, as tracks 02, 03...
+# The music is not ours, so the folder is not in the repository (.gitignore) -- drop the files in,
+# or point MUSIC_<game> elsewhere.  iso2bin.py converts each one ONCE into its own track file next
+# to the .bin, so a rebuild still only rewrites the data track and the .cue.
+MUSIC_doom ?= $(sort $(wildcard music/doom/*.wav))
+MUSIC      ?= $(MUSIC_$(notdir $(basename $(PARAMS))))
+%.bin %.cue: %.iso tools/iso2bin.py $(MUSIC)
+	@$(PYTHON) tools/iso2bin.py $< $*.bin $*.cue $(MUSIC)
 
 iso: $(ISO:.iso=.cue)
 iso-ipjump: $(ISOJ:.iso=.cue)

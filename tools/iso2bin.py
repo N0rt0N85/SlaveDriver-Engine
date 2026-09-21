@@ -18,10 +18,19 @@ VALIDATED against a PRESSED DISC: take the 2048 data bytes of 404 sectors spread
 every time -- sync, header, EDC, P and Q.  Comparing against a pair we made ourselves would only
 have proved we agree with ourselves.
 
-usage: python tools/iso2bin.py input.iso output.bin [output.cue]
+AUDIO TRACKS (optional, after the .cue): each .wav becomes CD-DA track 02, 03... in the order given.
+A track is its own file next to the .bin (`<name>-02.bin`), converted once and kept while it is newer
+than its .wav: a rebuild rewrites the data track and the .cue, never the tens of MB of audio.  Laid
+out as a pressed disc is (the Redump form of refs/iso/Powerslave (USA)): 2 s of silence at the head
+of the file = INDEX 00, the music from INDEX 01, raw 16-bit little-endian stereo at 44.1 kHz, padded
+to whole 2352-byte sectors.  No PREGAP directive: Ymir #146 maps it wrong (saturn-refs knowledge,
+EMULATORS_AND_HW.md, "CD-DA / pregap du .cue").
+
+usage: python tools/iso2bin.py input.iso output.bin [output.cue [audio.wav ...]]
 """
 import os
 import sys
+import wave
 
 SYNC = b"\x00" + b"\xff" * 10 + b"\x00"
 
@@ -99,24 +108,67 @@ def convert(src, dst):
     return n // 2048
 
 
-def write_cue(cue, bin_path):
+PREGAP = 150                            # sectors: 2 s of silence, INDEX 00 of an audio track
+
+
+def audio_track(wav, dst):
+    """.wav -> raw CD-DA track file (pregap + music, whole sectors).  Skipped while dst is newer
+    than wav.  -> sector count of the music (INDEX 01 on)."""
+    with wave.open(wav, "rb") as w:
+        if (w.getnchannels(), w.getsampwidth(), w.getframerate()) != (2, 2, 44100):
+            raise SystemExit(f"{wav}: CD-DA is 44.1 kHz 16-bit stereo, this is "
+                             f"{w.getframerate()} Hz {8 * w.getsampwidth()}-bit x{w.getnchannels()}")
+        n = w.getnframes() * 4
+        music = -(-n // 2352)
+        if (os.path.exists(dst) and os.path.getmtime(dst) >= os.path.getmtime(wav)
+                and os.path.getsize(dst) == (PREGAP + music) * 2352):
+            return music
+        tmp = dst + ".tmp"
+        with open(tmp, "wb") as g:
+            g.write(bytes(PREGAP * 2352))
+            left = n
+            while left:
+                b = w.readframes(1 << 16)       # WAV data is already little-endian, as a .bin wants
+                if not b:
+                    raise SystemExit(f"{wav}: {left} bytes short of its header's length")
+                g.write(b[:left])
+                left -= min(len(b), left)
+            g.write(bytes(music * 2352 - n))
+        os.replace(tmp, dst)
+        print(f"  AUDIO: {os.path.basename(dst)} <- {os.path.basename(wav)} "
+              f"({music} sectors, {music / 75:.0f} s)")
+        return music
+
+
+def write_cue(cue, bin_path, audio=()):
+    """Track 01 = the data; then one FILE per audio track, named relative to the .cue (Ymir only
+    loads a FILE from the .cue's own folder)."""
+    lines = ['FILE "%s" BINARY' % os.path.basename(bin_path),
+             '  TRACK 01 MODE1/2352', '    INDEX 01 00:00:00']
+    for t, path in enumerate(audio, 2):
+        lines += ['FILE "%s" BINARY' % os.path.basename(path),
+                  '  TRACK %02d AUDIO' % t, '    INDEX 00 00:00:00', '    INDEX 01 00:02:00']
     tmp = cue + ".tmp"
     with open(tmp, "wb") as c:
-        c.write(('FILE "%s" BINARY\r\n  TRACK 01 MODE1/2352\r\n    INDEX 01 00:00:00\r\n'
-                 % os.path.basename(bin_path)).encode())
+        c.write(("\r\n".join(lines) + "\r\n").encode())
     os.replace(tmp, cue)
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not 2 <= len(argv) <= 3:
+    if len(argv) < 2:
         raise SystemExit(__doc__.strip().splitlines()[-1])
     src, dst = argv[0], argv[1]
     n = convert(src, dst)
+    tracks = []
+    for t, wav in enumerate(argv[3:], 2):
+        tracks.append("%s-%02d.bin" % (os.path.splitext(dst)[0], t))
+        audio_track(wav, tracks[-1])
     if len(argv) > 2:
-        write_cue(argv[2], dst)
+        write_cue(argv[2], dst, tracks)
     print(f"  DISC: {os.path.basename(dst)} ({n} sectors, {n * 2352} bytes, MODE1/2352)"
-          + (f" + {os.path.basename(argv[2])}" if len(argv) > 2 else ""))
+          + (f" + {os.path.basename(argv[2])}" if len(argv) > 2 else "")
+          + (f" + {len(tracks)} audio track(s)" if tracks else ""))
     return 0
 
 

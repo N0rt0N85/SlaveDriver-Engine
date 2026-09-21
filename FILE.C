@@ -284,6 +284,13 @@ void playWholeCD(void)
  CDC_CdPlay(&cp);
 }
 
+/* GCC14: a data read takes the drive off the music, and nothing put it back: the inventory reads
+   its pictures from the disc in the middle of a level (MENU.C openOverPics).  cdMark notes where
+   the track is, cdResume plays on from there, and cdTic loops the whole track again once that
+   stretch has ended -- the drive repeats the range it was given, and the resumed range is not the
+   track. */
+static int cdTrack,cdRepeat,cdResumed;
+
 void playCDTrack(int track,int repeat)
 {CdcPly cp;
 #ifdef FLASH
@@ -297,6 +304,64 @@ void playCDTrack(int track,int repeat)
  CDC_PLY_EIDX(&cp)=0;
  CDC_PLY_PMODE(&cp)=repeat?0x0f:0x00;
  CDC_CdPlay(&cp);
+ cdTrack=track;
+ cdRepeat=repeat;
+ cdResumed=0;
+}
+
+/* GCC14: 1 when the drive is playing music -- a data read reports PLAY too, with bit 7 of the
+   report flags set (SBL p.101).  The periodic report is read, no command is sent (a command reply
+   in the registers returns an error: no answer this time). */
+static int cdPlaying(CdcStat *st)
+{return CDC_GetPeriStat(st)==CDC_ERR_OK && (CDC_STAT_STATUS(st)&0x0f)==CDC_ST_PLAY &&
+	!(CDC_STAT_FLGREP(st)&0x80);
+}
+
+/* GCC14: where the music is, 0 if none is playing */
+int cdMark(void)
+{CdcStat st;
+ if (!cdTrack || !cdPlaying(&st))
+    return 0;
+ return CDC_STAT_FAD(&st);
+}
+
+/* GCC14: after a data read, the music from where cdMark found it to the end of its track.  A
+   range that starts at a FAD must END at one too, given as a sector count (SBL p.107): a track
+   number there is refused (p.110).  The end is the next track's start, or the lead-out. */
+void cdResume(int fad)
+{CdcPly cp;
+ Uint32 toc[102];
+ int end;
+ if (!fad)
+    return;
+ CDC_TgetToc(toc);
+ end=(cdTrack<99 && toc[cdTrack]!=0xffffffff)? toc[cdTrack]: toc[101];
+ end&=0x00ffffff;
+ if (end<=fad)
+    return;
+ CDC_PLY_STYPE(&cp)=CDC_PTYPE_FAD;
+ CDC_PLY_SFAD(&cp)=fad;
+ CDC_PLY_ETYPE(&cp)=CDC_PTYPE_FAD;
+ CDC_PLY_EFAS(&cp)=end-fad;
+ CDC_PLY_PMODE(&cp)=0x00;
+ CDC_CdPlay(&cp);
+ cdResumed=cdRepeat;           /* a looped track loops again from its start (cdTic) */
+}
+
+/* GCC14: once a frame (sound_nextFrame); reads the drive's report once a second, and only after
+   a cdResume: 1 = resumed, 2 = heard playing, and when the drive stops the whole track goes
+   again, looped */
+void cdTic(void)
+{static int n;
+ CdcStat st;
+ int s;
+ if (!cdResumed || (++n & 63))
+    return;
+ if (cdPlaying(&st))
+    cdResumed=2;
+ else if (cdResumed==2 && CDC_GetPeriStat(&st)==CDC_ERR_OK &&
+	  ((s=CDC_STAT_STATUS(&st)&0x0f)==CDC_ST_PAUSE || s==CDC_ST_STANDBY))
+    playCDTrack(cdTrack,1);
 }
 
 int getTrackStartFAD(int track)
@@ -321,6 +386,8 @@ void stopCD(void)
 {CdcPos pos;
  CDC_POS_PTYPE(&pos)=CDC_PTYPE_NOCHG;
  CDC_CdSeek(&pos);
+ cdTrack=0;
+ cdResumed=0;
 }
 
 void fs_getStatus(int *stat,int *ndata)
