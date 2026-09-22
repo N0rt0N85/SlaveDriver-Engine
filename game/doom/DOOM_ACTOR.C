@@ -107,41 +107,67 @@ short doom_seq(int sprite,int frame,int view)
 
 /* The rotation (0..7) of `from` seen from the point `at`: AICOMMON.C getFacingAngle, from a
    position.  doomSetSequence (drawSprites' SIGNAL_VIEW) and doom_drawSeq (WALLS.C's leaf walk,
-   before that signal) share it, so the frame the walk tests is the frame drawn. */
-static int doomFacing(Sprite *from,MthXyz *at)
-{int angle;
- angle=getAngle(from->pos.x-at->x,
-		from->pos.z-at->z);
- angle-=from->angle+F(180);
- if (angle>F(180)) angle-=F(360);
- if (angle<F(-180)) angle+=F(360);
- if (angle<0)
-    {if (angle>F(-23))
-	return 0;
-     if (angle>F(-23-45))
-	return 7;
-     if (angle>F(-23-90))
-	return 6;
-     if (angle>F(-23-135))
-	return 5;
-     return 4;
-    }
- if (angle<F(23))
-    return 0;
- if (angle<F(23+45))
-    return 1;
- if (angle<F(23+90))
-    return 2;
- if (angle<F(23+135))
-    return 3;
- return 4;
+   before that signal) share it, so the frame the walk tests is the frame drawn.
+   GCC14: the direction of the eye in the thing's own frame, by two rotations instead of the
+   arc tangent the angle needed (getAngle walks a table, and this ran two to four times per
+   thing per image).  The eight sectors are the same, 46 degrees wide about the front and 44
+   about the back (tan 23 and tan 68 as 16.16 fractions), so the same rotation comes out except
+   within a hair of a boundary.  Past THING_ROT4_DIST four of them are kept: the front, the two
+   sides and the back, the frame of the nearest quarter turn. */
+#define DOOM_TAN23 27819                /* tan 23 deg * 65536 */
+#define DOOM_TAN68 162213               /* tan 68 */
+#define DOOM_TAN22 26478                /* tan 22 (the 158 deg boundary, from the back) */
+#define DOOM_TAN67 154394               /* tan 67 (the 113 deg boundary, from the back) */
+static int doomSeqTurns(int sprite)     /* eight views to pick from?  (-2: an absent family) */
+{int m=level_sequenceMap[sprite];
+ return m!=-2 && (m & 0x8000);
 }
 
-/* sprite->sequence for the current state and the current view; an absent family (-2) leaves
-   the sprite undrawn (-1: WALLS.C:2594 skips it) instead of reading outside the block */
-static void doomSetSequence(DoomActor *this)
+static int doomFacing(Sprite *from,MthXyz *at)
+{Fixed32 wx=at->x-from->pos.x,wz=at->z-from->pos.z,c,s,x,y,ay;
+ int lod,back;
+ lod=(GP_THING_ROT4_DIST>0 && doom_approxDist2(wx,wz)>F(GP_THING_ROT4_DIST));
+ while (wx>F(2048) || wx<F(-2048) || wz>F(2048) || wz<F(-2048))
+    {wx>>=1;                            /* the products stay inside 32 bits */
+     wz>>=1;
+    }
+ c=MTH_Cos(from->angle);
+ s=MTH_Sin(from->angle);
+ x=MTH_Mul(wx,c)+MTH_Mul(wz,s);         /* the eye, turned into the thing's frame */
+ y=MTH_Mul(wz,c)-MTH_Mul(wx,s);
+ ay=(y<0)? -y: y;
+ back=(x<0);
+ if (back)
+    x=-x;
+ if (lod)
+    {if (ay<=x)
+	return back? 4: 0;
+     return (y<0)? 6: 2;
+    }
+ if (!back)
+    {if (ay<MTH_Mul(x,DOOM_TAN23))
+	return 0;
+     if (ay<MTH_Mul(x,DOOM_TAN68))
+	return (y<0)? 7: 1;
+    }
+ else
+    {if (ay<MTH_Mul(x,DOOM_TAN22))
+	return 4;
+     if (ay<MTH_Mul(x,DOOM_TAN67))
+	return (y<0)? 5: 3;
+    }
+ return (y<0)? 6: 2;
+}
+
+/* sprite->sequence for the current state and the view of `at`; an absent family (-2) leaves
+   the sprite undrawn (-1: WALLS.C:2594 skips it) instead of reading outside the block.
+   at = NULL: the rotation is not chosen here.  A state change happens up to four times a second
+   per monster and the rotation it picked was thrown away by the next SIGNAL_VIEW, which picks it
+   for the camera that draws (and, in split screen, for each view in turn).  A family drawn from
+   one side only (stride 1 in level_sequenceMap) never needs it at all. */
+static void doomSetSequence(DoomActor *this,MthXyz *at)
 {const DoomState *st=&doomStates[this->state];
- int view=camera?doomFacing(this->sprite,&camera->pos):0;
+ int view=(at && doomSeqTurns(st->sprite))? doomFacing(this->sprite,at): 0;
  int seq=doom_seq(st->sprite,st->frame,view);
  if (seq<0)
     seq=-1;
@@ -170,7 +196,8 @@ short doom_drawSeq(Sprite *o,MthXyz *eye)
      ((DoomActor *)ow)->sprite!=o)
     return o->sequence;
  st=&doomStates[((DoomActor *)ow)->state];
- seq=doom_seq(st->sprite,st->frame,doomFacing(o,eye));
+ seq=doom_seq(st->sprite,st->frame,
+	      doomSeqTurns(st->sprite)? doomFacing(o,eye): 0);
  return (short)((seq<0 || seq>=level_nmSequences)? -1: seq);
 }
 
@@ -201,7 +228,7 @@ static void doomSetSpawnState(DoomActor *this,int state)
  this->state=(short)state;
  this->tics=st->tics;
  this->sprite->frame=0;
- doomSetSequence(this);
+ doomSetSequence(this,NULL);
  doomIdleIfTerminal(this);
 }
 
@@ -222,7 +249,7 @@ void doom_setState(DoomActor *this,int state)
      this->state=(short)state;
      this->tics=st->tics;
      this->sprite->frame=0;
-     doomSetSequence(this);
+     doomSetSequence(this,NULL);
      /* Doom actors have no momentum: a state that does not walk (attack, pain, look) stands
 	still.  A_Chase sets the velocity again right after this, missiles keep theirs. */
      if (!(this->mflags & DF_MISSILE))
@@ -322,7 +349,7 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
 	break;
      case SIGNAL_VIEW:
 	if (this->sprite)
-	   doomSetSequence(this);
+	   doomSetSequence(this,camera? &camera->pos: (MthXyz *)0);
 	break;
      case SIGNAL_HURT:
 	doom_damageActor(this,param1,(Object *)param2);
