@@ -542,6 +542,11 @@ short doom_roleBodySeq(int k,Sprite *body,Sprite *viewer,int health)
     st=info->spawnstate;
  if (st<=0)
     return -1;
+ /* GCC14: FF_FULLBRIGHT, as on an AI monster's frame (DOOM_ACTOR.C doomSetSequence): a worn
+    lost soul, a worn shotgun guy's muzzle flash keep their light in a dark leaf (WALLS.C
+    drawSprites).  doom_playerBodySeq cleared the flag before it called this. */
+ if (doomStates[st].flags & DOOM_SF_FULLBRIGHT)
+    body->flags|=SPRITEFLAG_FULLBRIGHT;
  frame=doomStates[st].frame&0x7fff;
  saved=body->angle;
  body->angle=normalizeAngle(body->angle+F(90));

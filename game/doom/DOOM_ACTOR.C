@@ -141,6 +141,12 @@ static void doomSetSequence(DoomActor *this)
     seq=-1;
  assert(seq<level_nmSequences);
  this->sprite->sequence=(short)seq;
+ /* GCC14: FF_FULLBRIGHT -- the frame lights itself, the leaf's light does not reach it (WALLS.C
+    drawSprites).  Here, so the flag follows the frame drawn: SIGNAL_VIEW runs this just before */
+ if (st->flags & DOOM_SF_FULLBRIGHT)
+    this->sprite->flags|=SPRITEFLAG_FULLBRIGHT;
+ else
+    this->sprite->flags&=~SPRITEFLAG_FULLBRIGHT;
 }
 
 /* The sequence drawSprites will draw for o: its SIGNAL_VIEW runs doomSetSequence, which picks

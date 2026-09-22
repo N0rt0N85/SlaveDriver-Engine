@@ -3944,6 +3944,33 @@ static int sprRect(XyInt *pos)
  return 1;
 }
 
+#if CFG_THING_LEAFLIGHT
+/* GCC14: how much darker than full light (16) leaf s is, 0..16, in the walls' 5-bit units -- what
+   its walls carry.  doom2ps gives every wall of a leaf its sector's light and setSectorBrightness
+   (AICOMMON.C) rewrites them all alike, so any one of them says it (measured: one value per leaf
+   on all 3 207 leaves of the E1M1-E1M9 disc of 2026-09-21).  Read from the end of the list, where
+   doom2ps puts the floor and the ceiling: one wall read, two under a sky.  A portal or a sky
+   carries no light.  Read each time rather than cached: the walls' own numbers, no state. */
+static int leafDark(int s)
+{int w,l;
+ const sWallType *wall;
+ assert(s>=0 && s<level_nmSectors);
+ for (w=level_sector[s].lastWall;w>=level_sector[s].firstWall;w--)
+    {wall=level_wall+w;
+     if (wall->flags & (WALLFLAG_INVISIBLE|WALLFLAG_PARALLAX))
+	continue;
+     l=(wall->flags & WALLFLAG_PARALLELOGRAM)? level_vertexLight[wall->firstLight]:
+					       level_vertex[wall->firstVertex].light;
+     if (l>=16)
+	return 0;
+     if (l<=0)
+	return 16;
+     return 16-l;
+    }
+ return 0;
+}
+#endif
+
 void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 {Sprite *o;
  Sprite *drawList[100];
@@ -4102,6 +4129,18 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
       if (d<0) d=0;
       spriteFog=fogTable[d];
       spriteFog-=spriteFog>>2;
+#if CFG_THING_LEAFLIGHT
+      /* GCC14: and the light of the leaf it stands in (o->s, where its centre is: the leaf that
+	 DRAWS it may be a later one, doom_spriteLeaves), on top of the distance's share, as a
+	 wall takes both.  The darkest bank stays SPRITEFOGMAX, a third of the way down: in a room
+	 gone black a thing is dim, not black -- enough, and the fog keeps its look.  The dynamic
+	 lights below still lift it.  A FULLBRIGHT frame keeps the distance's share only, as Doom
+	 gives it colormap 0. */
+      if (!(o->flags & SPRITEFLAG_FULLBRIGHT))
+	 spriteFog+=leafDark(o->s);
+      if (spriteFog>SPRITEFOGMAX)
+	 spriteFog=SPRITEFOGMAX;
+#endif
       /* Doom's thing tiles are TILE8BPP (PIC_SLOTS), i.e. colour-bank mode, where gouraud shifts the
 	 palette INDEX, not the RGB (HW measure, saturn-refs/knowledge/HW_VDP1.md:783): noise on
 	 PLAYPAL.  A darkened bank is the only way, as Lobotomy planned (the commented line above). */

@@ -979,6 +979,7 @@ short doom_playerBodySeq(Sprite *body,Sprite *viewer,int health)
  const DoomState *st;
  body->scale=65536;                    /* 1 texel per unit, as every Doom thing */
  body->flags|=SPRITEFLAG_NOSHADOW;
+ body->flags&=~SPRITEFLAG_FULLBRIGHT;  /* GCC14: doom_roleBodySeq may set it (WALLS.C drawSprites) */
  k=mpIndexOfSprite(body);
  if (doom_isMonsterPlayer(k))
     return doom_roleBodySeq(k,body,viewer,health);   /* GCC14: the monster it wears */

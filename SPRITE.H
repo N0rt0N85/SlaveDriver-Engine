@@ -42,6 +42,10 @@ struct __sprite;
    what is behind shows through.  Doom's MF_SHADOW (the spectre) asks for it; the hardware gives
    it for nothing, as a draw-mode bit, unlike half-transparency which needs colour calculation. */
 #define SPRITEFLAG_MESH            0x100000
+/* GCC14: a frame that makes its own light -- Doom's FF_FULLBRIGHT, bit 15 of states[].frame
+   (fireballs, explosions, lamps and torches, a monster's muzzle flash).  drawSprites gives it no
+   leaf light (CFG_THING_LEAFLIGHT); the Doom actor sets it with its sequence (DOOM_ACTOR.C). */
+#define SPRITEFLAG_FULLBRIGHT      0x200000
 
 typedef
 struct __sprite
@@ -215,6 +219,10 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_LIGHTRADIUS        181                               /* subtractive lights only (addLight); Doom: params LIGHT_* */
 #define CFG_LIGHTSHIFT         10                                /* subtractive lights only: 181^2>>10 = 31 */
 #define CFG_LIGHTSMOOTH        1                                 /* WALLS.C lightApply: s^2 falloff, soft edge */
+/* GCC14: a thing takes the light of the leaf it stands in (WALLS.C drawSprites), as Doom's
+   R_ProjectSprite reads its sector's lightlevel: a room whose lights go out (E1M3's blue key)
+   takes its corpses with it. */
+#define CFG_THING_LEAFLIGHT    1
 /* SPRITE.C:658: a thing below its floor stands on it at once, as in Doom (P_ZMovement: z =
    floorz).  The engine rises 1/8 of the depth a tic, and against Doom's gravity of 1 u a tic --
    exactly the value where neither snap test above it fires -- that held every awake monster 7 u
@@ -239,6 +247,7 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_LIGHTRADIUS      256
 #define CFG_LIGHTSHIFT       11
 #define CFG_LIGHTSMOOTH      1
+#define CFG_THING_LEAFLIGHT  0                   /* things: distance fog and dynamic lights only */
 #define CFG_FLOOR_RISE(o,d)  ((d)>>3)
 #define CFG_LEVEL_NAME(l)    getLevelName(l)
 #define CFG_PLAY_INTRO()     playIntro()
