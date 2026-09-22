@@ -389,11 +389,15 @@ void *picScratch(int *size)
  return picBuff;
 }
 
+/* GCC14: a byte at a time was 4 096 stores for every tile uploaded, and a Doom monster's tile is
+   about three quarters blank.  The blank runs go out by longwords once they are aligned, the
+   opaque ones through the fast copy. */
 static unsigned char *unRle(Pic *p)
 {register int outSize;
  register int i;
  register unsigned char *inPos;
  int nmPixels;
+ unsigned char *out;
  while (dmaActive())
     ;
  outSize=0;
@@ -405,12 +409,26 @@ static unsigned char *unRle(Pic *p)
  while (outSize<nmPixels)
     {/* decode blank space */
      i=*(inPos++);
-     for (;i;i--)
-	rleBuffer[outSize++]=0;
+     out=rleBuffer+outSize;
+     outSize+=i;
+     while (i && ((int)out & 3))
+	{*out++=0;
+	 i--;
+	}
+     while (i>=4)
+	{*(unsigned int *)out=0;
+	 out+=4;
+	 i-=4;
+	}
+     while (i-->0)
+	*out++=0;
      /* decode not blank space */
      i=*(inPos++);
-     for (;i;i--)
-	rleBuffer[outSize++]=*(inPos++);
+     if (i)
+	{qmemcpy(rleBuffer+outSize,inPos,i);
+	 inPos+=i;
+	 outSize+=i;
+	}
     }
  assert(outSize==nmPixels);
  return rleBuffer;

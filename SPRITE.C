@@ -529,9 +529,17 @@ void collideSpriteSprite(Sprite *mobile,Sprite *stat)
     return;
 
  len=fixSqrt(distance2,16);
- dp.x/=f(len);
- dp.y/=f(len);
- dp.z/=f(len);
+ {/* GCC14: three software divisions by the same length, in the innermost loop of a crowd --
+     one hardware division for its reciprocal and three multiplies instead (the direction is
+     then exact to 1/65536, and it only pushes the sprites apart) */
+  int n=f(len),rcp;
+  if (n<1)
+     n=1;
+  rcp=(1<<24)/n;
+  dp.x=MTH_Mul(dp.x,rcp)>>8;
+  dp.y=MTH_Mul(dp.y,rcp)>>8;
+  dp.z=MTH_Mul(dp.z,rcp)>>8;
+ }
 
  spriteCollideNm=stat-sprites;
 
