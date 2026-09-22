@@ -28,6 +28,7 @@
 #include "mplayer.h"
 #include "walls.h"
 #include "doom_lights.h"
+#include "map.h"                    /* GCC14: revealMap, the computer map */
 
 DoomPlayer doomPlayer;
 int doomViewBob;                        /* P_CalcHeight's bob, added to the view (CFG_VIEW_BOB)    */
@@ -93,6 +94,7 @@ static const char *GOTLAUNCHER="You got the rocket launcher!";
 static const char *GOTPLASMA="You got the plasma gun!";
 static const char *GOTSHOTGUN="You got the shotgun!";
 static const char *GOTSHOTGUN2="You got the super shotgun!";
+static const char *GOTMAP="Computer Area Map";                 /* GCC14 */
 
 /* --- init ----------------------------------------------------------------------------------- */
 
@@ -199,6 +201,41 @@ void doom_playerInit(void)
 
 /* --- 60 Hz ---------------------------------------------------------------------------------- */
 
+/* GCC14: X alone opens and closes the automap (AM_Responder, Tab).  On its RELEASE, and only if
+   neither Y, Z nor L+R went down while it was held: every chord that holds X -- the mipmap
+   switch, the hole painter, the light tuner, the cheats -- holds one of them.  The request waits
+   for the next image (SRUINS.C CFG_MAP_TOGGLE), so an image is the map or the view, whole.
+   Solo only: drawMap draws one map, on the whole screen. */
+static char amHeld,amChord,amToggle;
+
+int doom_mapToggle(void)
+{int t=amToggle;
+ amToggle=0;
+ return t;
+}
+
+static void doomMapKey(unsigned short input)
+{unsigned short held=(unsigned short)~input;          /* the pad's bits are active low */
+ if (mpPlayers!=1)
+    {amHeld=0;
+     return;
+    }
+ if (held & PER_DGT_X)
+    {if (!amHeld)
+	{amHeld=1;
+	 amChord=0;
+	}
+     if ((held & (PER_DGT_Y|PER_DGT_Z)) ||
+	 (held & (PER_DGT_TL|PER_DGT_TR))==(PER_DGT_TL|PER_DGT_TR))
+	amChord=1;
+    }
+ else if (amHeld)
+    {amHeld=0;
+     if (!amChord)
+	amToggle^=1;
+    }
+}
+
 /* CFG_CONTROL (SRUINS.C:960), only while the player is alive and not stunned: remember the input
    (edges are OR-ed until the tic consumes them: a press shorter than a tic still fires), lock the
    view, landing sound, and camera->vel = mom * 35/60 for the moveCamera() that follows.  yavel and
@@ -214,6 +251,7 @@ void doom_playerFrame(unsigned short input,unsigned short pushed)
     }
  doomPlayer.input=input;
  doomPlayer.pushed|=pushed;
+ doomMapKey(input);                     /* GCC14: X alone, the automap */
  playerAngle.pitch=0;
  playerAngle.roll=0;
  /* P_ZMovement p_mobj.c:324: hit the floor faster than 8 u/tic => sfx_oof */
@@ -940,8 +978,15 @@ int doom_playerGetObject(int mt,int dropped)
 	msg=GOTSHOTGUN2;
 	sound=sfx_wpnup;
 	break;
+     case SPR_PMAP:                             /* GCC14: P_GivePower(pw_allmap), once a level */
+	if (mapRevealed())
+	   return 0;
+	revealMap();                            /* the unseen walls in grey (MAP.C) */
+	msg=GOTMAP;
+	sound=sfx_getpow;                       /* packed where a map lies (wad2snd PICKUP_SOUNDS) */
+	break;
      default:
-	return 0;                               /* powers (PINV PSTR PINS SUIT PMAP PVIS), MEGA: TODO, refused */
+	return 0;                               /* powers (PINV PSTR PINS SUIT PVIS), MEGA: TODO, refused */
     }
  if (msg)
     doom_setMessage(msg);

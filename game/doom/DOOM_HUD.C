@@ -249,22 +249,14 @@ void doom_setMessage(const char *msg)
  doomMessageUntil=doomLevelTime+DOOM_MSGTIMEOUT;
 }
 
-/* SRUINS.C:2211 (CFG_DRAW_MESSAGE): HUlib_drawTextLine at (HU_MSGX 0, HU_MSGY 0) = screen (0, 0):
-   upper-cased, a glyph advances by its width, a space or an absent glyph by 4, stop at the right
-   edge.  drawString is not used: STCFN has no ' ' glyph and drawString adds width+1. */
-void doom_drawMessage(void)
-{int x,c,w;
- const char *s;
- doom_lightTunerDraw();                 /* GCC14: the light tuner's lines, under the message */
- if (!doomMessageOn)
-    return;
- if (doomLevelTime>=doomMessageUntil)
-    {doomMessageOn=0;
-     return;
-    }
+/* HUlib_drawTextLine: upper-cased, a glyph advances by its width, a space or an absent glyph by
+   4, stop at the right edge.  drawString is not used: STCFN has no ' ' glyph and drawString adds
+   width+1.  (x, y) = the line's top left, screen centred. */
+static void doomHudText(int x,int y,const char *s)
+{
 #ifndef DOOM_ART_STUB
- x=-160;
- for (s=doomMessage;*s;s++)
+ int c,w;
+ for (;*s;s++)
     {c=(unsigned char)*s;
      if (c>='a' && c<='z')
 	c-='a'-'A';
@@ -272,7 +264,7 @@ void doom_drawMessage(void)
      if (w>0)
 	{if (x+w>160)
 	    break;
-	 drawChar(x,-CFG_YCENTER,FONT_MSG,(unsigned char)c);
+	 drawChar(x,y,FONT_MSG,(unsigned char)c);
 	 x+=w;
 	}
      else
@@ -282,8 +274,31 @@ void doom_drawMessage(void)
 	}
     }
 #else
- (void)x; (void)c; (void)w; (void)s;
+ (void)x; (void)y; (void)s;
 #endif
+}
+
+/* GCC14: the automap's title line (HU_Drawer draws w_title while automapactive): the level's
+   name at (HU_TITLEX 0, HU_TITLEY 167 - the font's 7 lines), just above the status bar -- here
+   the view ends at CFG_YMAX.  The names of d_englsh.h (HUSTR_E1M1..9). */
+static const char *const doomMapTitles[DOOM_NMLEVELS]=
+   {"E1M1: Hangar","E1M2: Nuclear Plant","E1M3: Toxin Refinery","E1M4: Command Control",
+    "E1M5: Phobos Lab","E1M6: Central Processing","E1M7: Computer Station",
+    "E1M8: Phobos Anomaly","E1M9: Military Base"};
+
+/* SRUINS.C:2211 (CFG_DRAW_MESSAGE): HUlib_drawTextLine at (HU_MSGX 0, HU_MSGY 0) = screen (0, 0) */
+void doom_drawMessage(void)
+{int l=currentState.currentLevel;
+ doom_lightTunerDraw();                 /* GCC14: the light tuner's lines, under the message */
+ if (mapOn && l>=0 && l<DOOM_NMLEVELS && doomMapTitles[l])
+    doomHudText(-160,CFG_YMAX-8,doomMapTitles[l]);
+ if (!doomMessageOn)
+    return;
+ if (doomLevelTime>=doomMessageUntil)
+    {doomMessageOn=0;
+     return;
+    }
+ doomHudText(-160,-CFG_YCENTER,doomMessage);
 }
 
 /* GCC14: local multiplayer (MPLAYER.H).  The HUD's per-player state -- the message and the face

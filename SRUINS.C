@@ -2604,6 +2604,7 @@ int runLevel(char *filename,int levelNm)
 	    }
 	 mpSwitch(0);
 	}
+     CFG_MAP_TOGGLE();              /* GCC14: before anything of the image is drawn */
      for (mpView=0;mpView<mpPlayers;mpView++)
 	{mpSwitch(mpView);
 	 mpSetViewport(mpView,mpPlayers>1);
@@ -2636,7 +2637,8 @@ int runLevel(char *filename,int levelNm)
 	 mpShowBodies(mpView);
 	 if (mpPlayers>1)
 	    mpSkyMoon(mpView,viewTransform.current);
-	 drawWalls(mpView,viewTransform.current);
+	 if (!(CFG_MAP_HIDES_VIEW && mapOn && mpPlayers==1))   /* GCC14: drawMap draws instead */
+	    drawWalls(mpView,viewTransform.current);
 	 popProfile();
 
 	 if (mpPlayers==1)

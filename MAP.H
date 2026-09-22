@@ -7,5 +7,6 @@ void setMark(Fixed32 x,Fixed32 y);
 void mapScaleUp(void);
 void mapScaleDn(void);
 void revealMap(void);
+int mapRevealed(void);          /* GCC14: revealMap has run on this level */
 
 #endif

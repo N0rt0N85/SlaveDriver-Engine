@@ -193,6 +193,12 @@ void doom_weaponReserve(int k);                      /* player k's gun takes its
 #define CFG_FALL_MIN           0x7fffffff                        /* SRUINS.C:238: no fall damage  */
 #define CFG_LEVEL_PLAYER_INIT() doom_playerInit()                /* SRUINS.C:2010                 */
 #define CFG_RUN_WEAPON(n,i,b)  if (!mapOn) doom_weaponDraw(n)    /* SRUINS.C:2207; no gun over the automap */
+/* GCC14: the automap REPLACES the view, as D_Display draws AM_Drawer instead of it (the view is
+   not drawn under it, SRUINS.C), and X alone opens and closes it (DOOM_PLAYER.C) -- applied as
+   an image begins, so an image is the map or the view, whole */
+int doom_mapToggle(void);                            /* DOOM_PLAYER.C: 1 once an X alone asked it */
+#define CFG_MAP_HIDES_VIEW     1
+#define CFG_MAP_TOGGLE()       (mapOn^=doom_mapToggle())
 #define CFG_ROLE_FIRE()        0                                 /* WEAPON.C fireWeapon: Doom's roles fire in DOOM_MODES.C */
 #define CFG_PLAYER_HURT(hp,src) doom_playerDamage(hp,(Object *)(src))   /* AI.C:34 player_func  */
 #define CFG_WOVERLAY_FROM      0x7fffffff                        /* SEQUENCE.C:252: no palette swap at wseq 50 */
@@ -259,6 +265,8 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_FALL_MIN           F(1)
 #define CFG_LEVEL_PLAYER_INIT()
 #define CFG_RUN_WEAPON(n,i,b)  if (!ps_roleNoWeapon()) runWeapon(n,i,b)   /* a worn monster carries no gun */
+#define CFG_MAP_HIDES_VIEW     0                                 /* the map is drawn over the view */
+#define CFG_MAP_TOGGLE()                                         /* from the inventory only */
 #define CFG_ROLE_FIRE()        ps_fire()                         /* WEAPON.C fireWeapon: the body fires; a worn monster throws what it throws */
 #define CFG_PLAYER_HURT(hp,src) ps_playerHurt(hp,(struct __object *)(src))   /* PSMULTI.C: no damage between allies, and the frag goes on a name */
 #define CFG_WOVERLAY_FROM      50

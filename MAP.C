@@ -43,6 +43,12 @@ void revealMap(void)
 {gotFullMap=1;
 }
 
+/* GCC14: whether revealMap has run on this level -- Doom's computer map is taken once
+   (P_GivePower refuses pw_allmap to a player who has it) */
+int mapRevealed(void)
+{return gotFullMap;
+}
+
 void initMap(void)
 {int s,w;
  MthXyz t;
@@ -155,6 +161,13 @@ static unsigned short doomMapColor(int index)
 {return ((unsigned short *)SCL_COLRAM_ADDR)[index] | 0x8000;
 }
 
+/* GCC14: what the automap leaves of the command list for what is drawn after it (the arrow, the
+   status bar, the message, the level's title: one command a glyph).  The view is not drawn
+   under the map (SRUINS.C CFG_MAP_HIDES_VIEW), so the map has the list to itself, but a whole
+   level zoomed out still has more walls than the list has commands (E1M6: 1 508 walls one-sided
+   alone, the list 1 448): past this, the rest of the walls is left out. */
+#define DOOM_AM_RESERVE 160
+
 /* Doom automap walls: black view (AM_clearFB), then the classified walls of the seen leaves in
    their Doom colour; unseen leaves only with the computer map, in grey.  Same projection and
    clipping as the engine loop below. */
@@ -207,8 +220,45 @@ static void doomDrawMapWalls(int cx,int cy,MthXyz *north,MthXyz *east)
 	    continue;
 	 if (mapLine[0].y>MAXY && mapLine[1].y>MAXY)
 	    continue;
+	 /* GCC14: a wall shorter than a pixel is a dot the neighbouring walls already cover --
+	    zoomed out, most of them are */
+	 if (mapLine[0].x==mapLine[1].x && mapLine[0].y==mapLine[1].y)
+	    continue;
+	 if (EZ_getCmdRoom()<DOOM_AM_RESERVE)
+	    return;
 	 EZ_line(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|COMPO_REP,color,mapLine,NULL);
 	}
+    }
+}
+
+/* GCC14: am_map.c player_arrow (:117-127), R = 8*PLAYERRADIUS/7 map units, in eighths of R:
+   u along the player's facing, v across.  AM_drawPlayers turns it with the player and scales
+   it with the map (AM_drawLineCharacter, scale 0); here it never gets smaller than
+   DOOM_AM_ARROWMIN px, or the opening zoom would leave an arrow 5 px long. */
+#define DOOM_AM_R        1198372        /* F(8*16)/7 = 18.29 u */
+#define DOOM_AM_ARROWMIN 7
+static const signed char doomArrow[7][4]=
+   {{-7,0,8,0},{8,0,4,2},{8,0,4,-2},{-7,0,-9,2},{-7,0,-9,-2},{-5,0,-7,2},{-5,0,-7,-2}};
+
+/* Screen = north up (am_map.c draws the level unturned, following the player): the facing
+   (-sin yaw, cos yaw) of DOOM_PLAYER.C doomMoveTic, Z = Doom's y (doom3d.py), goes to
+   (-sin, -cos) on a screen whose y points down. */
+static void doomDrawArrow(int yaw)
+{int i;
+ Fixed32 e,fx,fy,sx,sy;
+ XyInt line[2];
+ e=MTH_Mul(DOOM_AM_R,mapScale);
+ if (e<F(DOOM_AM_ARROWMIN))
+    e=F(DOOM_AM_ARROWMIN);
+ e>>=3;                                  /* one eighth of R, in pixels */
+ fx=-MTH_Sin(yaw); fy=-MTH_Cos(yaw);     /* along */
+ sx=MTH_Cos(yaw);  sy=-MTH_Sin(yaw);     /* across */
+ for (i=0;i<7;i++)
+    {line[0].x=f(MTH_Mul(doomArrow[i][0]*e,fx)+MTH_Mul(doomArrow[i][1]*e,sx));
+     line[0].y=f(MTH_Mul(doomArrow[i][0]*e,fy)+MTH_Mul(doomArrow[i][1]*e,sy));
+     line[1].x=f(MTH_Mul(doomArrow[i][2]*e,fx)+MTH_Mul(doomArrow[i][3]*e,sx));
+     line[1].y=f(MTH_Mul(doomArrow[i][2]*e,fy)+MTH_Mul(doomArrow[i][3]*e,sy));
+     EZ_line(ECDSPD_DISABLE|COLOR_5|COMPO_REP,colors[1],line,NULL);
     }
 }
 #endif
@@ -222,8 +272,13 @@ void drawMap(int cx,int cy,int cz,int yaw,int currentSector)
  XyInt mapLine[2];
  MthXyz north,east;
  MthXyz p1,p2,wallP;
+#ifdef GP_GAME_DOOM
+ north.x=mapScale;                      /* GCC14: north up, the arrow turns (doomDrawArrow) */
+ north.y=0;
+#else
  north.x=MTH_Mul(MTH_Cos(yaw),mapScale);
  north.y=MTH_Mul(MTH_Sin(yaw),mapScale);
+#endif
  east.x=north.y;
  east.y=-north.x;
 
@@ -317,6 +372,9 @@ void drawMap(int cx,int cy,int cz,int yaw,int currentSector)
     }
 #endif
 
+#ifdef GP_GAME_DOOM
+ doomDrawArrow(yaw);
+#else
  mapLine[0].x=0;
  mapLine[0].y=-ARROWR;
  mapLine[1].x=0;
@@ -332,6 +390,7 @@ void drawMap(int cx,int cy,int cz,int yaw,int currentSector)
  mapLine[1].x=0;
  mapLine[1].y=-ARROWR;
  EZ_line(ECDSPD_DISABLE|COLOR_5|COMPO_REP, colors[1], mapLine, NULL);
+#endif
 #if 0
 #ifndef NDEBUG
  {int sec;

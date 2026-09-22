@@ -94,6 +94,10 @@ VARIANTS = {"posit1": ["posit1", "posit2", "posit3"], "posit2": ["posit1", "posi
 # est posee : l'arsenal passe d'une carte a l'autre (doom_playerFinishLevel). Un lump absent du
 # WAD est ignore par dynamic_sounds.
 PLAYER_SOUNDS = ["sawup", "sawidl", "sawful", "sawhit"]
+# Les sons du RAMASSAGE (P_TouchSpecialThing) qui ne sont pas statiques, par type de chose posee :
+# la carte d'ordinateur (MT_MISC15, pw_allmap) joue getpow (DOOM_PLAYER.C la prend). Les autres
+# bonus (PINV, PSTR, PINS, SUIT, PVIS) sont encore refuses par le moteur : pas leur son.
+PICKUP_SOUNDS = {"MT_MISC15": ["getpow"]}
 MOBJ_SOUND_FIELDS = ("seesound", "attacksound", "painsound", "deathsound", "activesound")
 MOBJ_STATE_FIELDS = ("spawnstate", "seestate", "painstate", "meleestate", "missilestate",
                      "deathstate", "xdeathstate", "raisestate")
@@ -196,6 +200,8 @@ def sound_names_for(ids, mobj_types):
                 wanted.add(n)
     if 0 in mobj_types:                                # le joueur : les sons de SON arsenal
         wanted.update(PLAYER_SOUNDS)
+    for mt in mobj_types:                              # ce que ramasser la chose fait entendre
+        wanted.update(PICKUP_SOUNDS.get(ids["mt_names"][mt], ()))
     for n in list(wanted):
         wanted.update(VARIANTS.get(n, ()))
     wanted -= set(STATIC_SOUNDS)
