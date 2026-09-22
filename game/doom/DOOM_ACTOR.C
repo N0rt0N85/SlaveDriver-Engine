@@ -387,8 +387,9 @@ DoomActor *doom_spawn(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
      sflags=SPRITEFLAG_IMATERIAL|SPRITEFLAG_IMMOBILE;
     }
  else
-    {class=CLASS_SPRITE;                /* puff, blood, fog: one-shots with a velocity */
-     sflags=SPRITEFLAG_IMATERIAL;
+    {class=CLASS_SPRITE;                /* puff, blood, fog: one-shots with a velocity -- up and
+					   down only, as P_ZMovement moves them (SPRITEFLAG_ZONLY) */
+     sflags=SPRITEFLAG_IMATERIAL|SPRITEFLAG_ZONLY;
     }
  /* MF_SHADOW, the spectre: Doom draws it through its fuzz column map, which this engine has no
     equivalent of -- the VDP1's mesh is the hardware's own see-through, a screen checkerboard. */
@@ -652,6 +653,7 @@ static void doomExplodeMissile(DoomActor *this)
  removeLight(this->sprite);
  if (this->sprite==doomPlasmaLight)
     doomPlasmaLight=NULL;
+ this->sprite->flags|=SPRITEFLAG_ZONLY;         /* it stays where it hit, touching nothing */
  doom_setState(this,info->deathstate);
  if (this->type==OT_DEAD)
     return;

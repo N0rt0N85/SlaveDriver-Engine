@@ -962,8 +962,40 @@ void moveCamera(void)
  collideSprite(camera);
 }
 
+/* GCC14: SPRITEFLAG_ZONLY -- P_ZMovement: gravity, then the leaf's floor and ceiling hold it.
+   Its leaf cannot change, x and z do not move.  0: it touches nothing a caller would act on. */
+static int moveSpriteZ(Sprite *o)
+{int w,fw=-1,cw=-1;
+ Fixed32 d;
+ if (!(o->flags & SPRITEFLAG_UNDERWATER))
+    o->vel.y-=o->gravity;
+ else
+    o->vel.y-=o->gravity>>1;
+ o->pos.y+=o->vel.y;
+ for (w=level_sector[o->s].firstWall;w<=level_sector[o->s].lastWall;w++)
+    if (level_wall[w].normal[1]>0)
+       {if (fw<0) fw=w;}
+    else if (level_wall[w].normal[1]<0)
+       {if (cw<0) cw=w;}
+ o->floorSector=-1;
+ if (fw>=0 && (d=findFloorDistance(o->s,&o->pos)-SPR_FOOT(o))<=0)
+    {o->pos.y-=d;
+     if (o->vel.y<0)
+	o->vel.y=0;
+     o->floorSector=o->s;
+    }
+ if (cw>=0 && (d=findCeilDistance(o->s,&o->pos)+SPR_HEAD(o))>0)
+    {o->pos.y-=d;
+     if (o->vel.y>0)
+	o->vel.y=0;
+    }
+ return 0;
+}
+
 int moveSprite(Sprite *sprite)
-{if (!(sprite->flags & SPRITEFLAG_IMMOBILE))
+{if (sprite->flags & SPRITEFLAG_ZONLY)
+    return moveSpriteZ(sprite);
+ if (!(sprite->flags & SPRITEFLAG_IMMOBILE))
     {doFriction(sprite);
      internal_moveSprite(sprite);
     }

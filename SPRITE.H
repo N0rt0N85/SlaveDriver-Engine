@@ -46,6 +46,11 @@ struct __sprite;
    (fireballs, explosions, lamps and torches, a monster's muzzle flash).  drawSprites gives it no
    leaf light (CFG_THING_LEAFLIGHT); the Doom actor sets it with its sequence (DOOM_ACTOR.C). */
 #define SPRITEFLAG_FULLBRIGHT      0x200000
+/* GCC14: moves up and down only, between its leaf's floor and ceiling, and touches nothing --
+   moveSprite skips collideSprite.  A thing that passes through everything and never moves
+   sideways (Doom's puffs, blood and fogs: MF_NOBLOCKMAP, P_ZMovement alone) paid a whole
+   collision every tic. */
+#define SPRITEFLAG_ZONLY           0x400000
 
 typedef
 struct __sprite
