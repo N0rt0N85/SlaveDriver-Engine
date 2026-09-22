@@ -20,6 +20,7 @@
 #include "gamestat.h"
 #include "doom.h"
 #include "mplayer.h"
+#include "doom_lights.h"
 
 /* Objects that exist only in this file (doom2ps doom_specials.OT_DOOM_TELEPORT / OT_DOOM_FLOOR,
    params big-endian shorts in that order):
@@ -734,7 +735,7 @@ static void doomLamp_func(Object *_this,int message,int param1,int param2)
 	    break;
 	   }
 	if (!hasLight(&this->spot))
-	   addLightEx(&this->spot,this->r,this->g,this->b,this->radius,p);
+	   addLightPrio(&this->spot,this->r,this->g,this->b,this->radius,p,DOOM_LIGHTPRIO_EXPLODE);
 	else if (p!=this->shown)
 	   changeLightEx(&this->spot,this->r,this->g,this->b,0,p);
 	this->shown=(short)p;

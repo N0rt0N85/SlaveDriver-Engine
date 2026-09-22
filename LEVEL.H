@@ -29,5 +29,6 @@ extern int level_nmWaveVert;
 extern int level_nmVertex;
 
 int loadLevel(int fd,int tileBase);
+int level_maySee(int s1,int s2);        /* GCC14: 0 when the reject table says never */
 
 #endif

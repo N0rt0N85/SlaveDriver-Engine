@@ -511,12 +511,19 @@ static Sprite *lightSource[MAXNMLIGHTSOURCES];
 int nmLights;                              /* GCC14: lights live in this image (WALLS.H, overlay) */
 static int delayNmLights;
 static MthXyz tLightPos[MAXNMLIGHTSOURCES];
+/* GCC14: where each light stood when the view was drawn, in world units, and whether the view's
+   leaf may see its leaf (LEVEL.C level_maySee).  Both made by drawWalls with tLightPos, before
+   the slave is kicked: the slave reads these, never lightSource[]->pos, which runObjects moves
+   while it draws. */
+static int wLightPos[MAXNMLIGHTSOURCES][3];
+static char lightSeen[MAXNMLIGHTSOURCES];
 static int lColor[MAXNMLIGHTSOURCES][3];   /* proportional: k * intensity */
 static int delayColor[MAXNMLIGHTSOURCES][3];
 /* GCC14: radius, radius^2 and (1<<24)/radius^2, set once per light: no divide per vertex. */
 static int lRad[MAXNMLIGHTSOURCES],lRad2[MAXNMLIGHTSOURCES],lInv[MAXNMLIGHTSOURCES];
 static int delayRad[MAXNMLIGHTSOURCES];
 static char lMode[MAXNMLIGHTSOURCES];      /* 0 subtractive, 1 proportional */
+static signed char lPrio[MAXNMLIGHTSOURCES];   /* GCC14: who gives way when the list is full */
 static char lightColorChanged=0,lightsDeleted=0;
 static char delayDeleteLight[MAXNMLIGHTSOURCES];
 static void lightInit(void)
@@ -537,22 +544,60 @@ static void lightSetRadius(int i,int radius)
  lInv[i]=(1<<24)/lRad2[i];
 }
 
-static void lightPut(Sprite *s,int r,int g,int b,int radius,int mode)
+/* GCC14: a full list used to refuse the new light, whatever it was -- the player's own muzzle
+   flash behind fifteen fireballs.  Now the new light takes the slot of one that matters less: a
+   light the camera's leaf never sees first, then the lowest priority, then the farthest from the
+   camera; an equal priority gives way only when it is farther than the newcomer.  The slot is
+   rewritten through the delayed values, as changeLightEx does: the image being drawn keeps its
+   lights.  Nothing to take: refused, as before.  Priority 0 is what addLight and addLightEx ask. */
+static int lightDist(Sprite *s)
+{return camera? approxDist(s->pos.x-camera->pos.x,s->pos.y-camera->pos.y,s->pos.z-camera->pos.z): 0;
+}
+
+static int lightEvict(Sprite *s,int prio)
+{int i,best=-1,bh=0,bp=0,bd=0,h,d,dn=lightDist(s);
+ for (i=0;i<delayNmLights;i++)
+    {if (delayDeleteLight[i] || lPrio[i]>prio)
+	continue;
+     h=camera? !level_maySee(lightSource[i]->s,camera->s): 0;
+     d=lightDist(lightSource[i]);
+     if (!h && lPrio[i]==prio && d<=dn)
+	continue;
+     if (best<0 || h>bh || (h==bh && (lPrio[i]<bp || (lPrio[i]==bp && d>bd))))
+	{best=i; bh=h; bp=lPrio[i]; bd=d;}
+    }
+ return best;
+}
+
+static void lightPut(Sprite *s,int r,int g,int b,int radius,int mode,int prio)
 {int i=delayNmLights;
  if (i>=MAXNMLIGHTSOURCES)
-    return;
+    {i=lightEvict(s,prio);
+     if (i<0)
+	return;
+     delayColor[i][0]=r;
+     delayColor[i][1]=g;
+     delayColor[i][2]=b;
+     delayRad[i]=radius;
+     lMode[i]=mode;
+     lPrio[i]=prio;
+     lightSource[i]=s;
+     lightColorChanged=1;
+     return;
+    }
  lColor[i][0]=delayColor[i][0]=r;
  lColor[i][1]=delayColor[i][1]=g;
  lColor[i][2]=delayColor[i][2]=b;
  lightSetRadius(i,radius);
  delayRad[i]=radius;
  lMode[i]=mode;
+ lPrio[i]=prio;
  lightSource[i]=s;
  delayNmLights++;
 }
 
 void addLight(Sprite *s,int r,int g,int b)
-{lightPut(s,r,g,b,LIGHTRADIUS,0);
+{lightPut(s,r,g,b,LIGHTRADIUS,0,0);
 }
 
 /* GCC14: the player's settings over what an effect asks (WALLS.H): the switch, the two scales
@@ -577,13 +622,17 @@ static int lightTune(int *r,int *g,int *b,int *radius,int *peak)
 }
 
 /* GCC14: k 0..16 per channel, radius in world units, intensity 0..31 at the centre. */
-void addLightEx(Sprite *s,int r,int g,int b,int radius,int peak)
+void addLightPrio(Sprite *s,int r,int g,int b,int radius,int peak,int prio)
 {assert(radius>=16 && radius<=1024);
  assert(peak>=0 && peak<=31);
  assert(r>=0 && r<=16 && g>=0 && g<=16 && b>=0 && b<=16);
  if (!lightTune(&r,&g,&b,&radius,&peak))
     return;                       /* the player's settings put this light out */
- lightPut(s,r*peak,g*peak,b*peak,radius,1);
+ lightPut(s,r*peak,g*peak,b*peak,radius,1,prio);
+}
+
+void addLightEx(Sprite *s,int r,int g,int b,int radius,int peak)
+{addLightPrio(s,r,g,b,radius,peak,0);
 }
 
 /* GCC14: the live light of s, or -1.  Only [0, delayNmLights) is live: scanning the stale
@@ -669,6 +718,7 @@ void updateLights(void)
 		 lInv[i]=lInv[j];
 		 delayRad[i]=lRad[i];
 		 lMode[i]=lMode[j];
+		 lPrio[i]=lPrio[j];
 		}
 	     i++;
 	    }
@@ -682,8 +732,11 @@ void updateLights(void)
 }
 
 /* GCC14: adds light i at pos (view space) to r,g,b.  Shared by getLight, sgetLight and
-   drawSprites; the box test runs before any multiply, and before any overflow. */
-static inline void lightApply(int i,MthXyz *pos,int *r,int *g,int *b)
+   drawSprites; the box test runs before any multiply, and before any overflow.  Always inlined:
+   out of line it was a call per vertex with r,g,b through the stack.  The products are >= 0
+   (u > 0, sv <= 256), so the shifts are unsigned: signed ones by 8, 12 or 16 are libgcc calls. */
+static inline __attribute__((always_inline))
+void lightApply(int i,MthXyz *pos,int *r,int *g,int *b)
 {int dx=f(pos->x-tLightPos[i].x);
  int dy=f(pos->y-tLightPos[i].y);
  int dz=f(pos->z-tLightPos[i].z);
@@ -695,16 +748,16 @@ static inline void lightApply(int i,MthXyz *pos,int *r,int *g,int *b)
  if (u<=0)
     return;
  if (lMode[i])
-    {int sv=(u*lInv[i])>>16;          /* 0..256 */
+    {unsigned sv=((unsigned)u*(unsigned)lInv[i])>>16;   /* 0..256 */
 #if CFG_LIGHTSMOOTH
      sv=(sv*sv)>>8;                   /* soft edge */
 #endif
-     *r+=(sv*lColor[i][0])>>12;       /* <= intensity */
-     *g+=(sv*lColor[i][1])>>12;
-     *b+=(sv*lColor[i][2])>>12;
+     *r+=(sv*(unsigned)lColor[i][0])>>12;       /* <= intensity */
+     *g+=(sv*(unsigned)lColor[i][1])>>12;
+     *b+=(sv*(unsigned)lColor[i][2])>>12;
     }
  else
-    {u>>=CFG_LIGHTSHIFT;
+    {u=(unsigned)u>>CFG_LIGHTSHIFT;
      if (u-lColor[i][0]>0)
 	*r+=u-lColor[i][0];
      if (u-lColor[i][1]>0)
@@ -715,51 +768,58 @@ static inline void lightApply(int i,MthXyz *pos,int *r,int *g,int *b)
 }
 
 
-int nmWallLights;
-static char wallLightP[MAXNMLIGHTSOURCES];
-static void buildLightList(sWallType *wall)
-{int l;
+/* GCC14: the lights that reach a wall, as a list of their indexes.  A light is kept when the view
+   may see its leaf, when it is within its radius of the box of the wall's vertices -- the corners
+   of a grid wall bound its grid, a mesh wall is read vertex by vertex -- and on the visible side
+   of the wall's plane, within its radius.  The plane alone marked every floor at the height of a
+   fireball, across the map: half the view's vertices went through the lit path, and those walls
+   lost the far and black LODs.  lightApply gives 0 to a vertex out of every light's reach, so the
+   image does not change.  Master and slave each keep their own list. */
+static int lightListFor(sWallType *wall,signed char *idx)
+{int l,n,v,v0,v1,x0,y0,z0,x1,y1,z1,rad;
  Fixed32 dist;
- MthXyz wallP;
- getVertex(wall->v[0],&wallP);
- nmWallLights=0;
- for (l=0;l<nmLights;l++)
-    {/* find distance from light to wall's plane */
-     dist=(f(lightSource[l]->pos.x-wallP.x))*wall->normal[0]+
-	  (f(lightSource[l]->pos.y-wallP.y))*wall->normal[1]+
-	  (f(lightSource[l]->pos.z-wallP.z))*wall->normal[2];
-     /* GCC14: only a light on the visible side of the plane (same dot product as the backface
-	test); the old test lit walls from up to a radius behind them. */
-     if (dist<=0 || dist>F(lRad[l]))
-	wallLightP[l]=0;
-     else
-	{wallLightP[l]=1;
-	 nmWallLights++;
-	}
+ const sVertexType *p;
+ if (wall->flags & WALLFLAG_PARALLELOGRAM)
+    {v=0; v0=0; v1=3;}
+ else
+    {v=1; v0=wall->firstVertex; v1=wall->lastVertex;}
+ p=level_vertex+(v? v0: wall->v[0]);
+ x0=x1=p->x; y0=y1=p->y; z0=z1=p->z;
+ for (l=v0+1;l<=v1;l++)
+    {p=level_vertex+(v? l: wall->v[l]);
+     if (p->x<x0) x0=p->x; else if (p->x>x1) x1=p->x;
+     if (p->y<y0) y0=p->y; else if (p->y>y1) y1=p->y;
+     if (p->z<z0) z0=p->z; else if (p->z>z1) z1=p->z;
     }
+ p=level_vertex+wall->v[0];
+ n=0;
+ for (l=0;l<nmLights;l++)
+    {int lx=wLightPos[l][0],ly=wLightPos[l][1],lz=wLightPos[l][2];
+     if (!lightSeen[l])
+	continue;
+     rad=lRad[l]+2;                   /* +2: lightApply's units are floored in view space */
+     if (lx+rad<x0 || lx-rad>x1 || ly+rad<y0 || ly-rad>y1 || lz+rad<z0 || lz-rad>z1)
+	continue;
+     /* the distance from the light to the wall's plane: only a light on the visible side (the
+	backface test's dot product); the old test lit walls from up to a radius behind them */
+     dist=(lx-p->x)*wall->normal[0]+(ly-p->y)*wall->normal[1]+(lz-p->z)*wall->normal[2];
+     if (dist<=0 || dist>F(lRad[l]))
+	continue;
+     idx[n++]=(signed char)l;
+    }
+ return n;
+}
+
+int nmWallLights;
+static signed char wallLightIdx[MAXNMLIGHTSOURCES];
+static void buildLightList(sWallType *wall)
+{nmWallLights=nmLights? lightListFor(wall,wallLightIdx): 0;
 }
 
 static int snmWallLights;
-static char swallLightP[MAXNMLIGHTSOURCES];
+static signed char swallLightIdx[MAXNMLIGHTSOURCES];
 static void sbuildLightList(sWallType *wall)
-{int l;
- Fixed32 dist;
- MthXyz wallP;
- getVertex(wall->v[0],&wallP);
- snmWallLights=0;
- for (l=0;l<nmLights;l++)
-    {/* find distance from light to wall's plane */
-     dist=(f(lightSource[l]->pos.x-wallP.x))*wall->normal[0]+
-	  (f(lightSource[l]->pos.y-wallP.y))*wall->normal[1]+
-	  (f(lightSource[l]->pos.z-wallP.z))*wall->normal[2];
-     /* GCC14: see buildLightList */
-     if (dist<=0 || dist>F(lRad[l]))
-	swallLightP[l]=0;
-     else
-	{swallLightP[l]=1;
-	 snmWallLights++;
-	}
-    }
+{snmWallLights=nmLights? lightListFor(wall,swallLightIdx): 0;
 }
 
 #define NEARCLIP F(GP_NEAR_CLIP) /* MUST stay under the player radius: SPRITE.C:141 parks the eye exactly there */
@@ -785,9 +845,8 @@ unsigned short getLight(char vlight,
  if (!nmWallLights)
     return worldGrey[(int)vlight];
  r=g=b=vlight;
- for (i=0;i<nmLights;i++)
-    if (wallLightP[i])
-       lightApply(i,pos,&r,&g,&b);
+ for (i=0;i<nmWallLights;i++)
+    lightApply(wallLightIdx[i],pos,&r,&g,&b);
  if (r>31) r=31;
  if (g>31) g=31;
  if (b>31) b=31;
@@ -809,9 +868,8 @@ unsigned short sgetLight(char vlight,
  if (!snmWallLights)
     return worldGrey[(int)vlight];
  r=g=b=vlight;
- for (i=0;i<nmLights;i++)
-    if (swallLightP[i])
-       lightApply(i,pos,&r,&g,&b);
+ for (i=0;i<snmWallLights;i++)
+    lightApply(swallLightIdx[i],pos,&r,&g,&b);
  if (r>31) r=31;
  if (g>31) g=31;
  if (b>31) b=31;
@@ -3738,7 +3796,15 @@ void drawWalls(int k,MthMatrix *view)
  updateList=tr->ul;
  updateListSize=tr->ulSize;
  for (i=0;i<nmLights;i++)
-    MTH_CoordTrans(view,&(lightSource[i]->pos),tLightPos+i);
+    {MthXyz lp=lightSource[i]->pos;
+     MTH_CoordTrans(view,&lp,tLightPos+i);
+     wLightPos[i][0]=f(lp.x);
+     wLightPos[i][1]=f(lp.y);
+     wLightPos[i][2]=f(lp.z);
+     /* a light the view's leaf never sees lights nothing of the view: it would only shine
+	through the walls between them (no light is occluded) */
+     lightSeen[i]=level_maySee(lightSource[i]->s,viewSector);
+    }
 
  slaveSize=slaveSplit[k];
  wallsView=k;
@@ -4149,7 +4215,9 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
       if (nmLights)
 	 {int li,lr,lg,lb,best=0;
 	  for (li=0;li<nmLights;li++)
-	     {lr=lg=lb=0;
+	     {if (!lightSeen[li])
+		 continue;
+	      lr=lg=lb=0;
 	      lightApply(li,&tformed,&lr,&lg,&lb);
 	      if (lr>best) best=lr;
 	      if (lg>best) best=lg;

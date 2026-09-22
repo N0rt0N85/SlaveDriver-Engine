@@ -640,12 +640,18 @@ void doom_noiseAlert(Object *emitter,int sector)
 
 /* --- projectiles (SPEC_RUNTIME section 5) --------------------------------------------------- */
 
-/* P_ExplodeMissile (p_mobj.c:85-98) */
+/* P_ExplodeMissile (p_mobj.c:85-98).  GCC14: the flight light goes out at the impact, before the
+   death state: its frames are FULLBRIGHT and light themselves, and the light kept a whole pool
+   burning for the 18 tics of an imp's explosion.  A rocket's A_Explode (the death state's verb)
+   lights its own explosion.  A lit plasma bolt hands the stream's light to the next one. */
 static void doomExplodeMissile(DoomActor *this)
 {const DoomMobjInfo *info=&doomMobjInfo[this->mt];
  this->sprite->vel.x=0;
  this->sprite->vel.y=0;
  this->sprite->vel.z=0;
+ removeLight(this->sprite);
+ if (this->sprite==doomPlasmaLight)
+    doomPlasmaLight=NULL;
  doom_setState(this,info->deathstate);
  if (this->type==OT_DEAD)
     return;
