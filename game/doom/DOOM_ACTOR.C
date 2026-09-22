@@ -609,6 +609,7 @@ void doom_damageActor(DoomActor *this,int damage,Object *source)
      doom_setState(this,info->painstate);
     }
  this->reactiontime=0;                         /* awake now */
+ this->mflags&=~DF_HALF;                       /* hit: it thinks at the full rate again */
  if (!this->threshold && source && source!=(Object *)this)
     {/* if not intent on another target, chase after this one */
      this->target=source;

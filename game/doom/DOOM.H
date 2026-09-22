@@ -45,6 +45,7 @@
 #define DF_DOORASKED    0x800           /* doom_nearDoor asked where it stands (DOOM_ACTOR.C)       */
 #define DF_NEARDOOR     0x1000          /* ... and its answer: at rest by a door, it collides       */
 #define DF_PICKUP       0x2000          /* in doomPickups: the players test its reach (doom_pickupTic) */
+#define DF_HALF         0x4000          /* far and unseen: A_Chase every other state, twice the step */
 #define DI_NODIR        8               /* movedir: no direction (p_enemy.c dirtype_t)            */
 
 /* --- weapons (doomdef.h weapontype_t; index into doomWeaponInfo[]) -------------------------- */

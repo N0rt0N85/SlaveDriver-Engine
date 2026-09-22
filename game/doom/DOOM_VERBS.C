@@ -419,25 +419,60 @@ void A_Look(DoomActor *this)
  doom_setState(this,info->seestate);
 }
 
+/* GCC14: is this monster one the level can run at half the rate?  It chases a marine, the reject
+   table says its leaf never sees any marine's -- so no attack of its can reach one, they all ask
+   for a line of sight, and nothing of it is drawn -- and it is far from every marine.  What it
+   then does between two thoughts is walk, and the step below is doubled to match. */
+static int doomChaseHalf(DoomActor *this)
+{Sprite *p,*ts;
+ int k;
+ if (!GP_MONSTER_FAR_THINK || (this->mflags & (DF_JUSTHIT|DF_JUSTATTACKED)))
+    return 0;
+ ts=doom_targetSprite(this->target);
+ if (!ts || !mpIsPlayer(ts))
+    return 0;
+ for (k=0;k<mpPlayers;k++)
+    {p=mpBody[k];
+     if (!p)
+	continue;
+     if (level_maySee(this->sprite->s,p->s))
+	return 0;
+     if (doom_approxDist2(p->pos.x-this->sprite->pos.x,p->pos.z-this->sprite->pos.z)<
+	 F(GP_MONSTER_FAR_THINK))
+	return 0;
+    }
+ return 1;
+}
+
 /* A_Chase (p_enemy.c:659-767).  P_Move's whole step (speed along movedir) is the velocity of the
    next tic only (DF_STEP, DOOM_ACTOR.C): Doom moves a monster once per A_Chase, every 2 to 4
-   tics, and so collides it once. */
+   tics, and so collides it once.
+   GCC14: a monster that is far and cannot be seen (doomChaseHalf) holds its run state twice as
+   long, walks twice as far in its step, and counts down twice as fast -- the same ground speed,
+   the same turns, the same timers, half the thoughts: half its A_Chase calls, its steps, its
+   collisions and its sight traces. */
 void A_Chase(DoomActor *this)
 {const DoomMobjInfo *info;
  const DoomState *st;
  Sprite *s;
- int a,delta;
+ int a,delta,step=(this->mflags & DF_HALF)?2:1;
  assert(this);
  info=&doomMobjInfo[this->mt];
  s=this->sprite;
  if (this->reactiontime)
-    this->reactiontime--;
+    {this->reactiontime-=step;
+     if (this->reactiontime<0)
+	this->reactiontime=0;
+    }
  /* modify target threshold */
  if (this->threshold)
     {if (!doom_targetAlive(this->target))
 	this->threshold=0;
      else
-	this->threshold--;
+	{this->threshold-=step;
+	 if (this->threshold<0)
+	    this->threshold=0;
+	}
     }
  /* turn towards movement direction if not there yet: angle &= 7<<29, +-45 degrees */
  if (this->movedir<8)
@@ -492,17 +527,30 @@ void A_Chase(DoomActor *this)
     }
  nomissile:
  /* chase towards player */
- if (--this->movecount<0)
+ this->movecount-=step;
+ if (this->movecount<0)
     doom_newChaseDir(this);
  else if (doomBlocked(this))
     doomNextDir(this);
  /* make active sound */
- if (info->activesound && P_Random()<3)
+ if (info->activesound && P_Random()<3*step)
     doom_sound(s,info->activesound);
  setvel:
+ /* the state it is in now (doom_newChaseDir may have changed none of it, a missile attack
+    returned above): its own length, doubled with the step when it is far and unseen */
+ if (doomChaseHalf(this))
+    {this->mflags|=DF_HALF;
+     if (this->tics>0)
+	this->tics*=2;
+     step=2;
+    }
+ else
+    {this->mflags&=~DF_HALF;
+     step=1;
+    }
  st=&doomStates[this->state];
  if (this->movedir<8 && info->speed && st->tics>0)
-    {Fixed32 v=F(info->speed);
+    {Fixed32 v=F(info->speed*step);
      this->mflags|=DF_STEP;
      int an=normalizeAngle(this->movedir*F(45));   /* SBL MTH_Sin/Cos: |x| >= 180 reads as 0 */
      s->vel.x=MTH_Mul(v,MTH_Cos(an));
