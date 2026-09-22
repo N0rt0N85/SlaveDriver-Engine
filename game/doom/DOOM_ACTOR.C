@@ -248,6 +248,7 @@ void doom_setState(DoomActor *this,int state)
      assert(!(st->flags & DOOM_SF_PSPRITE));    /* weapon states never reach an actor */
      this->state=(short)state;
      this->tics=st->tics;
+     this->mflags&=~DF_HALFSTATE;               /* its own length again (A_Chase may lengthen it) */
      this->sprite->frame=0;
      doomSetSequence(this,NULL);
      /* Doom actors have no momentum: a state that does not walk (attack, pain, look) stands
@@ -609,7 +610,12 @@ void doom_damageActor(DoomActor *this,int damage,Object *source)
      doom_setState(this,info->painstate);
     }
  this->reactiontime=0;                         /* awake now */
- this->mflags&=~DF_HALF;                       /* hit: it thinks at the full rate again */
+ if (this->mflags & DF_HALFSTATE)              /* hit: it thinks at the full rate again, and the
+						  state it is in gets its own length back */
+    {this->tics=(short)((this->tics+1)>>1);
+     this->mflags&=~DF_HALFSTATE;
+    }
+ this->mflags&=~DF_HALF;
  if (!this->threshold && source && source!=(Object *)this)
     {/* if not intent on another target, chase after this one */
      this->target=source;
@@ -627,7 +633,7 @@ void doom_damageActor(DoomActor *this,int damage,Object *source)
    nearer the spot than the thing.  So the leaves reached from the spot's through portals whose
    plane lies within DOOM_BLAST_REACH hold every candidate, and the same tests follow.  A flood
    that outgrows its queue falls back to every leaf. */
-#define DOOM_BLAST_MAXR    64            /* > the widest thing's radius of the IWAD's monsters */
+#define DOOM_BLAST_MAXR    128           /* >= the widest thing's radius of the IWADs (MT_SPIDER) */
 #define DOOM_BLAST_LEAVES  64
 void doom_radiusAttack(DoomActor *spot,Object *source,int damage)
 {int s,dist,n,i,k,w,ns;
@@ -646,6 +652,20 @@ void doom_radiusAttack(DoomActor *spot,Object *source,int damage)
        {ns=level_wall[w].nextSector;
 	if (ns<0)
 	   break;                               /* doom2ps puts a leaf's portals first */
+	/* the portal's own box first: its plane runs across the map, and a leaf whose portal
+	   lies on the same line as a wall beside the spot would be flooded from any distance */
+	{int vv,x0,x1,z0,z1,q=f(reach);
+	 const sVertexType *pv=level_vertex+level_wall[w].v[0];
+	 x0=x1=pv->x; z0=z1=pv->z;
+	 for (vv=1;vv<4;vv++)
+	    {pv=level_vertex+level_wall[w].v[vv];
+	     if (pv->x<x0) x0=pv->x; else if (pv->x>x1) x1=pv->x;
+	     if (pv->z<z0) z0=pv->z; else if (pv->z>z1) z1=pv->z;
+	    }
+	 if (f(spot->sprite->pos.x)+q<x0 || f(spot->sprite->pos.x)-q>x1 ||
+	     f(spot->sprite->pos.z)+q<z0 || f(spot->sprite->pos.z)-q>z1)
+	    continue;
+	}
 	getVertex(level_wall[w].v[0],&p);
 	d=(f(spot->sprite->pos.x-p.x))*level_wall[w].normal[0]+
 	  (f(spot->sprite->pos.y-p.y))*level_wall[w].normal[1]+

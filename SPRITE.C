@@ -530,15 +530,16 @@ void collideSpriteSprite(Sprite *mobile,Sprite *stat)
 
  len=fixSqrt(distance2,16);
  {/* GCC14: three software divisions by the same length, in the innermost loop of a crowd --
-     one hardware division for its reciprocal and three multiplies instead (the direction is
-     then exact to 1/65536, and it only pushes the sprites apart) */
-  int n=f(len),rcp;
-  if (n<1)
-     n=1;
-  rcp=(1<<24)/n;
-  dp.x=MTH_Mul(dp.x,rcp)>>8;
-  dp.y=MTH_Mul(dp.y,rcp)>>8;
-  dp.z=MTH_Mul(dp.z,rcp)>>8;
+     the reciprocal once through the hardware divider (MTH_Div) and three multiplies instead.
+     In 16.16 throughout: dividing by the length in whole units left the direction unnormalised
+     for two sprites less than a unit apart, which is where the old code divided by zero. */
+  Fixed32 rcp;
+  if (len<64)
+     len=64;                    /* 1/1024 u: the reciprocal stays inside 32 bits */
+  rcp=MTH_Div(F(1),len);
+  dp.x=MTH_Mul(dp.x,rcp);
+  dp.y=MTH_Mul(dp.y,rcp);
+  dp.z=MTH_Mul(dp.z,rcp);
  }
 
  spriteCollideNm=stat-sprites;

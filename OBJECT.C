@@ -27,13 +27,20 @@ Object *objectRunList; /* these lists have head nodes */
 Object *objectIdleList;
 Object *objectFreeList;
 
-#define MAXNMMOVES 100
+#define MAXNMMOVES 256          /* GCC14: 100 -- a level's placement alone can queue more */
 static struct {Object *o,*toList;} objMove[MAXNMMOVES];
 static int nmMoves;
+int nmMovesRefused;             /* GCC14: moves the queue could not take (OBJECT.H) */
 void delay_moveObject(Object *o,Object *toList)
 {if (!o)                        /* GCC14: a refused object (getFreeObject) reaches no list */
     return;
  assert(nmMoves<MAXNMMOVES);
+ if (nmMoves>=MAXNMMOVES)
+    {/* GCC14: the assert is compiled out of the disc builds, and this wrote past the array --
+	over the statics behind it.  A dropped move leaves an object in the list it is in. */
+     nmMovesRefused++;
+     return;
+    }
  objMove[nmMoves].o=o;
  objMove[nmMoves].toList=toList;
  nmMoves++;
@@ -398,6 +405,10 @@ void placeObjects(void)
     }
 
  shiftSprites();
+ /* GCC14: the level's objects asked for their list as they were built (a corpse, a decor, a Doom
+    pickup: delay_moveObject from the spawn state), and nothing was walking a list here -- the
+    queue is emptied now instead of holding a whole level's worth until the first image. */
+ processDelayedMoves();
 
 
 #if 0

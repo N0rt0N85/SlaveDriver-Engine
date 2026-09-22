@@ -511,12 +511,13 @@ static Sprite *lightSource[MAXNMLIGHTSOURCES];
 int nmLights;                              /* GCC14: lights live in this image (WALLS.H, overlay) */
 static int delayNmLights;
 static MthXyz tLightPos[MAXNMLIGHTSOURCES];
-/* GCC14: where each light stood when the view was drawn, in world units, and whether the view's
-   leaf may see its leaf (LEVEL.C level_maySee).  Both made by drawWalls with tLightPos, before
-   the slave is kicked: the slave reads these, never lightSource[]->pos, which runObjects moves
-   while it draws. */
+/* GCC14: where each light stood when the view was drawn, in world units, and the leaf it stood
+   in.  Made by drawWalls with tLightPos, before the slave is kicked: the slave reads these, never
+   lightSource[]->pos, which runObjects moves while it draws. */
 static int wLightPos[MAXNMLIGHTSOURCES][3];
-static char lightSeen[MAXNMLIGHTSOURCES];
+static short lightLeaf[MAXNMLIGHTSOURCES];
+/* GCC14: the leaves of the view being drawn, defined below: the light lists name a leaf */
+extern SectorDrawRecord *sectorDraw;
 static int lColor[MAXNMLIGHTSOURCES][3];   /* proportional: k * intensity */
 static int delayColor[MAXNMLIGHTSOURCES][3];
 /* GCC14: radius, radius^2 and (1<<24)/radius^2, set once per light: no divide per vertex. */
@@ -572,17 +573,21 @@ static int lightEvict(Sprite *s,int prio)
 static void lightPut(Sprite *s,int r,int g,int b,int radius,int mode,int prio)
 {int i=delayNmLights;
  if (i>=MAXNMLIGHTSOURCES)
-    {i=lightEvict(s,prio);
+    {if (!CFG_LIGHT_EVICT)
+	return;                 /* PowerSlave: a full list refuses the new light, as it always did */
+     i=lightEvict(s,prio);
      if (i<0)
 	return;
-     delayColor[i][0]=r;
-     delayColor[i][1]=g;
-     delayColor[i][2]=b;
+     /* the whole slot changes at once -- lMode chooses the branch lightApply takes and lRad2
+	and lInv go with the radius, so a half-changed slot would be read by the slave */
+     lColor[i][0]=delayColor[i][0]=r;
+     lColor[i][1]=delayColor[i][1]=g;
+     lColor[i][2]=delayColor[i][2]=b;
+     lightSetRadius(i,radius);
      delayRad[i]=radius;
      lMode[i]=mode;
      lPrio[i]=prio;
      lightSource[i]=s;
-     lightColorChanged=1;
      return;
     }
  lColor[i][0]=delayColor[i][0]=r;
@@ -775,7 +780,7 @@ void lightApply(int i,MthXyz *pos,int *r,int *g,int *b)
    fireball, across the map: half the view's vertices went through the lit path, and those walls
    lost the far and black LODs.  lightApply gives 0 to a vertex out of every light's reach, so the
    image does not change.  Master and slave each keep their own list. */
-static int lightListFor(sWallType *wall,signed char *idx)
+static int lightListFor(sWallType *wall,int sector,signed char *idx)
 {int l,n,v,v0,v1,x0,y0,z0,x1,y1,z1,rad;
  Fixed32 dist;
  const sVertexType *p;
@@ -795,8 +800,6 @@ static int lightListFor(sWallType *wall,signed char *idx)
  n=0;
  for (l=0;l<nmLights;l++)
     {int lx=wLightPos[l][0],ly=wLightPos[l][1],lz=wLightPos[l][2];
-     if (!lightSeen[l])
-	continue;
      rad=lRad[l]+2;                   /* +2: lightApply's units are floored in view space */
      if (lx+rad<x0 || lx-rad>x1 || ly+rad<y0 || ly-rad>y1 || lz+rad<z0 || lz-rad>z1)
 	continue;
@@ -805,6 +808,10 @@ static int lightListFor(sWallType *wall,signed char *idx)
      dist=(lx-p->x)*wall->normal[0]+(ly-p->y)*wall->normal[1]+(lz-p->z)*wall->normal[2];
      if (dist<=0 || dist>F(lRad[l]))
 	continue;
+     /* a light whose leaf never sees this one (the level's reject table) reaches it only
+	through the walls between them: no light is occluded here, so it is not kept */
+     if (!level_maySee(lightLeaf[l],sector))
+	continue;
      idx[n++]=(signed char)l;
     }
  return n;
@@ -812,14 +819,14 @@ static int lightListFor(sWallType *wall,signed char *idx)
 
 int nmWallLights;
 static signed char wallLightIdx[MAXNMLIGHTSOURCES];
-static void buildLightList(sWallType *wall)
-{nmWallLights=nmLights? lightListFor(wall,wallLightIdx): 0;
+static void buildLightList(sWallType *wall,int sector)
+{nmWallLights=nmLights? lightListFor(wall,sector,wallLightIdx): 0;
 }
 
 static int snmWallLights;
 static signed char swallLightIdx[MAXNMLIGHTSOURCES];
-static void sbuildLightList(sWallType *wall)
-{snmWallLights=nmLights? lightListFor(wall,swallLightIdx): 0;
+static void sbuildLightList(sWallType *wall,int sector)
+{snmWallLights=nmLights? lightListFor(wall,sector,swallLightIdx): 0;
 }
 
 #define NEARCLIP F(GP_NEAR_CLIP) /* MUST stay under the player radius: SPRITE.C:141 parks the eye exactly there */
@@ -1771,7 +1778,7 @@ void drawRectWall(sWallType *theWall,MthXyz *coords,
     tileBias=0;
 #endif
 
- buildLightList(theWall);
+ buildLightList(theWall,s-sectorDraw);
 
  if (wallIsBlack(theWall,coords,nmWallLights,wavyIndex))
     {XyInt q[4];
@@ -1985,7 +1992,7 @@ void drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRecord *s
 
  checkStack();
 #ifdef LIGHT
- buildLightList(wall);
+ buildLightList(wall,s-sectorDraw);
 #endif
 
  assert(wall->lastVertex-wall->firstVertex<MAXVPERWALL);
@@ -2303,7 +2310,7 @@ void slave_drawRectWall(sWallType *theWall,MthXyz *coords,
  vHeight.y=Get_Hardware_Divide();
 
 #ifdef LIGHT
- sbuildLightList(theWall);
+ sbuildLightList(theWall,s-sectorDraw);
 #endif
 
  if (wallIsBlack(theWall,coords,snmWallLights,sWavyIndex))
@@ -2486,7 +2493,7 @@ void slave_drawWall(sWallType *wall,MthMatrix *view,MthXyz *coords,SectorDrawRec
  if (wall->lastFace-wall->firstFace+1+nmSlavePolys+50>MAXNMSLAVEPOLYS)
     return;
 
- sbuildLightList(wall);
+ sbuildLightList(wall,s-sectorDraw);
 
  assert(wall->lastVertex-wall->firstVertex<MAXVPERWALL);
 
@@ -3801,9 +3808,7 @@ void drawWalls(int k,MthMatrix *view)
      wLightPos[i][0]=f(lp.x);
      wLightPos[i][1]=f(lp.y);
      wLightPos[i][2]=f(lp.z);
-     /* a light the view's leaf never sees lights nothing of the view: it would only shine
-	through the walls between them (no light is occluded) */
-     lightSeen[i]=level_maySee(lightSource[i]->s,viewSector);
+     lightLeaf[i]=(short)lightSource[i]->s;
     }
 
  slaveSize=slaveSplit[k];
@@ -4169,6 +4174,8 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	    EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,o->color,pos,NULL);
 	 continue;
 	}
+     if (!CFG_VIEW_CULL && o->owner)
+	signalObject(o->owner,SIGNAL_VIEW,0,0);   /* PowerSlave: its AI acts on this signal */
      feetPos.x=o->pos.x;
      feetPos.y=o->pos.y-o->radius;
      if (mpIsPlayer(o))            /* GCC14: a player's pos is its eye, which hovers (SPR_HOVER) */
@@ -4180,12 +4187,14 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
      /* GCC14: and off the sides, where sprRect drops every chunk it would make (the test
 	doom_spriteLeaves uses).  Before the view signal, the fog, the lights and the shadow:
 	a thing in a drawn leaf but out of the frame paid all of them.  Its one-image flash is
-	consumed here, as it was when the chunks were dropped one by one. */
-     if (f(abs(tformed.x))>(f(tformed.z)<<2)+256 || f(abs(tformed.y))>(f(tformed.z)<<2)+256)
+	consumed here, as it was when the chunks were dropped one by one.  Only where the signal
+	picks a rotation and nothing else (CFG_VIEW_CULL). */
+     if (CFG_VIEW_CULL &&
+	 (f(abs(tformed.x))>(f(tformed.z)<<2)+256 || f(abs(tformed.y))>(f(tformed.z)<<2)+256))
 	{o->flags&=~SPRITEFLAG_FLASH;
 	 continue;
 	}
-     if (o->owner)
+     if (CFG_VIEW_CULL && o->owner)
 	signalObject(o->owner,SIGNAL_VIEW,0,0);
      /* if (tformed.z>FARCLIP)
 	continue; */
@@ -4225,8 +4234,8 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
       if (nmLights)
 	 {int li,lr,lg,lb,best=0;
 	  for (li=0;li<nmLights;li++)
-	     {if (!lightSeen[li])
-		 continue;
+	     {if (!level_maySee(lightLeaf[li],o->s))
+		 continue;              /* as the walls: it would only shine through a wall */
 	      lr=lg=lb=0;
 	      lightApply(li,&tformed,&lr,&lg,&lb);
 	      if (lr>best) best=lr;
@@ -4536,7 +4545,7 @@ static int doomSprBox(Sprite *o,DoomView *v,DoomSprBox *b)
  b->up=-y0*o->scale;
  dn=y1*o->scale;
  top=b->up;
- if (!(o->flags & SPRITEFLAG_NOSHADOW))
+ if (!(o->flags & SPRITEFLAG_NOSHADOW) && t.z<=CFG_SHADOW_DIST)   /* GCC14: the one drawSprites draws */
     {/* drawSprites' shadow: centred on the floor under the feet, at most 48 chunk pixels wide,
 	and as tall as that width times dy/z, dy from the camera's pos to that floor.  Its width
 	joins the billboard's (a row at the feet); its height only the screen box: flat on the
@@ -4638,13 +4647,13 @@ static int doomLeafPasses(SectorDrawRecord *n,DoomSprBox *b,DoomView *v)
    the start of each walk, so nothing survives a camera move. */
 #define DOOM_MEMO 32
 typedef struct
-{unsigned short stamp;
+{unsigned int stamp;
  short spr;
  short x0,y0,x1,y1;
  signed char r;
 } DoomBoxMemo;
 static DoomBoxMemo boxMemo[2][DOOM_MEMO];
-static unsigned short boxStamp[2];
+static unsigned int boxStamp[2];
 
 static int doomSprBoxMemo(Sprite *u,DoomView *v,DoomSprBox *b)
 {DoomBoxMemo *m=&boxMemo[v->cpu][(u-sprites)&(DOOM_MEMO-1)];

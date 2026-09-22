@@ -426,7 +426,9 @@ void A_Look(DoomActor *this)
 static int doomChaseHalf(DoomActor *this)
 {Sprite *p,*ts;
  int k;
- if (!GP_MONSTER_FAR_THINK || (this->mflags & (DF_JUSTHIT|DF_JUSTATTACKED)))
+ /* not DF_JUSTHIT: only doom_missileRange clears it, and a monster this test keeps can never
+    reach it -- a melee-only monster would carry it for the rest of its life */
+ if (!GP_MONSTER_FAR_THINK || (this->mflags & DF_JUSTATTACKED))
     return 0;
  ts=doom_targetSprite(this->target);
  if (!ts || !mpIsPlayer(ts))
@@ -541,7 +543,9 @@ void A_Chase(DoomActor *this)
  if (doomChaseHalf(this))
     {this->mflags|=DF_HALF;
      if (this->tics>0)
-	this->tics*=2;
+	{this->tics*=2;
+	 this->mflags|=DF_HALFSTATE;   /* so a hit can give this state its own length back */
+	}
      step=2;
     }
  else
