@@ -188,6 +188,7 @@ static void doomPortalBits(int w,int s)
 void doom_pbBlockBits(int pb)
 {short sec[16];
  int i,j,w,s,n=0,f;
+ portalBitsEpoch++;
  for (i=level_pushBlock[pb].startWall;i<=level_pushBlock[pb].endWall;i++)
     {w=level_PBWall[i];
      s=doomWallSector(w);

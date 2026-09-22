@@ -51,6 +51,9 @@ struct __sprite;
    sideways (Doom's puffs, blood and fogs: MF_NOBLOCKMAP, P_ZMovement alone) paid a whole
    collision every tic. */
 #define SPRITEFLAG_ZONLY           0x400000
+/* GCC14: counts the changes of the portals' blocking bits (a door or a lift moving), for whoever
+   keeps an answer that depends on them (DOOM_ACTOR.C doom_noiseAlert) */
+extern int portalBitsEpoch;
 
 typedef
 struct __sprite

@@ -585,15 +585,50 @@ void doom_damageActor(DoomActor *this,int damage,Object *source)
 }
 
 /* P_RadiusAttack / PIT_RadiusAttack (p_map.c:1240-1300) over the live sprites: distance =
-   max(|dx|,|dz|) - radius in units, damage - distance when in range and in sight */
+   max(|dx|,|dz|) - radius in units, damage - distance when in range and in sight.
+   GCC14: over the leaves near the spot, as Doom reads the blockmap box spot +- (damage +
+   MAXRADIUS) -- not every sprite of every leaf.  A thing it can hurt is within damage + its radius
+   on both axes, and in sight: the line between them crosses only portals, each of whose planes is
+   nearer the spot than the thing.  So the leaves reached from the spot's through portals whose
+   plane lies within DOOM_BLAST_REACH hold every candidate, and the same tests follow.  A flood
+   that outgrows its queue falls back to every leaf. */
+#define DOOM_BLAST_MAXR    64            /* > the widest thing's radius of the IWAD's monsters */
+#define DOOM_BLAST_LEAVES  64
 void doom_radiusAttack(DoomActor *spot,Object *source,int damage)
-{int s,dist;
+{int s,dist,n,i,k,w,ns;
+ short leaf[DOOM_BLAST_LEAVES];
  Sprite *spr;
- Fixed32 dx,dz,d;
+ Fixed32 dx,dz,d,reach;
+ MthXyz p;
  assert(spot);
  assert(spot->sprite);
- for (s=0;s<level_nmSectors;s++)
-    for (spr=sectorSpriteList[s];spr;spr=spr->next)
+ /* sqrt(2) (the box's corner) < 3/2 */
+ reach=F((damage+DOOM_BLAST_MAXR)+((damage+DOOM_BLAST_MAXR)>>1));
+ n=0;
+ leaf[n++]=spot->sprite->s;
+ for (i=0;i<n && n>0;i++)
+    for (w=level_sector[leaf[i]].firstWall;w<=level_sector[leaf[i]].lastWall;w++)
+       {ns=level_wall[w].nextSector;
+	if (ns<0)
+	   break;                               /* doom2ps puts a leaf's portals first */
+	getVertex(level_wall[w].v[0],&p);
+	d=(f(spot->sprite->pos.x-p.x))*level_wall[w].normal[0]+
+	  (f(spot->sprite->pos.y-p.y))*level_wall[w].normal[1]+
+	  (f(spot->sprite->pos.z-p.z))*level_wall[w].normal[2];
+	if (abs(d)>reach)
+	   continue;
+	for (k=0;k<n && leaf[k]!=ns;k++)
+	   ;
+	if (k<n)
+	   continue;
+	if (n==DOOM_BLAST_LEAVES)
+	   {n=-1;                               /* too far a flood: every leaf, as before */
+	    break;
+	   }
+	leaf[n++]=(short)ns;
+       }
+ for (i=0;i<((n<0)? level_nmSectors: n);i++)
+    for (spr=sectorSpriteList[(n<0)? i: leaf[i]];spr;spr=spr->next)
        {if (spr==spot->sprite || !spr->owner)
 	   continue;
 	if (!doom_targetAlive(spr->owner))
@@ -619,13 +654,25 @@ void doom_radiusAttack(DoomActor *spot,Object *source,int damage)
 /* --- noise alert (P_RecursiveSound, p_enemy.c:101-160) -------------------------------------- */
 
 /* Breadth-first flood over the portals from `sector`; a door portal whose blocking bits are
-   set (closed: setDoorBlockBits AI.C:4294-4309) stops the sound.  No ML_SOUNDBLOCK here. */
+   set (closed: setDoorBlockBits AI.C:4294-4309) stops the sound.  No ML_SOUNDBLOCK here.
+   GCC14: a shot flooded every wall of every leaf the sound reached, each time the player fired
+   (E1M6: 4 394 walls).  A leaf's portals come first (doom2ps' invariant), so its walls stop
+   being read at the first solid one.  And the flood is not redone when it would write what the
+   last one wrote: the same emitter, from a leaf that flood reached, no other flood since, and no
+   portal's blocking bits changed (portalBitsEpoch) -- a chaingun fired from one room. */
 void doom_noiseAlert(Object *emitter,int sector)
 {static short queue[MAXNMSECTORS];
  static unsigned short soundValid[MAXNMSECTORS];
  static unsigned short validcount;
+ static Object *lastEmitter;
+ static int lastEpoch;
  int head,tail,s,w,ns;
  assert(sector>=0 && sector<level_nmSectors);
+ if (emitter==lastEmitter && lastEpoch==portalBitsEpoch && validcount &&
+     soundValid[sector]==validcount && doomSoundTarget[sector]==emitter)
+    return;
+ lastEmitter=emitter;
+ lastEpoch=portalBitsEpoch;
  validcount++;
  if (!validcount)
     {for (s=0;s<MAXNMSECTORS;s++)
@@ -642,7 +689,7 @@ void doom_noiseAlert(Object *emitter,int sector)
      for (w=level_sector[s].firstWall;w<=level_sector[s].lastWall;w++)
 	{ns=level_wall[w].nextSector;
 	 if (ns<0)
-	    continue;
+	    break;                              /* the portals come first */
 	 if ((level_wall[w].flags & WALLFLAG_DOORWALL) &&
 	     (level_wall[w].flags & WALLFLAG_BLOCKBITS))
 	    continue;                           /* closed door */
