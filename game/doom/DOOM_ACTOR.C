@@ -30,6 +30,11 @@ static Sprite *doomPlasmaLight;
 
 int nmSpawnFail;
 Object *doomSoundTarget[MAXNMSECTORS];
+/* GCC14: every pickup of the level, linked through the actors (pkNext/pkPrev).  A pickup ran
+   SIGNAL_MOVE every tic to test the players' reach, forever, drops included: 70 to 230 visits a
+   tic that almost always found nobody moving.  The player now walks this list once a tic
+   (DOOM_GAME.C doom_pickupTic), and a pickup whose state never changes leaves objectRunList. */
+Object *doomPickups;
 
 static void doomMissileHit(DoomActor *this,int collide);
 static int doomMoveMissile(DoomActor *this);
@@ -78,6 +83,7 @@ void doom_actorLevelInit(void)
  for (s=0;s<MAXNMSECTORS;s++)
     doomSoundTarget[s]=NULL;
  nmSpawnFail=0;
+ doomPickups=NULL;
 }
 
 /* --- sequences (contract section 2) --------------------------------------------------------- */
@@ -170,10 +176,11 @@ short doom_drawSeq(Sprite *o,MthXyz *eye)
 
 /* --- states (P_SetMobjState, p_mobj.c:49-72) ------------------------------------------------ */
 
-/* terminal states without motion leave objectRunList: decor and corpses only (SPEC_RUNTIME
-   section 2) -- never a pickup (doom_item_func needs SIGNAL_MOVE for its collision) */
+/* terminal states without motion leave objectRunList: decor, corpses and pickups (SPEC_RUNTIME
+   section 2) -- a pickup's reach is the player's to test (doom_pickupTic) */
 static void doomIdleIfTerminal(DoomActor *this)
-{if (this->tics==-1 && this->func==game_actor_func && !(this->mflags & DF_IDLE) &&
+{if (this->tics==-1 && (this->func==game_actor_func || (this->mflags & DF_PICKUP)) &&
+     !(this->mflags & DF_IDLE) &&
      ((this->mflags & DF_CORPSE) || !(this->mflags & (DF_SHOOTABLE|DF_MISSILE))))
     {this->mflags|=DF_IDLE;
      delay_moveObject((Object *)this,objectIdleList);
@@ -457,6 +464,16 @@ DoomActor *doom_spawn(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
  this->chOld=DI_NODIR;
  this->chFlags=0;
  this->flashTics=0;
+ this->pkNext=this->pkPrev=NULL;
+ if (func==doom_item_func)
+    {this->mflags|=DF_PICKUP;           /* before the spawn state: it may idle at once */
+     this->pkX=pos->x;
+     this->pkZ=pos->z;
+     this->pkNext=doomPickups;
+     if (doomPickups)
+	((DoomActor *)doomPickups)->pkPrev=(Object *)this;
+     doomPickups=(Object *)this;
+    }
  doomSetSpawnState(this,info->spawnstate);
  return this;
 }

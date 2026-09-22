@@ -539,6 +539,7 @@ void doom_playerTic(void)
  if (doomPlayer.bonusCount)
     doomPlayer.bonusCount--;
  doomFlashTic();
+ doom_pickupTic();                             /* GCC14: what it touches (DOOM_GAME.C) */
 }
 
 /* --- damage (P_DamageMobj player branch, p_inter.c:781-926) --------------------------------- */
