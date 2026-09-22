@@ -54,6 +54,9 @@ struct __sprite;
 /* GCC14: counts the changes of the portals' blocking bits (a door or a lift moving), for whoever
    keeps an answer that depends on them (DOOM_ACTOR.C doom_noiseAlert) */
 extern int portalBitsEpoch;
+/* GCC14: counts the images in which a push block moved (updatePushBlockPositions): geometry that
+   stood still since a collision gives the same collision */
+extern int pushBlockEpoch;
 
 typedef
 struct __sprite

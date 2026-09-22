@@ -79,7 +79,8 @@ typedef struct
  unsigned short mflags;                 /* DF_*                                                    */
  Object *target;                        /* monster: target; missile: shooter -- cleared on DESTROYED */
  int collide;                           /* last moveSprite result, consumed by A_Chase             */
- short lastlook,pad2;
+ short lastlook;
+ unsigned short restEpoch;              /* pushBlockEpoch of its last collision at rest by a door  */
  struct __object *pkNext,*pkPrev;       /* a pickup: the list doom_pickupTic walks (DF_PICKUP)     */
  Fixed32 pkX,pkZ;                       /* ... where it lies: a pickup never moves sideways        */
 } DoomActor;

@@ -829,6 +829,7 @@ void spriteRandomizeFrame(Sprite *o)
 }
 
 static int pbMoved=0;
+int pushBlockEpoch;
 #if 0
 void updatePushBlockPositions(void)
 {int block,v,vt,fs;
@@ -883,6 +884,7 @@ void updatePushBlockPositions(void)
  if (!pbMoved)
     return;
  pbMoved=0;
+ pushBlockEpoch++;
  for (block=0;block<level_nmPushBlocks;block++)
     {pb=level_pushBlock+block;
      if (!pb->dy)

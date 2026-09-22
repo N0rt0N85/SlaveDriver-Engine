@@ -243,7 +243,10 @@ void doom_setState(DoomActor *this,int state)
 }
 
 /* GCC14: at rest, is it by a door?  Asked once where it stopped, not every tic: the answer only
-   depends on where it stands, and the doors' sectors are marked once, at the level start */
+   depends on where it stands, and the doors' sectors are marked once, at the level start.
+   By a door it collides again only when the geometry has moved since its last collision there
+   (pushBlockEpoch: the push blocks move once an image, after the tics): the same collision
+   against a door standing still gives the same answer.  It used to collide every tic. */
 static int doomRestNearDoor(DoomActor *this)
 {if (!(this->mflags & DF_DOORASKED))
     {this->mflags|=DF_DOORASKED;
@@ -251,8 +254,12 @@ static int doomRestNearDoor(DoomActor *this)
 	this->mflags|=DF_NEARDOOR;
      else
 	this->mflags&=~DF_NEARDOOR;
+     this->restEpoch=(unsigned short)(pushBlockEpoch-1);
     }
- return this->mflags & DF_NEARDOOR;
+ if (!(this->mflags & DF_NEARDOOR) || this->restEpoch==(unsigned short)pushBlockEpoch)
+    return 0;
+ this->restEpoch=(unsigned short)pushBlockEpoch;
+ return 1;
 }
 
 /* --- the handler ---------------------------------------------------------------------------- */
@@ -457,7 +464,7 @@ DoomActor *doom_spawn(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
  this->target=NULL;
  this->collide=0;
  this->lastlook=(short)lastlook;
- this->pad2=0;
+ this->restEpoch=0;
  this->chStage=2;
  this->chD1=DI_NODIR;
  this->chD2=DI_NODIR;
