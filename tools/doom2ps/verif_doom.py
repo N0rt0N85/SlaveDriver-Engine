@@ -1001,6 +1001,8 @@ def main(argv=None):
             ecoute[_sh(o, 6)[2]] += 1
         elif o["type"] == sp.OT_DOOM_LIGHT:
             ecoute[_sh(o, 3)[1]] += 1
+        elif o["type"] == sp.OT_DOOM_LAMP:
+            ecoute[_sh(o, 11)[4]] += 1           # -1 = allumee au chargement, hors du compte
         elif o["type"] in (sp.OT_DOOM_EXIT, sp.OT_DOOM_SECRETEXIT):
             ecoute[_sh(o, 1)[0]] += 1
     boss = {t_ for t_, _g in sp.BOSS_TAGS.get((a.map or "").upper(), ())}
@@ -1034,6 +1036,16 @@ def main(argv=None):
             all(0 <= l_[0] < len(S) and 0 <= l_[2] <= 16 for l_ in lig),
             f"{len(lig)} feuilles, canaux {sorted({l_[1] for l_ in lig})}, "
             f"lumieres {sorted({l_[2] for l_ in lig})}")
+    # lampes (doom_specials.LAMPES) : les bornes que DOOM_GAME.C asserte, et la hauteur au-dessus
+    # du sol de sa feuille
+    lam = [_sh(o, 11) for o in obj if o["type"] == sp.OT_DOOM_LAMP]
+    if lam:
+        put("OT_DOOM_LAMP : feuille dans les bornes, au-dessus de son sol, teinte 0..16, "
+            "rayon 16..1024, intensite 1..31, montee >= 0",
+            all(0 <= l_[0] < len(S) and l_[2] > S[l_[0]]["floorLevel"]
+                and all(0 <= k_ <= 16 for k_ in l_[5:8]) and 16 <= l_[8] <= 1024
+                and 1 <= l_[9] <= 31 and l_[10] >= 0 for l_ in lam),
+            f"{len(lam)} lampes, feuilles {[l_[0] for l_ in lam]}, canaux {[l_[4] for l_ in lam]}")
 
     # 17-21. CONTRAT « Verifications PC » (DOOM_ABI, SPEC_CONVERTER 7) : tuiles, sequences
     #        atteignables, sons, barils, tailles. Tout est relu dans le FICHIER par lev_io (le

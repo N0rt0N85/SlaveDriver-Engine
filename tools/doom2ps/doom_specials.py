@@ -213,13 +213,41 @@ ML_TWOSIDED = 0x0004
 # Teleporteurs (EV_Teleport) : W1 et WR. 125 / 126 ne prennent que les monstres (le moteur ne
 # signale l'entree d'un secteur que pour la camera, SPRITE.C:731) : non convertis.
 TELEPORT = {39: TELE_ONCE, 97: 0}
+# LAMPES (ajout : Doom n'a aucune lumiere dynamique). Une source que la CARTE recoit, pas un
+# special du WAD : elle eclaire ce que le WAD laisse dans le noir. Par carte, une liste de :
+#   x, y       plan Doom (moteur : X = x, Z = y) ; la feuille qui les contient doit etre du `secteur`
+#              Doom annonce -- verifie a l'emission, une coquille ne pose pas la lampe ailleurs ;
+#   hauteur    Y absolu (celui des sols), strictement entre le sol et le plafond du secteur ;
+#   canal      -1 = allumee au chargement ; un tag = allumee quand il sonne, et pour de bon ;
+#   teinte     k 0..16 par canal, `rayon` en u, `intensite` 0..31 au centre (addLightEx, WALLS.C) ;
+#   montee     tics jusqu'a l'intensite pleine une fois allumee (0 = d'un coup).
+# 11 params : feuille, x, hauteur, y, canal, r, g, b, rayon, intensite, montee (DOOM_GAME.C).
+# E1M3 -- la salle de la clef bleue : prendre la clef franchit les lignes 1017-1019 (35, tag 13 ->
+# secteurs 26, 27 et 28 a 35, soit light_of 0 : le noir) puis 733-735 (2, tag 11 -> la porte 30
+# s'ouvre sur le placard aux imps, secteur 29 : lumiere 160 -> 14, plafond TLITE6_5 rouge). Le
+# placard reste eclaire, la salle non. La lampe est DANS le placard, a 4 u de la porte (y -632),
+# au milieu en x (-320..-208) et en hauteur (sol 96, plafond 176) ; allumee par le canal de la
+# PORTE et montant avec elle : 172 - 97 = 75 u a 2 u/tic, 38 tics. Pas avant : une lumiere du
+# moteur traverse les murs (buildLightList ne teste que le plan du mur), elle peindrait le sol
+# devant une porte encore fermee, dans une salle a 14 qu'elle pousserait vers 31. Teinte : un
+# jaune chaud (le rouge du plafond TLITE6_5, eclairci en 16, 9, 7, sortait trop rouge a l'ecran).
+# MESURE (build/doom2ps/e1m3_geom3d.json, lightApply rejoue) : au sol devant la porte +20 en rouge,
+# +13 a 76 u de la lampe, +7 a 108 u, +2 a 140 u ; ce qui passe les murs (le moteur n'occulte rien) :
+# +11 au sol derriere le mur est du placard (feuille 69, la meme salle, noire), +5 au bord est de la
+# salle 25 (a 120 u, derriere le mur ouest), +1 dans le couloir 26.
+OT_DOOM_LAMP = 186
+LAMPES = {
+    "E1M3": [dict(x=-264, y=-628, hauteur=136, secteur=29, canal=11, teinte=(16, 14, 6),
+                  rayon=176, intensite=24, montee=38)],
+}
 
 # Tous les objets emis ici qui ne sont PAS des mobjs positionnes (things2objects.object_positions,
 # verif_doom) -- le joueur et les mobjs portent `sector, x, y, z`, eux non.
 OT_SPECIAL_TYPES = frozenset((OT_NORMALDOOR, OT_NORMALELEVATOR, OT_STUCKDOWNELEVATOR, OT_SECTORSWITCH,
                               OT_DOOM_EXIT, OT_DOOM_SECRETEXIT, OT_DOOM_LIGHT, OT_DOOM_DAMAGE,
                               OT_DOOM_SECRETWALL, OT_DOOM_TELEPORT, OT_DOOM_FLOOR,
-                              OT_DOOM_DOOR, OT_DOOM_LIFT, OT_DOOM_WLINE)) | frozenset(OT_SWITCH_TYPES)
+                              OT_DOOM_DOOR, OT_DOOM_LIFT, OT_DOOM_WLINE,
+                              OT_DOOM_LAMP)) | frozenset(OT_SWITCH_TYPES)
 
 Specials = namedtuple("Specials", "doors lifts floors raises teleports wswitch sswitch exits damage ignored")
 
@@ -670,7 +698,7 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
                     OT_DOOM_SECRETWALL (1 short) chacun (p_switch.c : un monstre ne presse pas ML_SECRET).
     `geom`      : la geometrie emise (doom3d) -- faces des flats que prennent les sols « AndChange ».
     Ordre d'émission : portes, ascenseurs, sols, sols qui montent, teleporteurs, lignes W,
-    interrupteurs, sorties, dégâts, murs secrets."""
+    interrupteurs, sorties, dégâts, murs secrets, lampes (LAMPES)."""
     objects, params = [], bytearray()
     notes = defaultdict(int)
     pb_index = {int(k): int(v) for k, v in (pb_index or {}).items()}   # clés str depuis le JSON
@@ -801,6 +829,20 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
     # murs secrets : un par mur DOORWALL d'une ligne ML_SECRET
     for w in sorted(int(x) for x in (secret_walls or ())):
         emit(OT_DOOM_SECRETWALL, w, kind="secretwall")
+    # lampes de la carte (LAMPES) : la feuille qui contient (x, y), du secteur annonce
+    for lp in LAMPES.get(M.get("name"), ()):
+        lf = conv.leaf_at(lp["x"], lp["y"])
+        si = conv.leaf_sector[lf] if lf in conv.remap else None
+        if si != lp["secteur"]:
+            raise SystemExit("lampe de %s en (%d, %d) : feuille %d, secteur Doom %s au lieu de %d"
+                             % (M.get("name"), lp["x"], lp["y"], lf, si, lp["secteur"]))
+        sec = M["sectors"][si]
+        if not sec.floorh < lp["hauteur"] < sec.ceilh:
+            raise SystemExit("lampe de %s : hauteur %d hors du secteur %d (sol %d, plafond %d)"
+                             % (M.get("name"), lp["hauteur"], si, sec.floorh, sec.ceilh))
+        emit(OT_DOOM_LAMP, conv.remap[lf], lp["x"], lp["hauteur"], lp["y"], lp["canal"],
+             *lp["teinte"], lp["rayon"], lp["intensite"], lp["montee"],
+             sector_doom=si, kind="lamp")
     return objects, params, dict(notes)
 
 
@@ -837,6 +879,8 @@ def expected_param_bytes(objects):
             n += 2
         elif t == OT_DOOM_LIGHT:
             n += 3                      # feuille, canal, lumiere
+        elif t == OT_DOOM_LAMP:
+            n += 11                     # feuille, x, hauteur, y, canal, r, g, b, rayon, intensite, montee
         else:
             n += 6                      # mobj Doom : sector, x, y, z, angle, flags
     return 2 * n

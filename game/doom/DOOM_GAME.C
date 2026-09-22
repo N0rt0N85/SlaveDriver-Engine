@@ -11,6 +11,7 @@
 #include "util.h"
 #include "level.h"
 #include "sprite.h"
+#include "walls.h"                      /* GCC14: the light list, for OT_DOOM_LAMP */
 #include "object.h"
 #include "ai.h"
 #include "aicommon.h"
@@ -31,12 +32,16 @@
      OT_DOOM_DOOR      push block, channel (-1 = no tag), open height, press kind, key, tag kind
      OT_DOOM_LIFT      push block, throw (< 0), channel, speed (1/8 u per tic), wait (tics)
      OT_DOOM_WLINE     x1, z1, x2, z2 (the linedef), channel, flags (DOOM_WLINE_ONCE)
+     OT_DOOM_LAMP      leaf, x, y, z (y = the light's height), channel (-1 = lit from the
+                       start), r, g, b (k 0..16), radius (u), intensity (0..31 at the centre),
+                       ramp (tics to full intensity once lit) -- GCC14, doom_specials.LAMPES
    and OT_DOOM_DAMAGE's hp carries DOOM_DAMAGE_EXIT for special 11 (E1M8's last room). */
 #define OT_DOOM_TELEPORT 181
 #define OT_DOOM_FLOOR    182
 #define OT_DOOM_DOOR     183
 #define OT_DOOM_LIFT     184
 #define OT_DOOM_WLINE    185
+#define OT_DOOM_LAMP     186     /* GCC14: a light the map is given (doomLamp_func) */
 #define DOOM_TELE_ONCE   1
 #define DOOM_WLINE_ONCE  1
 #define DOOM_WLINE_GUN   2       /* P_ShootSpecialLine: fired by a BULLET, never by crossing */
@@ -98,11 +103,26 @@ typedef struct
  short sector,channel,level;
 } DoomLightObject;
 
+/* GCC14: OT_DOOM_LAMP.  The light list keeps a Sprite * and reads nothing of it but pos (WALLS.C
+   buildLightList, and each view's MTH_CoordTrans of its lights), so the lamp carries its own
+   Sprite, outside the pool and every sector list: nothing hits it, draws it or counts it. */
+typedef struct
+{short type,class;
+ struct __object *next,*prev;
+ messHandler func;
+ short channel;                         /* -1: lit from the start; else when the channel sounds  */
+ short r,g,b,radius,peak;               /* addLightEx: k 0..16, u, intensity 0..31 at the centre */
+ short ramp,step;                       /* tics to full intensity; tics lit so far, -1 = unlit    */
+ short shown;                           /* intensity last handed to the light list, 0 = none      */
+ Sprite spot;                           /* the light's position                                    */
+} DoomLampObject;
+
 /* compile-time guards (C89): the DoomActor must fit the Object pool slot, and the generated
    tables must have the layout the contract fixes (section 4) */
 typedef char doomActorFitsObject_[(sizeof(DoomActor)<sizeof(Object))?1:-1];
 typedef char doomExitFitsObject_[(sizeof(DoomExitObject)<=sizeof(Object))?1:-1];
 typedef char doomLightFitsObject_[(sizeof(DoomLightObject)<=sizeof(Object))?1:-1];
+typedef char doomLampFitsObject_[(sizeof(DoomLampObject)<=sizeof(Object))?1:-1];   /* GCC14 */
 typedef char doomTeleportFitsObject_[(sizeof(DoomTeleportObject)<=sizeof(Object))?1:-1];
 typedef char doomFloorFitsObject_[(sizeof(DoomFloorObject)<=sizeof(Object))?1:-1];
 typedef char doomDoorFitsObject_[(sizeof(DoomDoorObject)<=sizeof(Object))?1:-1];
@@ -662,6 +682,66 @@ int doom_nearDoor(Sprite *s)
  return 0;
 }
 
+/* GCC14: OT_DOOM_LAMP, a light a map is given (doom2ps doom_specials.LAMPES) -- an addition, Doom
+   has no dynamic light.  Unlit until its channel sounds (E1M3: the tag of the imps' closet door),
+   it comes up over `ramp` tics, as the door rises, and stays lit.
+   A light puts on the per-vertex path EVERY wall whose plane passes within its radius, wherever
+   the wall is -- buildLightList (WALLS.C) tests the plane, not the wall -- and vetoes the far and
+   black LOD of those walls.  Measured on build/doom2ps/e1m3_geom3d.json: E1M3's lamp marks 804 of
+   the 3 590 walls (7 478 of 15 752 vertices) and lights 23 of them; 80 % of those vertices lie
+   more than 1024 u from it.  So the lamp holds its slot only while a player is near: full up to
+   DOOM_LAMP_NEAR, fading to nothing at DOOM_LAMP_FAR (its pool, some 150 u across, is ~15 px
+   wide there in solo), the slot given back beyond.  A full list (15 lights: fireballs) only
+   delays it: it asks again every tic.  The player's LIGHTS OFF is read here, every tic:
+   changeLightEx cannot put a light out (lightTune returns before it scales the intensity),
+   and a permanent light would otherwise keep its slot and its LOD veto after the switch. */
+#define DOOM_LAMP_NEAR F(1024)
+#define DOOM_LAMP_FAR  F(1536)
+
+static void doomLamp_func(Object *_this,int message,int param1,int param2)
+{DoomLampObject *this=(DoomLampObject *)_this;
+ Fixed32 d,best;
+ int k,p;
+ (void)param2;
+ switch (message)
+    {case SIGNAL_SWITCH:
+	if (param1!=this->channel || this->step>=0)
+	   break;
+	this->step=0;                           /* lit for good: the channel is not heard again */
+	delay_moveObject(_this,objectRunList);
+	break;
+     case SIGNAL_MOVE:
+	if (this->step<0)
+	   break;
+	if (this->step<this->ramp)
+	   this->step++;
+	p=(this->ramp>0)? this->peak*this->step/this->ramp: this->peak;
+	best=DOOM_LAMP_FAR;                     /* the nearest player, Doom's 2D distance */
+	for (k=0;k<mpPlayers;k++)
+	   if (mpBody[k])
+	      {d=doom_approxDist2(mpBody[k]->pos.x-this->spot.pos.x,
+				  mpBody[k]->pos.z-this->spot.pos.z);
+	       if (d<best)
+		  best=d;
+	      }
+	if (best>DOOM_LAMP_NEAR)
+	   p=p*f(DOOM_LAMP_FAR-best)/f(DOOM_LAMP_FAR-DOOM_LAMP_NEAR);
+	if (!lightOn)                           /* the player's switch (WALLS.H) */
+	   p=0;
+	if (p<=0)
+	   {removeLight(&this->spot);            /* nothing when it holds no slot */
+	    this->shown=0;
+	    break;
+	   }
+	if (!hasLight(&this->spot))
+	   addLightEx(&this->spot,this->r,this->g,this->b,this->radius,p);
+	else if (p!=this->shown)
+	   changeLightEx(&this->spot,this->r,this->g,this->b,0,p);
+	this->shown=(short)p;
+	break;
+    }
+}
+
 /* contract section 9: 8.3 names at the disc root ('+'), bounded by DOOM_NMLEVELS.  make_e1m1.py
    checks these against cd_doom/.  Where each level leads is Doom's own order (g_game.c
    G_DoCompleted): the secret exit of E1M3 goes to E1M9, E1M9 comes back to E1M4, and -1 -- after
@@ -700,6 +780,7 @@ void doom_init(void)
  assert(doomOtToMt[OT_DOOM_TELEPORT]==-1 && doomOtToMt[OT_DOOM_FLOOR]==-1);
  assert(doomOtToMt[OT_DOOM_LIFT]==-1 && doomOtToMt[OT_DOOM_WLINE]==-1);
  assert(doomOtToMt[OT_DOOM_LIGHT]==-1);
+ assert(doomOtToMt[OT_DOOM_LAMP]==-1);        /* GCC14 */
  assert(doomMobjInfo[MT_TROOPSHOT].speed==10);
  /* the pad as Mimas lays it out (dg_saturn.cxx pad_map: A fire, B use, C run held, L/R strafe)
     so the two are played with the same hands.  controllerConfig maps an action slot to a button
@@ -811,6 +892,46 @@ int game_placeObject(int ot)
 	     o->sector=(short)sectorNm;
 	     o->channel=(short)channel;
 	     o->level=(short)level;
+	    }
+	 return 1;
+	}
+     case OT_DOOM_LAMP:                         /* GCC14: doomLamp_func; every param read first */
+	{DoomLampObject *o;
+	 int sectorNm=suckShort();
+	 int x=suckShort();
+	 int y=suckShort();
+	 int z=suckShort();
+	 int channel=suckShort();
+	 int r=suckShort();
+	 int g=suckShort();
+	 int b=suckShort();
+	 int radius=suckShort();
+	 int peak=suckShort();
+	 int ramp=suckShort();
+	 assert(sectorNm>=0 && sectorNm<level_nmSectors);
+	 assert(r>=0 && r<=16 && g>=0 && g<=16 && b>=0 && b<=16);
+	 assert(radius>=16 && radius<=1024 && peak>0 && peak<=31 && ramp>=0);
+	 o=(DoomLampObject *)getFreeObject(doomLamp_func,ot,CLASS_SECTOR);
+	 if (o)
+	    {memset(&o->spot,0,sizeof(o->spot));
+	     o->spot.pos.x=F(x);
+	     o->spot.pos.y=F(y);                /* not in sectorSpriteList: shiftSprites leaves it */
+	     o->spot.pos.z=F(z);
+	     o->spot.s=(short)sectorNm;         /* the leaf it was placed in; nothing looks it up */
+	     o->spot.sequence=-1;
+	     o->spot.floorSector=-1;
+	     o->spot.flags=SPRITEFLAG_INVISIBLE|SPRITEFLAG_IMATERIAL|SPRITEFLAG_IMMOBILE;
+	     o->spot.owner=(Object *)o;
+	     o->channel=(short)channel;
+	     o->r=(short)r;
+	     o->g=(short)g;
+	     o->b=(short)b;
+	     o->radius=(short)radius;
+	     o->peak=(short)peak;
+	     o->ramp=(short)ramp;
+	     o->step=(short)((channel==-1)? 0: -1);
+	     o->shown=0;
+	     moveObject((Object *)o,(channel==-1)? objectRunList: objectIdleList);
 	    }
 	 return 1;
 	}
