@@ -20,6 +20,11 @@ enum {DLF_IMP,DLF_CACO,DLF_BARON,DLF_ROCKET,DLF_PLASMA,DLF_EXPLODE,
 /* k 0..16 per channel, radius in world units, intensity 0..31 at the centre, tics the flash
    lasts (0 = the effect's own life, a missile in flight) */
 typedef struct {short r,g,b,radius,peak,tics;} DoomLightFx;
+/* when the 15 slots are taken, a light takes the slot of a lower one (WALLS.C lightPut) */
+#define DOOM_LIGHTPRIO_MUZZLE  0               /* a monster's shot */
+#define DOOM_LIGHTPRIO_MISSILE 1               /* a missile in flight */
+#define DOOM_LIGHTPRIO_EXPLODE 2               /* an explosion, a lamp */
+#define DOOM_LIGHTPRIO_PLAYER  3               /* the player's own shot */
 extern DoomLightFx doomLightFx[DLF_NM];
 
 void doom_lightAdd(Sprite *s,int fx);          /* the effect's light on s */

@@ -44,6 +44,9 @@
 #define DF_STEP         0x400           /* A_Chase's step: the velocity of the next tic only        */
 #define DF_DOORASKED    0x800           /* doom_nearDoor asked where it stands (DOOM_ACTOR.C)       */
 #define DF_NEARDOOR     0x1000          /* ... and its answer: at rest by a door, it collides       */
+#define DF_PICKUP       0x2000          /* in doomPickups: the players test its reach (doom_pickupTic) */
+#define DF_HALF         0x4000          /* far and unseen: A_Chase every other state, twice the step */
+#define DF_HALFSTATE    0x8000          /* ... and the state it is in was lengthened for that */
 #define DI_NODIR        8               /* movedir: no direction (p_enemy.c dirtype_t)            */
 
 /* --- weapons (doomdef.h weapontype_t; index into doomWeaponInfo[]) -------------------------- */
@@ -78,7 +81,10 @@ typedef struct
  unsigned short mflags;                 /* DF_*                                                    */
  Object *target;                        /* monster: target; missile: shooter -- cleared on DESTROYED */
  int collide;                           /* last moveSprite result, consumed by A_Chase             */
- short lastlook,pad2;
+ short lastlook;
+ unsigned short restEpoch;              /* pushBlockEpoch of its last collision at rest by a door  */
+ struct __object *pkNext,*pkPrev;       /* a pickup: the list doom_pickupTic walks (DF_PICKUP)     */
+ Fixed32 pkX,pkZ;                       /* ... where it lies: a pickup never moves sideways        */
 } DoomActor;
 
 /* --- exit switch target (contract section 6): SIGNAL_SWITCH(channel) -> playerHitTeleport ----- */
@@ -129,7 +135,9 @@ extern const DoomAction doomActions[DOOM_NUMACTIONS];   /* [0] = {NULL}         
 /* ============================================================================================ */
 void        doom_init(void);                   /* size guards + tables sanity; once per boot     */
 int         game_placeObject(int ot);          /* OBJECT.C:212 hook: 1 = consumed (params read)  */
-void        doom_item_func(Object *this,int message,int param1,int param2);   /* collision -> doom_playerGetObject */
+void        doom_item_func(Object *this,int message,int param1,int param2);   /* leaves doomPickups when destroyed */
+void        doom_pickupTic(void);              /* 35 Hz from doom_playerTic: the player picks up what it touches */
+extern Object *doomPickups;                    /* every pickup of the level (DF_PICKUP, DOOM_ACTOR.C) */
 void        exit_func(Object *this,int message,int param1,int param2);        /* OT_DOOM_EXIT   */
 void        doomLight_func(Object *this,int message,int param1,int param2);   /* OT_DOOM_LIGHT  */
 char       *doom_levelName(int lNm);           /* CFG_LEVEL_NAME: doomLevelNames[lNm], bounded   */

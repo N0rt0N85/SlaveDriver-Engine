@@ -30,6 +30,11 @@ static Sprite *doomPlasmaLight;
 
 int nmSpawnFail;
 Object *doomSoundTarget[MAXNMSECTORS];
+/* GCC14: every pickup of the level, linked through the actors (pkNext/pkPrev).  A pickup ran
+   SIGNAL_MOVE every tic to test the players' reach, forever, drops included: 70 to 230 visits a
+   tic that almost always found nobody moving.  The player now walks this list once a tic
+   (DOOM_GAME.C doom_pickupTic), and a pickup whose state never changes leaves objectRunList. */
+Object *doomPickups;
 
 static void doomMissileHit(DoomActor *this,int collide);
 static int doomMoveMissile(DoomActor *this);
@@ -78,6 +83,7 @@ void doom_actorLevelInit(void)
  for (s=0;s<MAXNMSECTORS;s++)
     doomSoundTarget[s]=NULL;
  nmSpawnFail=0;
+ doomPickups=NULL;
 }
 
 /* --- sequences (contract section 2) --------------------------------------------------------- */
@@ -101,41 +107,67 @@ short doom_seq(int sprite,int frame,int view)
 
 /* The rotation (0..7) of `from` seen from the point `at`: AICOMMON.C getFacingAngle, from a
    position.  doomSetSequence (drawSprites' SIGNAL_VIEW) and doom_drawSeq (WALLS.C's leaf walk,
-   before that signal) share it, so the frame the walk tests is the frame drawn. */
-static int doomFacing(Sprite *from,MthXyz *at)
-{int angle;
- angle=getAngle(from->pos.x-at->x,
-		from->pos.z-at->z);
- angle-=from->angle+F(180);
- if (angle>F(180)) angle-=F(360);
- if (angle<F(-180)) angle+=F(360);
- if (angle<0)
-    {if (angle>F(-23))
-	return 0;
-     if (angle>F(-23-45))
-	return 7;
-     if (angle>F(-23-90))
-	return 6;
-     if (angle>F(-23-135))
-	return 5;
-     return 4;
-    }
- if (angle<F(23))
-    return 0;
- if (angle<F(23+45))
-    return 1;
- if (angle<F(23+90))
-    return 2;
- if (angle<F(23+135))
-    return 3;
- return 4;
+   before that signal) share it, so the frame the walk tests is the frame drawn.
+   GCC14: the direction of the eye in the thing's own frame, by two rotations instead of the
+   arc tangent the angle needed (getAngle walks a table, and this ran two to four times per
+   thing per image).  The eight sectors are the same, 46 degrees wide about the front and 44
+   about the back (tan 23 and tan 68 as 16.16 fractions), so the same rotation comes out except
+   within a hair of a boundary.  Past THING_ROT4_DIST four of them are kept: the front, the two
+   sides and the back, the frame of the nearest quarter turn. */
+#define DOOM_TAN23 27819                /* tan 23 deg * 65536 */
+#define DOOM_TAN68 162213               /* tan 68 */
+#define DOOM_TAN22 26478                /* tan 22 (the 158 deg boundary, from the back) */
+#define DOOM_TAN67 154394               /* tan 67 (the 113 deg boundary, from the back) */
+static int doomSeqTurns(int sprite)     /* eight views to pick from?  (-2: an absent family) */
+{int m=level_sequenceMap[sprite];
+ return m!=-2 && (m & 0x8000);
 }
 
-/* sprite->sequence for the current state and the current view; an absent family (-2) leaves
-   the sprite undrawn (-1: WALLS.C:2594 skips it) instead of reading outside the block */
-static void doomSetSequence(DoomActor *this)
+static int doomFacing(Sprite *from,MthXyz *at)
+{Fixed32 wx=at->x-from->pos.x,wz=at->z-from->pos.z,c,s,x,y,ay;
+ int lod,back;
+ lod=(GP_THING_ROT4_DIST>0 && doom_approxDist2(wx,wz)>F(GP_THING_ROT4_DIST));
+ while (wx>F(2048) || wx<F(-2048) || wz>F(2048) || wz<F(-2048))
+    {wx>>=1;                            /* the products stay inside 32 bits */
+     wz>>=1;
+    }
+ c=MTH_Cos(from->angle);
+ s=MTH_Sin(from->angle);
+ x=MTH_Mul(wx,c)+MTH_Mul(wz,s);         /* the eye, turned into the thing's frame */
+ y=MTH_Mul(wz,c)-MTH_Mul(wx,s);
+ ay=(y<0)? -y: y;
+ back=(x<0);
+ if (back)
+    x=-x;
+ if (lod)
+    {if (ay<=x)
+	return back? 4: 0;
+     return (y<0)? 6: 2;
+    }
+ if (!back)
+    {if (ay<MTH_Mul(x,DOOM_TAN23))
+	return 0;
+     if (ay<MTH_Mul(x,DOOM_TAN68))
+	return (y<0)? 7: 1;
+    }
+ else
+    {if (ay<MTH_Mul(x,DOOM_TAN22))
+	return 4;
+     if (ay<MTH_Mul(x,DOOM_TAN67))
+	return (y<0)? 5: 3;
+    }
+ return (y<0)? 6: 2;
+}
+
+/* sprite->sequence for the current state and the view of `at`; an absent family (-2) leaves
+   the sprite undrawn (-1: WALLS.C:2594 skips it) instead of reading outside the block.
+   at = NULL: the rotation is not chosen here.  A state change happens up to four times a second
+   per monster and the rotation it picked was thrown away by the next SIGNAL_VIEW, which picks it
+   for the camera that draws (and, in split screen, for each view in turn).  A family drawn from
+   one side only (stride 1 in level_sequenceMap) never needs it at all. */
+static void doomSetSequence(DoomActor *this,MthXyz *at)
 {const DoomState *st=&doomStates[this->state];
- int view=camera?doomFacing(this->sprite,&camera->pos):0;
+ int view=(at && doomSeqTurns(st->sprite))? doomFacing(this->sprite,at): 0;
  int seq=doom_seq(st->sprite,st->frame,view);
  if (seq<0)
     seq=-1;
@@ -164,16 +196,18 @@ short doom_drawSeq(Sprite *o,MthXyz *eye)
      ((DoomActor *)ow)->sprite!=o)
     return o->sequence;
  st=&doomStates[((DoomActor *)ow)->state];
- seq=doom_seq(st->sprite,st->frame,doomFacing(o,eye));
+ seq=doom_seq(st->sprite,st->frame,
+	      doomSeqTurns(st->sprite)? doomFacing(o,eye): 0);
  return (short)((seq<0 || seq>=level_nmSequences)? -1: seq);
 }
 
 /* --- states (P_SetMobjState, p_mobj.c:49-72) ------------------------------------------------ */
 
-/* terminal states without motion leave objectRunList: decor and corpses only (SPEC_RUNTIME
-   section 2) -- never a pickup (doom_item_func needs SIGNAL_MOVE for its collision) */
+/* terminal states without motion leave objectRunList: decor, corpses and pickups (SPEC_RUNTIME
+   section 2) -- a pickup's reach is the player's to test (doom_pickupTic) */
 static void doomIdleIfTerminal(DoomActor *this)
-{if (this->tics==-1 && this->func==game_actor_func && !(this->mflags & DF_IDLE) &&
+{if (this->tics==-1 && (this->func==game_actor_func || (this->mflags & DF_PICKUP)) &&
+     !(this->mflags & DF_IDLE) &&
      ((this->mflags & DF_CORPSE) || !(this->mflags & (DF_SHOOTABLE|DF_MISSILE))))
     {this->mflags|=DF_IDLE;
      delay_moveObject((Object *)this,objectIdleList);
@@ -194,7 +228,7 @@ static void doomSetSpawnState(DoomActor *this,int state)
  this->state=(short)state;
  this->tics=st->tics;
  this->sprite->frame=0;
- doomSetSequence(this);
+ doomSetSequence(this,NULL);
  doomIdleIfTerminal(this);
 }
 
@@ -214,8 +248,9 @@ void doom_setState(DoomActor *this,int state)
      assert(!(st->flags & DOOM_SF_PSPRITE));    /* weapon states never reach an actor */
      this->state=(short)state;
      this->tics=st->tics;
+     this->mflags&=~DF_HALFSTATE;               /* its own length again (A_Chase may lengthen it) */
      this->sprite->frame=0;
-     doomSetSequence(this);
+     doomSetSequence(this,NULL);
      /* Doom actors have no momentum: a state that does not walk (attack, pain, look) stands
 	still.  A_Chase sets the velocity again right after this, missiles keep theirs. */
      if (!(this->mflags & DF_MISSILE))
@@ -236,7 +271,10 @@ void doom_setState(DoomActor *this,int state)
 }
 
 /* GCC14: at rest, is it by a door?  Asked once where it stopped, not every tic: the answer only
-   depends on where it stands, and the doors' sectors are marked once, at the level start */
+   depends on where it stands, and the doors' sectors are marked once, at the level start.
+   By a door it collides again only when the geometry has moved since its last collision there
+   (pushBlockEpoch: the push blocks move once an image, after the tics): the same collision
+   against a door standing still gives the same answer.  It used to collide every tic. */
 static int doomRestNearDoor(DoomActor *this)
 {if (!(this->mflags & DF_DOORASKED))
     {this->mflags|=DF_DOORASKED;
@@ -244,8 +282,12 @@ static int doomRestNearDoor(DoomActor *this)
 	this->mflags|=DF_NEARDOOR;
      else
 	this->mflags&=~DF_NEARDOOR;
+     this->restEpoch=(unsigned short)(pushBlockEpoch-1);
     }
- return this->mflags & DF_NEARDOOR;
+ if (!(this->mflags & DF_NEARDOOR) || this->restEpoch==(unsigned short)pushBlockEpoch)
+    return 0;
+ this->restEpoch=(unsigned short)pushBlockEpoch;
+ return 1;
 }
 
 /* --- the handler ---------------------------------------------------------------------------- */
@@ -308,7 +350,7 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
 	break;
      case SIGNAL_VIEW:
 	if (this->sprite)
-	   doomSetSequence(this);
+	   doomSetSequence(this,camera? &camera->pos: (MthXyz *)0);
 	break;
      case SIGNAL_HURT:
 	doom_damageActor(this,param1,(Object *)param2);
@@ -387,8 +429,9 @@ DoomActor *doom_spawn(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
      sflags=SPRITEFLAG_IMATERIAL|SPRITEFLAG_IMMOBILE;
     }
  else
-    {class=CLASS_SPRITE;                /* puff, blood, fog: one-shots with a velocity */
-     sflags=SPRITEFLAG_IMATERIAL;
+    {class=CLASS_SPRITE;                /* puff, blood, fog: one-shots with a velocity -- up and
+					   down only, as P_ZMovement moves them (SPRITEFLAG_ZONLY) */
+     sflags=SPRITEFLAG_IMATERIAL|SPRITEFLAG_ZONLY;
     }
  /* MF_SHADOW, the spectre: Doom draws it through its fuzz column map, which this engine has no
     equivalent of -- the VDP1's mesh is the hardware's own see-through, a screen checkerboard. */
@@ -449,13 +492,23 @@ DoomActor *doom_spawn(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
  this->target=NULL;
  this->collide=0;
  this->lastlook=(short)lastlook;
- this->pad2=0;
+ this->restEpoch=0;
  this->chStage=2;
  this->chD1=DI_NODIR;
  this->chD2=DI_NODIR;
  this->chOld=DI_NODIR;
  this->chFlags=0;
  this->flashTics=0;
+ this->pkNext=this->pkPrev=NULL;
+ if (func==doom_item_func)
+    {this->mflags|=DF_PICKUP;           /* before the spawn state: it may idle at once */
+     this->pkX=pos->x;
+     this->pkZ=pos->z;
+     this->pkNext=doomPickups;
+     if (doomPickups)
+	((DoomActor *)doomPickups)->pkPrev=(Object *)this;
+     doomPickups=(Object *)this;
+    }
  doomSetSpawnState(this,info->spawnstate);
  return this;
 }
@@ -557,6 +610,12 @@ void doom_damageActor(DoomActor *this,int damage,Object *source)
      doom_setState(this,info->painstate);
     }
  this->reactiontime=0;                         /* awake now */
+ if (this->mflags & DF_HALFSTATE)              /* hit: it thinks at the full rate again, and the
+						  state it is in gets its own length back */
+    {this->tics=(short)((this->tics+1)>>1);
+     this->mflags&=~DF_HALFSTATE;
+    }
+ this->mflags&=~DF_HALF;
  if (!this->threshold && source && source!=(Object *)this)
     {/* if not intent on another target, chase after this one */
      this->target=source;
@@ -567,15 +626,64 @@ void doom_damageActor(DoomActor *this,int damage,Object *source)
 }
 
 /* P_RadiusAttack / PIT_RadiusAttack (p_map.c:1240-1300) over the live sprites: distance =
-   max(|dx|,|dz|) - radius in units, damage - distance when in range and in sight */
+   max(|dx|,|dz|) - radius in units, damage - distance when in range and in sight.
+   GCC14: over the leaves near the spot, as Doom reads the blockmap box spot +- (damage +
+   MAXRADIUS) -- not every sprite of every leaf.  A thing it can hurt is within damage + its radius
+   on both axes, and in sight: the line between them crosses only portals, each of whose planes is
+   nearer the spot than the thing.  So the leaves reached from the spot's through portals whose
+   plane lies within DOOM_BLAST_REACH hold every candidate, and the same tests follow.  A flood
+   that outgrows its queue falls back to every leaf. */
+#define DOOM_BLAST_MAXR    128           /* >= the widest thing's radius of the IWADs (MT_SPIDER) */
+#define DOOM_BLAST_LEAVES  64
 void doom_radiusAttack(DoomActor *spot,Object *source,int damage)
-{int s,dist;
+{int dist,n,i,k,w,ns;
+ short leaf[DOOM_BLAST_LEAVES];
  Sprite *spr;
- Fixed32 dx,dz,d;
+ Fixed32 dx,dz,d,reach;
+ MthXyz p;
  assert(spot);
  assert(spot->sprite);
- for (s=0;s<level_nmSectors;s++)
-    for (spr=sectorSpriteList[s];spr;spr=spr->next)
+ /* sqrt(2) (the box's corner) < 3/2 */
+ reach=F((damage+DOOM_BLAST_MAXR)+((damage+DOOM_BLAST_MAXR)>>1));
+ n=0;
+ leaf[n++]=spot->sprite->s;
+ for (i=0;i<n && n>0;i++)
+    for (w=level_sector[leaf[i]].firstWall;w<=level_sector[leaf[i]].lastWall;w++)
+       {ns=level_wall[w].nextSector;
+	if (ns<0)
+	   break;                               /* doom2ps puts a leaf's portals first */
+	/* the portal's own box first: its plane runs across the map, and a leaf whose portal
+	   lies on the same line as a wall beside the spot would be flooded from any distance */
+	{int vv,x0,x1,z0,z1,q=f(reach);
+	 const sVertexType *pv=level_vertex+level_wall[w].v[0];
+	 x0=x1=pv->x; z0=z1=pv->z;
+	 for (vv=1;vv<4;vv++)
+	    {pv=level_vertex+level_wall[w].v[vv];
+	     if (pv->x<x0) x0=pv->x; else if (pv->x>x1) x1=pv->x;
+	     if (pv->z<z0) z0=pv->z; else if (pv->z>z1) z1=pv->z;
+	    }
+	 if (f(spot->sprite->pos.x)+q<x0 || f(spot->sprite->pos.x)-q>x1 ||
+	     f(spot->sprite->pos.z)+q<z0 || f(spot->sprite->pos.z)-q>z1)
+	    continue;
+	}
+	getVertex(level_wall[w].v[0],&p);
+	d=(f(spot->sprite->pos.x-p.x))*level_wall[w].normal[0]+
+	  (f(spot->sprite->pos.y-p.y))*level_wall[w].normal[1]+
+	  (f(spot->sprite->pos.z-p.z))*level_wall[w].normal[2];
+	if (abs(d)>reach)
+	   continue;
+	for (k=0;k<n && leaf[k]!=ns;k++)
+	   ;
+	if (k<n)
+	   continue;
+	if (n==DOOM_BLAST_LEAVES)
+	   {n=-1;                               /* too far a flood: every leaf, as before */
+	    break;
+	   }
+	leaf[n++]=(short)ns;
+       }
+ for (i=0;i<((n<0)? level_nmSectors: n);i++)
+    for (spr=sectorSpriteList[(n<0)? i: leaf[i]];spr;spr=spr->next)
        {if (spr==spot->sprite || !spr->owner)
 	   continue;
 	if (!doom_targetAlive(spr->owner))
@@ -601,13 +709,25 @@ void doom_radiusAttack(DoomActor *spot,Object *source,int damage)
 /* --- noise alert (P_RecursiveSound, p_enemy.c:101-160) -------------------------------------- */
 
 /* Breadth-first flood over the portals from `sector`; a door portal whose blocking bits are
-   set (closed: setDoorBlockBits AI.C:4294-4309) stops the sound.  No ML_SOUNDBLOCK here. */
+   set (closed: setDoorBlockBits AI.C:4294-4309) stops the sound.  No ML_SOUNDBLOCK here.
+   GCC14: a shot flooded every wall of every leaf the sound reached, each time the player fired
+   (E1M6: 4 394 walls).  A leaf's portals come first (doom2ps' invariant), so its walls stop
+   being read at the first solid one.  And the flood is not redone when it would write what the
+   last one wrote: the same emitter, from a leaf that flood reached, no other flood since, and no
+   portal's blocking bits changed (portalBitsEpoch) -- a chaingun fired from one room. */
 void doom_noiseAlert(Object *emitter,int sector)
 {static short queue[MAXNMSECTORS];
  static unsigned short soundValid[MAXNMSECTORS];
  static unsigned short validcount;
+ static Object *lastEmitter;
+ static int lastEpoch;
  int head,tail,s,w,ns;
  assert(sector>=0 && sector<level_nmSectors);
+ if (emitter==lastEmitter && lastEpoch==portalBitsEpoch && validcount &&
+     soundValid[sector]==validcount && doomSoundTarget[sector]==emitter)
+    return;
+ lastEmitter=emitter;
+ lastEpoch=portalBitsEpoch;
  validcount++;
  if (!validcount)
     {for (s=0;s<MAXNMSECTORS;s++)
@@ -624,7 +744,7 @@ void doom_noiseAlert(Object *emitter,int sector)
      for (w=level_sector[s].firstWall;w<=level_sector[s].lastWall;w++)
 	{ns=level_wall[w].nextSector;
 	 if (ns<0)
-	    continue;
+	    break;                              /* the portals come first */
 	 if ((level_wall[w].flags & WALLFLAG_DOORWALL) &&
 	     (level_wall[w].flags & WALLFLAG_BLOCKBITS))
 	    continue;                           /* closed door */
@@ -640,12 +760,19 @@ void doom_noiseAlert(Object *emitter,int sector)
 
 /* --- projectiles (SPEC_RUNTIME section 5) --------------------------------------------------- */
 
-/* P_ExplodeMissile (p_mobj.c:85-98) */
+/* P_ExplodeMissile (p_mobj.c:85-98).  GCC14: the flight light goes out at the impact, before the
+   death state: its frames are FULLBRIGHT and light themselves, and the light kept a whole pool
+   burning for the 18 tics of an imp's explosion.  A rocket's A_Explode (the death state's verb)
+   lights its own explosion.  A lit plasma bolt hands the stream's light to the next one. */
 static void doomExplodeMissile(DoomActor *this)
 {const DoomMobjInfo *info=&doomMobjInfo[this->mt];
  this->sprite->vel.x=0;
  this->sprite->vel.y=0;
  this->sprite->vel.z=0;
+ removeLight(this->sprite);
+ if (this->sprite==doomPlasmaLight)
+    doomPlasmaLight=NULL;
+ this->sprite->flags|=SPRITEFLAG_ZONLY;         /* it stays where it hit, touching nothing */
  doom_setState(this,info->deathstate);
  if (this->type==OT_DEAD)
     return;

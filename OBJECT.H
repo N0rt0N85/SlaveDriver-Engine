@@ -126,6 +126,7 @@ void registerPBObject(int pbNm,Object *me);
 void pushBlockMakeSound(PushBlockObject *source,int sndNm);
 void pushBlockAdjustSound(PushBlockObject *source);
 
+extern int nmMovesRefused;             /* GCC14: delayed moves the queue could not take */
 short suckShort(void);
 int suckInt(void);
 short *suckParams(int nShorts);        /* GCC14: n shorts read in place (see OBJECT.C) */

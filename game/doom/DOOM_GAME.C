@@ -20,6 +20,7 @@
 #include "gamestat.h"
 #include "doom.h"
 #include "mplayer.h"
+#include "doom_lights.h"
 
 /* Objects that exist only in this file (doom2ps doom_specials.OT_DOOM_TELEPORT / OT_DOOM_FLOOR,
    params big-endian shorts in that order):
@@ -191,6 +192,7 @@ static void doomPortalBits(int w,int s)
 void doom_pbBlockBits(int pb)
 {short sec[16];
  int i,j,w,s,n=0,f;
+ portalBitsEpoch++;
  for (i=level_pushBlock[pb].startWall;i<=level_pushBlock[pb].endWall;i++)
     {w=level_PBWall[i];
      s=doomWallSector(w);
@@ -756,7 +758,7 @@ static void doomLamp_func(Object *_this,int message,int param1,int param2)
 	    break;
 	   }
 	if (!hasLight(&this->spot))
-	   addLightEx(&this->spot,this->r,this->g,this->b,this->radius,p);
+	   addLightPrio(&this->spot,this->r,this->g,this->b,this->radius,p,DOOM_LIGHTPRIO_EXPLODE);
 	else if (p!=this->shown)
 	   changeLightEx(&this->spot,this->r,this->g,this->b,0,p);
 	this->shown=(short)p;
@@ -1139,46 +1141,64 @@ int game_placeObject(int ot)
  return 1;
 }
 
+/* A pickup: game_actor_func runs its animation tics (no collideSprite for an IMMOBILE sprite)
+   while it has any; destroyed, it leaves doomPickups.  The players test its reach. */
+void doom_item_func(Object *_this,int message,int param1,int param2)
+{DoomActor *this=(DoomActor *)_this;
+ game_actor_func(_this,message,param1,param2);
+ if (message==SIGNAL_OBJECTDESTROYED && (Object *)param1==_this && (this->mflags & DF_PICKUP))
+    {if (this->pkPrev)
+	((DoomActor *)this->pkPrev)->pkNext=this->pkNext;
+     else
+	doomPickups=this->pkNext;
+     if (this->pkNext)
+	((DoomActor *)this->pkNext)->pkPrev=this->pkPrev;
+     this->pkNext=this->pkPrev=NULL;
+     this->mflags&=~DF_PICKUP;
+    }
+}
+
 /* Pickup reach, Doom's own test (SPEC_PLAYER 4.3): P_TryMove -> PIT_CheckThing (p_map.c) -- only
    a MOVING player touches, inside the box of thing radius + player radius, whatever the heights --
    then P_TouchSpecialThing (p_inter.c): delta = special->z - toucher->z outside -8 .. 56 (player
    height) is out of reach.  The engine's spheres could not say it: the camera ball is centred on
    the eye (41 above the feet), a pickup's is 8 u at the floor, they never met -- nothing could be
-   picked up.  game_actor_func runs the animation tics (no collideSprite for an IMMOBILE sprite);
-   doom_playerGetObject(mt, dropped) does the effects; 1 => delayKill. */
-void doom_item_func(Object *_this,int message,int param1,int param2)
-{DoomActor *this=(DoomActor *)_this;
- Sprite *s,*c;
+   picked up.  doom_playerGetObject(mt, dropped) does the effects; 1 => delayKill.
+   GCC14: the loaded player walks the level's pickups once a tic, at the end of its own tic -- the
+   pickups ran this test in runObjects, after every player's tic, and the players in turn: the
+   same order, the first to touch takes it.  A pickup's x and z never change (pkX, pkZ): the
+   first test reads the list alone, in a box of the widest reach. */
+#define DOOM_PICKUP_REACH F(64)         /* > the widest pickup's radius (20) + the player's (16) */
+void doom_pickupTic(void)
+{Object *o,*next;
+ DoomActor *a;
+ Sprite *s,*c=mpBody[mpCur];
  Fixed32 reach,delta;
- int k,prev,got;
- game_actor_func(_this,message,param1,param2);
- if (message!=SIGNAL_MOVE || this->type==OT_DEAD || !camera)
+ int got;
+ if (!c || (!c->vel.x && !c->vel.z))
     return;
- s=this->sprite;
- reach=F(doomMobjInfo[this->mt].radius+GP_PLAYER_RADIUS);
- /* every living player in turn, the first to touch takes it -- with ITS state loaded, so the
-    ammo goes in the right pocket (MPLAYER.H).  Solo: player 1, as before. */
- for (k=0;k<mpPlayers;k++)
-    {c=mpBody[k];               /* the body's own fields first: they cost nothing */
-     if (!c->vel.x && !c->vel.z)
+ if (currentState.health<=0 || doom_isMonsterPlayer(mpCur))
+    return;                                     /* GCC14: a monster picks nothing up */
+ for (o=doomPickups;o;o=next)
+    {a=(DoomActor *)o;
+     next=a->pkNext;
+     if (abs(a->pkX-c->pos.x)>=DOOM_PICKUP_REACH || abs(a->pkZ-c->pos.z)>=DOOM_PICKUP_REACH ||
+	 a->type==OT_DEAD)
 	continue;
+     s=a->sprite;
+     reach=F(doomMobjInfo[a->mt].radius+GP_PLAYER_RADIUS);
+     assert(reach<DOOM_PICKUP_REACH);
      if (abs(s->pos.x-c->pos.x)>=reach || abs(s->pos.z-c->pos.z)>=reach)
 	continue;
      delta=(s->pos.y-s->radius)-(c->pos.y-F(GP_PLAYER_RADIUS+GP_PLAYER_EYE_HOVER));
      if (delta>F(56) || delta<F(-8))
 	continue;
-     if (mpPeekInt(k,&currentState.health)<=0 || doom_isMonsterPlayer(k))
-	continue;                               /* GCC14: a monster picks nothing up */
-     prev=mpBegin(k);
-     got=doom_playerGetObject(this->mt,(this->mflags & DF_DROPPED)?1:0);
-     mpEnd(prev);
+     got=doom_playerGetObject(a->mt,(a->mflags & DF_DROPPED)?1:0);
      if (got==1)                                 /* 2: given, and left for the others */
-	{if (doomMobjInfo[this->mt].flags & MF_COUNTITEM)
-	    mpStat[k].items++;
-	 delayKill(_this);
+	{if (doomMobjInfo[a->mt].flags & MF_COUNTITEM)
+	    mpStat[mpCur].items++;
+	 delayKill(o);
 	}
-     if (got)
-	return;
     }
 }
 

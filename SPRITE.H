@@ -46,6 +46,17 @@ struct __sprite;
    (fireballs, explosions, lamps and torches, a monster's muzzle flash).  drawSprites gives it no
    leaf light (CFG_THING_LEAFLIGHT); the Doom actor sets it with its sequence (DOOM_ACTOR.C). */
 #define SPRITEFLAG_FULLBRIGHT      0x200000
+/* GCC14: moves up and down only, between its leaf's floor and ceiling, and touches nothing --
+   moveSprite skips collideSprite.  A thing that passes through everything and never moves
+   sideways (Doom's puffs, blood and fogs: MF_NOBLOCKMAP, P_ZMovement alone) paid a whole
+   collision every tic. */
+#define SPRITEFLAG_ZONLY           0x400000
+/* GCC14: counts the changes of the portals' blocking bits (a door or a lift moving), for whoever
+   keeps an answer that depends on them (DOOM_ACTOR.C doom_noiseAlert) */
+extern int portalBitsEpoch;
+/* GCC14: counts the images in which a push block moved (updatePushBlockPositions): geometry that
+   stood still since a collision gives the same collision */
+extern int pushBlockEpoch;
 
 typedef
 struct __sprite
@@ -164,7 +175,7 @@ char *doom_levelName(int lNm);                       /* DOOM_GAME.C, doomLevelNa
 #define CFG_LIFT_STOP_SND    3                       /* AI.C:4674: ST_PUSHBLOCK+3 = PSTOP       */
 void doom_pbBlockBits(int pb);                       /* DOOM_GAME.C                             */
 #define CFG_LIFT_MOVED(o)    doom_pbBlockBits((o)->pbNum)   /* AI.C:4670: lift portals follow the floor */
-void doom_spriteLeaves(MthMatrix *view,MthXyz *eye); /* WALLS.C (end): the leaf that draws each sprite */
+void doom_spriteLeaves(MthMatrix *view,MthXyz *eye,int cpu); /* WALLS.C (end): the leaf that draws each sprite */
 Sprite *doom_sprFirst(int s);
 extern short doomDrawNext[];
 short doom_drawSeq(Sprite *o,MthXyz *eye);           /* DOOM_ACTOR.C: the rotation SIGNAL_VIEW will draw */
@@ -173,7 +184,7 @@ short doom_drawSeq(Sprite *o,MthXyz *eye);           /* DOOM_ACTOR.C: the rotati
    first promotion (things seen through walls) and the PowerSlave rule of the 21-09 disc (the
    neighbour's floor tile over a monster's feet).  eye: where the camera stands when drawSprites
    sends SIGNAL_VIEW -- the rotation drawn is picked there, after the leaves are. */
-#define CFG_SPRITE_LEAVES(v,e) doom_spriteLeaves(v,e) /* WALLS.C wallsTraverse, drawWalls: once the draw order is known */
+#define CFG_SPRITE_LEAVES(v,e,c) doom_spriteLeaves(v,e,c) /* WALLS.C wallsTraverse, drawWalls: once the draw order is known */
 #define CFG_SPR_FIRST(s)      doom_sprFirst(s)       /* WALLS.C drawSprites                     */
 #define CFG_SPR_NEXT(o)       ((doomDrawNext[(o)-sprites]<0)? NULL: sprites+doomDrawNext[(o)-sprites])
 #define CFG_LEVEL_NAME(l)    doom_levelName(l)       /* SRUINS.C:2510 (BIGMAP.C levelGraph)     */
@@ -229,6 +240,13 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
    R_ProjectSprite reads its sector's lightlevel: a room whose lights go out (E1M3's blue key)
    takes its corpses with it. */
 #define CFG_THING_LEAFLIGHT    1
+/* GCC14: the blob under a thing (WALLS.C drawSprites).  Doom draws no shadow at all, and the
+   engine's is a colour calculation the VDP1 pays six times over per pixel (the hardware manual):
+   for Doom it is a mesh of the level's black instead, and only under what is near. */
+#define CFG_SHADOW_MODE        DRAW_MESH
+#define CFG_SHADOW_DIST        (GP_THING_SHADOW_DIST>0? F(GP_THING_SHADOW_DIST): 0x7fffffff)
+#define CFG_LIGHT_EVICT        1                                 /* WALLS.C lightPut: a full list makes room */
+#define CFG_VIEW_CULL          1                                 /* WALLS.C drawSprites: SIGNAL_VIEW picks a rotation, nothing else */
 /* SPRITE.C:658: a thing below its floor stands on it at once, as in Doom (P_ZMovement: z =
    floorz).  The engine rises 1/8 of the depth a tic, and against Doom's gravity of 1 u a tic --
    exactly the value where neither snap test above it fires -- that held every awake monster 7 u
@@ -247,13 +265,17 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_LIFT_RESET(o)
 #define CFG_LIFT_STOP_SND    1
 #define CFG_LIFT_MOVED(o)
-#define CFG_SPRITE_LEAVES(v,e)
+#define CFG_SPRITE_LEAVES(v,e,c)
 #define CFG_SPR_FIRST(s)     sectorSpriteList[s]
 #define CFG_SPR_NEXT(o)      (o)->next
 #define CFG_LIGHTRADIUS      256
 #define CFG_LIGHTSHIFT       11
 #define CFG_LIGHTSMOOTH      1
 #define CFG_THING_LEAFLIGHT  0                   /* things: distance fog and dynamic lights only */
+#define CFG_SHADOW_MODE      COMPO_SHADOW        /* the engine's half-luminance blob */
+#define CFG_SHADOW_DIST      0x7fffffff
+#define CFG_LIGHT_EVICT      0                   /* a full list refuses the new light */
+#define CFG_VIEW_CULL        0                   /* SIGNAL_VIEW wakes a hawk, turns a head: always sent */
 #define CFG_FLOOR_RISE(o,d)  ((d)>>3)
 #define CFG_LEVEL_NAME(l)    getLevelName(l)
 #define CFG_PLAY_INTRO()     playIntro()

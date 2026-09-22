@@ -39,10 +39,25 @@ DoomLightFx doomLightFx[DLF_NM]=
 
 /* --- what the effects ask the engine --------------------------------------------------------- */
 
+/* Who keeps a slot when the 15 are taken (WALLS.C lightPut): the player's own flash, then the
+   explosions and the lamps, then the missiles in flight, then the monsters' flashes. */
+static int doomLightPrio(int fx)
+{switch (fx)
+    {case DLF_MUZZLE_PLAYER:
+	return DOOM_LIGHTPRIO_PLAYER;
+     case DLF_EXPLODE:
+	return DOOM_LIGHTPRIO_EXPLODE;
+     case DLF_MUZZLE_MONSTER:
+	return DOOM_LIGHTPRIO_MUZZLE;
+     default:
+	return DOOM_LIGHTPRIO_MISSILE;
+    }
+}
+
 void doom_lightAdd(Sprite *s,int fx)
 {const DoomLightFx *f=&doomLightFx[fx];
  assert(s && fx>=0 && fx<DLF_NM);
- addLightEx(s,f->r,f->g,f->b,f->radius,f->peak);
+ addLightPrio(s,f->r,f->g,f->b,f->radius,f->peak,doomLightPrio(fx));
 }
 
 void doom_lightChange(Sprite *s,int fx)

@@ -4318,8 +4318,10 @@ Object *constructCloud(MonsterObject *target,int damage)
 /********************************\
  *          DOOR STUFF          *
 \********************************/
+int portalBitsEpoch;
 static void setDoorBlockBits(PushBlockObject *this)
 {int i,w;
+ portalBitsEpoch++;
  for (i=level_pushBlock[this->pbNum].startWall;
       i<=level_pushBlock[this->pbNum].endWall;
       i++)

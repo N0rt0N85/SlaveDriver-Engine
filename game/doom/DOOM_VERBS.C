@@ -129,8 +129,9 @@ int doom_lookForPlayer(DoomActor *this,int allaround)
 	continue;                               /* dead */
      if (doom_isMonsterPlayer(k))
 	continue;                               /* GCC14: one of theirs -- until it hurts them */
-     if (!doomSee(s,p))
-	continue;                               /* out of sight */
+     /* GCC14: the facing test before the line of sight, not after: both must pass and neither
+	draws P_Random or writes anything, so the answer is Doom's, and the cheap one goes
+	first -- a third of the sleepers' traces were of a player behind their back */
      if (!allaround)
 	{an=normalizeAngle(getAngle(p->pos.x-s->pos.x,p->pos.z-s->pos.z)-s->angle);
 	 if (an>F(90) || an<F(-90))
@@ -138,6 +139,8 @@ int doom_lookForPlayer(DoomActor *this,int allaround)
 		continue;                       /* behind back */
 	    }
 	}
+     if (!doomSee(s,p))
+	continue;                               /* out of sight */
      this->lastlook=(short)k;
      this->target=mpObj[k];
      return 1;
@@ -163,7 +166,10 @@ int doom_meleeRange(DoomActor *this)
  return 1;
 }
 
-/* P_CheckMissileRange (p_enemy.c:188-256) */
+/* P_CheckMissileRange (p_enemy.c:188-256).  GCC14: a monster still waiting (reactiontime) and
+   not just hit answers 0 whatever the line of sight says, and the trace writes nothing: it is
+   not traced -- id's own "OPTIMIZE" note on that line.  A shot that wakes thirty monsters used
+   to trace thirty lines for nothing on their first A_Chase. */
 int doom_missileRange(DoomActor *this)
 {const DoomMobjInfo *info;
  Sprite *ts;
@@ -172,6 +178,8 @@ int doom_missileRange(DoomActor *this)
  info=&doomMobjInfo[this->mt];
  ts=doom_targetSprite(this->target);
  if (!ts)
+    return 0;
+ if (this->reactiontime && !(this->mflags & DF_JUSTHIT))
     return 0;
  if (!doomSee(this->sprite,ts))
     return 0;
@@ -411,25 +419,62 @@ void A_Look(DoomActor *this)
  doom_setState(this,info->seestate);
 }
 
+/* GCC14: is this monster one the level can run at half the rate?  It chases a marine, the reject
+   table says its leaf never sees any marine's -- so no attack of its can reach one, they all ask
+   for a line of sight, and nothing of it is drawn -- and it is far from every marine.  What it
+   then does between two thoughts is walk, and the step below is doubled to match. */
+static int doomChaseHalf(DoomActor *this)
+{Sprite *p,*ts;
+ int k;
+ /* not DF_JUSTHIT: only doom_missileRange clears it, and a monster this test keeps can never
+    reach it -- a melee-only monster would carry it for the rest of its life */
+ if (!GP_MONSTER_FAR_THINK || (this->mflags & DF_JUSTATTACKED))
+    return 0;
+ ts=doom_targetSprite(this->target);
+ if (!ts || !mpIsPlayer(ts))
+    return 0;
+ for (k=0;k<mpPlayers;k++)
+    {p=mpBody[k];
+     if (!p)
+	continue;
+     if (level_maySee(this->sprite->s,p->s))
+	return 0;
+     if (doom_approxDist2(p->pos.x-this->sprite->pos.x,p->pos.z-this->sprite->pos.z)<
+	 F(GP_MONSTER_FAR_THINK))
+	return 0;
+    }
+ return 1;
+}
+
 /* A_Chase (p_enemy.c:659-767).  P_Move's whole step (speed along movedir) is the velocity of the
    next tic only (DF_STEP, DOOM_ACTOR.C): Doom moves a monster once per A_Chase, every 2 to 4
-   tics, and so collides it once. */
+   tics, and so collides it once.
+   GCC14: a monster that is far and cannot be seen (doomChaseHalf) holds its run state twice as
+   long, walks twice as far in its step, and counts down twice as fast -- the same ground speed,
+   the same turns, the same timers, half the thoughts: half its A_Chase calls, its steps, its
+   collisions and its sight traces. */
 void A_Chase(DoomActor *this)
 {const DoomMobjInfo *info;
  const DoomState *st;
  Sprite *s;
- int a,delta;
+ int a,delta,step=(this->mflags & DF_HALF)?2:1;
  assert(this);
  info=&doomMobjInfo[this->mt];
  s=this->sprite;
  if (this->reactiontime)
-    this->reactiontime--;
+    {this->reactiontime-=step;
+     if (this->reactiontime<0)
+	this->reactiontime=0;
+    }
  /* modify target threshold */
  if (this->threshold)
     {if (!doom_targetAlive(this->target))
 	this->threshold=0;
      else
-	this->threshold--;
+	{this->threshold-=step;
+	 if (this->threshold<0)
+	    this->threshold=0;
+	}
     }
  /* turn towards movement direction if not there yet: angle &= 7<<29, +-45 degrees */
  if (this->movedir<8)
@@ -484,17 +529,32 @@ void A_Chase(DoomActor *this)
     }
  nomissile:
  /* chase towards player */
- if (--this->movecount<0)
+ this->movecount-=step;
+ if (this->movecount<0)
     doom_newChaseDir(this);
  else if (doomBlocked(this))
     doomNextDir(this);
  /* make active sound */
- if (info->activesound && P_Random()<3)
+ if (info->activesound && P_Random()<3*step)
     doom_sound(s,info->activesound);
  setvel:
+ /* the state it is in now (doom_newChaseDir may have changed none of it, a missile attack
+    returned above): its own length, doubled with the step when it is far and unseen */
+ if (doomChaseHalf(this))
+    {this->mflags|=DF_HALF;
+     if (this->tics>0)
+	{this->tics*=2;
+	 this->mflags|=DF_HALFSTATE;   /* so a hit can give this state its own length back */
+	}
+     step=2;
+    }
+ else
+    {this->mflags&=~DF_HALF;
+     step=1;
+    }
  st=&doomStates[this->state];
  if (this->movedir<8 && info->speed && st->tics>0)
-    {Fixed32 v=F(info->speed);
+    {Fixed32 v=F(info->speed*step);
      this->mflags|=DF_STEP;
      int an=normalizeAngle(this->movedir*F(45));   /* SBL MTH_Sin/Cos: |x| >= 180 reads as 0 */
      s->vel.x=MTH_Mul(v,MTH_Cos(an));
