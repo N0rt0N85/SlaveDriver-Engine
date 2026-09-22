@@ -101,7 +101,14 @@ def weapon_lumps(wad, families):
 SHADOW_RADIUS = 21.3                  # texels ; 32 = le disque retail, jugé trop large (testeur, -1/3)
 
 
-def shadow_disc(value=1, r=SHADOW_RADIUS):
+SHADOW_INDEX = 247                    # PLAYPAL : le SEUL autre noir pur que l'indice 0 (0,0,0),
+                                      # et l'indice 0 est le transparent du VDP1. L'ombre Doom est
+                                      # dessinee en MESH (un pixel sur deux) et non en COMPO_SHADOW
+                                      # (WALLS.C drawSprites, CFG_SHADOW_MODE) : c'est la couleur
+                                      # ECRITE qui fait l'ombre, il la faut noire dans la banque 0.
+
+
+def shadow_disc(value=SHADOW_INDEX, r=SHADOW_RADIUS):
     """64 x 64 indices : disque plein centre de rayon `r`, 0 = transparent autour. drawSprites
     etire toujours la tuile entiere sur 48 u x l'echelle (WALLS.C:2751) : le rayon du disque dans
     la tuile regle donc la taille de l'ombre sans toucher au moteur."""

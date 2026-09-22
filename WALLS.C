@@ -4040,6 +4040,7 @@ static int leafDark(int s)
 void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 {Sprite *o;
  Sprite *drawList[100];
+ int drawKey[100];              /* GCC14: their sort keys, made once */
  int nmDraw,draw;
  int chunk,light,x,y,i,j;
  int spriteFog=0,spriteBank=0;
@@ -4066,7 +4067,10 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
  assert(viewCamera->sequence==-1);
  for (o=CFG_SPR_FIRST(sector);nmDraw<100 && o;o=CFG_SPR_NEXT(o))
     if (o->sequence!=-1 && !(o->flags & SPRITEFLAG_INVISIBLE))
-       drawList[nmDraw++]=o;
+       {drawKey[nmDraw]=f(abs(o->pos.x-playerPos->x))+f(abs(o->pos.y-playerPos->y))+
+			f(abs(o->pos.z-playerPos->z));   /* GCC14: the sort key, once per thing */
+	drawList[nmDraw++]=o;
+       }
 
 #if 0
  if (internalHead[sector]!=-1)
@@ -4083,21 +4087,19 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
  if (nmDraw==0)
     return;
 
- /* sort */
+ /* sort -- GCC14: on the keys made above; each comparison rebuilt two of them, six absolute
+    differences, at every step of the insertion */
  for (i=1;i<nmDraw;i++)
     for (j=i;j>0;j--)
-       {int d1,d2;
-	Sprite *swap;
-	d1=f(abs(drawList[j-1]->pos.x-playerPos->x))+
-	   f(abs(drawList[j-1]->pos.y-playerPos->y))+
-           f(abs(drawList[j-1]->pos.z-playerPos->z));
-	d2=f(abs(drawList[j]->pos.x-playerPos->x))+
-	   f(abs(drawList[j]->pos.y-playerPos->y))+
-           f(abs(drawList[j]->pos.z-playerPos->z));
-	if (d1<d2)
+       {Sprite *swap;
+	int d;
+	if (drawKey[j-1]<drawKey[j])
 	   {swap=drawList[j];
 	    drawList[j]=drawList[j-1];
 	    drawList[j-1]=swap;
+	    d=drawKey[j];
+	    drawKey[j]=drawKey[j-1];
+	    drawKey[j-1]=d;
 	   }
 	else
 	   break;
@@ -4167,8 +4169,6 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	    EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5,o->color,pos,NULL);
 	 continue;
 	}
-     if (o->owner)
-	signalObject(o->owner,SIGNAL_VIEW,0,0);
      feetPos.x=o->pos.x;
      feetPos.y=o->pos.y-o->radius;
      if (mpIsPlayer(o))            /* GCC14: a player's pos is its eye, which hovers (SPR_HOVER) */
@@ -4177,6 +4177,16 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
      MTH_CoordTrans(view,&feetPos,&tformed);
      if (tformed.z<CFG_SPRITE_NEARCLIP)
 	continue;
+     /* GCC14: and off the sides, where sprRect drops every chunk it would make (the test
+	doom_spriteLeaves uses).  Before the view signal, the fog, the lights and the shadow:
+	a thing in a drawn leaf but out of the frame paid all of them.  Its one-image flash is
+	consumed here, as it was when the chunks were dropped one by one. */
+     if (f(abs(tformed.x))>(f(tformed.z)<<2)+256 || f(abs(tformed.y))>(f(tformed.z)<<2)+256)
+	{o->flags&=~SPRITEFLAG_FLASH;
+	 continue;
+	}
+     if (o->owner)
+	signalObject(o->owner,SIGNAL_VIEW,0,0);
      /* if (tformed.z>FARCLIP)
 	continue; */
 
@@ -4267,7 +4277,8 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	}
      /* draw shadow -- GCC14: not under a thing the tile cache's bar leaves out (PIC.H
 	mapSpritePic): alone, it would mark a monster that is not drawn */
-     if (!(o->flags & SPRITEFLAG_NOSHADOW) && width64>=picSpriteLod)
+     if (!(o->flags & SPRITEFLAG_NOSHADOW) && width64>=picSpriteLod &&
+	 tformed.z<=CFG_SHADOW_DIST)
 	{Fixed32 shadowHeight;
 	 Fixed32 shadowWidth;
 	 Fixed32 shadowScale;
@@ -4303,7 +4314,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		     abs(pos[0].x)+(pos[1].x>>1)<=VDP1LIM &&
 		     abs(pos[0].y)+(pos[1].y>>1)<=VDP1LIM &&
 		     (sh=mapSpritePic(0,PIC_ALWAYS))>=0)
-		    EZ_scaleSpr(ZOOM_MM,UCLPIN_ENABLE|COLOR_4|COMPO_SHADOW,
+		    EZ_scaleSpr(ZOOM_MM,UCLPIN_ENABLE|COLOR_4|CFG_SHADOW_MODE,
 				0,sh,pos,NULL);
 		}
 	    }

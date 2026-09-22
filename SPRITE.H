@@ -240,6 +240,11 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
    R_ProjectSprite reads its sector's lightlevel: a room whose lights go out (E1M3's blue key)
    takes its corpses with it. */
 #define CFG_THING_LEAFLIGHT    1
+/* GCC14: the blob under a thing (WALLS.C drawSprites).  Doom draws no shadow at all, and the
+   engine's is a colour calculation the VDP1 pays six times over per pixel (the hardware manual):
+   for Doom it is a mesh of the level's black instead, and only under what is near. */
+#define CFG_SHADOW_MODE        DRAW_MESH
+#define CFG_SHADOW_DIST        F(GP_THING_SHADOW_DIST)
 /* SPRITE.C:658: a thing below its floor stands on it at once, as in Doom (P_ZMovement: z =
    floorz).  The engine rises 1/8 of the depth a tic, and against Doom's gravity of 1 u a tic --
    exactly the value where neither snap test above it fires -- that held every awake monster 7 u
@@ -265,6 +270,8 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_LIGHTSHIFT       11
 #define CFG_LIGHTSMOOTH      1
 #define CFG_THING_LEAFLIGHT  0                   /* things: distance fog and dynamic lights only */
+#define CFG_SHADOW_MODE      COMPO_SHADOW        /* the engine's half-luminance blob */
+#define CFG_SHADOW_DIST      0x7fffffff
 #define CFG_FLOOR_RISE(o,d)  ((d)>>3)
 #define CFG_LEVEL_NAME(l)    getLevelName(l)
 #define CFG_PLAY_INTRO()     playIntro()
