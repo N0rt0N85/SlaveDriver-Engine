@@ -3174,6 +3174,7 @@ void wallRenderSlaveMain(void)
  *IPRA=0x0000;
  *IPRB=0x0000;
  *TIER=0x01;
+ *FTCSR=0x0;      /* GCC14: a kick left pending for the slave this one replaces is not a job */
  while (1)
     {/* wait for sync signal */
      SLAVESTEP=1;
@@ -3207,6 +3208,13 @@ void wallRenderSlaveMain(void)
 	    }
 	}
     }
+}
+
+/* GCC14: doorwayCache for another slave program while no level runs (Doom's title fire) */
+void *slaveScratch(int *size)
+{if (size)
+    *size=sizeof(doorwayCache);
+ return doorwayCache;
 }
 
 void startSlave(void *slaveMain)

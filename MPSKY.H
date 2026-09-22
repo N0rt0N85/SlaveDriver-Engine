@@ -19,4 +19,14 @@ void mpSkyViewDone(int view);           /* after view's walls: its sky box, for 
    plus the sky's own light (lightning): A must stop re-selecting them every tic. */
 #define SKY_OFFSET_A (mpSkyOn? SCL_SP0: SCL_SP0|SCL_NBG0|SCL_RBG0)
 
+/* GCC14: what the split sky keeps in VRAM B0 from one image to the next (offsets from
+   SCL_VDP2_VRAM), for a layer that borrows B0 while the game is frozen (Doom's pause saves these
+   and gives them back): the mist's cells, the clouds' names, the rotation's parameter table.  The
+   rest of B0 is free.  MPSKY.C checks them against its own layout. */
+#define MPSKY_B0_HAZE      0x40000      /* .. MPSKY_B0_HAZE_END: blank + 7x64 cells of 128 bytes */
+#define MPSKY_B0_HAZE_END  (0x40000+(1+7*64)*128)
+#define MPSKY_B0_CLOUD     0x50000      /* .. MPSKY_B0_CLOUD_END: 64x64 two-word names */
+#define MPSKY_B0_CLOUD_END (0x50000+64*64*4)
+#define MPSKY_B0_RPT       0x5F000      /* RBG0's parameter tables, A and B */
+
 #endif

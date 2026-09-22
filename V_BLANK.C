@@ -184,6 +184,8 @@ void bootProbePaint(void)
    because every program runs it: UTIL.C assertFail disarms it in all three. */
 volatile int crashArmed,crashFields;
 void (*vblankOutHook)(void);
+/* GCC14: a second vblank-out hook, for a game's own use (Doom's title fire kicks the slave) */
+void (*vblankUserHook)(void);
 
 void UsrVblankEnd(void)
 {SCL_VblankEnd();
@@ -194,6 +196,8 @@ void UsrVblankEnd(void)
 #endif
  if (vblankOutHook)
     vblankOutHook();
+ if (vblankUserHook)
+    vblankUserHook();
 }
 
 

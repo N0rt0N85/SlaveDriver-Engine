@@ -128,5 +128,6 @@ void pushBlockAdjustSound(PushBlockObject *source);
 
 short suckShort(void);
 int suckInt(void);
+short *suckParams(int nShorts);        /* GCC14: n shorts read in place (see OBJECT.C) */
 
 #endif

@@ -1102,11 +1102,10 @@ void setVDP2(void)
 }
 
 
-void loadVDP2Sprites(int fd)
-{unsigned char *vram;
- SclConfig scfg;
- vram=(unsigned char *)SCL_VDP2_VRAM;
- fs_read(fd,vram+1024*256,1024*256);
+/* GCC14: NBG0 as the VDP2 weapon sheet (512x512 at VRAM B, hidden until displayVDP2Pic), apart
+   from reading it: a game with no sheet still leaves NBG0 so after its loading screen (Doom) */
+void vdp2SheetConfig(void)
+{SclConfig scfg;
  /* setup VDP2Sprite screen */
  SCL_InitConfigTb(&scfg);
  scfg.dispenbl=ON;
@@ -1118,6 +1117,11 @@ void loadVDP2Sprites(int fd)
  scfg.patnamecontrl=0;
  SCL_SetConfig(SCL_NBG0, &scfg);
  dontDisplayVDP2Pic();
+}
+
+void loadVDP2Sprites(int fd)   /* GCC14: the read, then vdp2SheetConfig (split for Doom) */
+{fs_read(fd,(char *)SCL_VDP2_VRAM+1024*256,1024*256);
+ vdp2SheetConfig();
 }
 
 void loadLoadingScreen(int fd)
@@ -2122,8 +2126,12 @@ static void mpShowBodies(int viewer)
 static void mpPollStart(void)
 {static char held[MPMAX]={1,1,1,1};
  int j,k,down,n;
+ CFG_PAUSE_POLL(-1);                /* GCC14: nobody -- a request the loop did not take this image
+				       (motion off, the level ending) is dropped, not kept for later */
  for (j=1;j<MPMAX;j++)
     {down=!(lastInputSampleP[j] & PER_DGT_S);
+     if (down && !held[j] && j<mpPlayers)
+	CFG_PAUSE_POLL(j);            /* GCC14: a player already in pauses the game (SPRITE.H) */
      if (down && !held[j] && j==mpPlayers && j<mpPadsPresent)
 	{wallsPipeDiscard();
 	 mpSwitch(0);
@@ -2180,6 +2188,9 @@ static int mpView;              /* the view being drawn */
 static int mpFog[MPMAX]={MPFOGMAX,MPFOGMAX,MPFOGMAX,MPFOGMAX};
 static int mpCells[MPMAX],mpShare[MPMAX],mpQuads[MPMAX];
 static int mpBudget;
+#ifdef STATUSTEXT
+static int loadT0,loadFields;   /* GCC14: runLevel's start, the fields its load took (L:) */
+#endif
 
 static void mpSetViewFog(int k)
 {int f=mpFog[k];
@@ -2257,6 +2268,9 @@ int runLevel(char *filename,int levelNm)
  MthMatrix matstack[4];
 
  dPrint("vroom!\n");
+#ifdef STATUSTEXT
+ loadT0=vtimer;                 /* GCC14: the load's length, for the overlay (L:) */
+#endif
  nmFullBowls=0;
  healthMeterPos=0;
  musicMark=cdMark();            /* GCC14: the same track picks up there after the load */
@@ -2321,10 +2335,10 @@ int runLevel(char *filename,int levelNm)
   fd=fs_open("+STATIC.DAT");
   assert(fd>=0);
   dPrint("blat!\n");
-  loadLoadingScreen(fd);
+  CFG_LOADING_SCREEN(fd);      /* GCC14: a game's loading screen (SPRITE.H) */
   dPrint("frop!\n");
   displayEnable(1);
-  loadVDP2Sprites(fd);
+  CFG_VDP2_SHEET(fd);          /* GCC14: PowerSlave's weapon sheet; Doom has none */
   nmStaticSounds=loadStaticSounds(fd);
   nmWeaponTiles=loadWeaponTiles(fd);
   loadWeaponSequences(fd);
@@ -2343,6 +2357,9 @@ int runLevel(char *filename,int levelNm)
   fs_close(fd);
  }
  fs_closeProgress();
+#ifdef STATUSTEXT
+ loadFields=vtimer-loadT0;            /* GCC14: the L: probe */
+#endif
 
 #ifdef JAPAN
  loadJapanFontPics();
@@ -2360,6 +2377,7 @@ int runLevel(char *filename,int levelNm)
  }
 #endif
 
+ CFG_LOADING_END();            /* GCC14: the game's VDP2 back from its loading screen */
  startSlave(wallRenderSlaveMain);
  delay(1);
 
@@ -2928,13 +2946,16 @@ int runLevel(char *filename,int levelNm)
 		  B:   the cell budget, the VDP1 list less what the image spends
 		       outside the cells.  Past it, or past the slave's records,
 		       the fog comes in (SOLO_FOG = budget, mpBalance).  Solo only:
-		       split screen carries its own B: on that line. */
+		       split screen carries its own B: on that line.
+		  L:   the fields the last level load took, from runLevel's start to
+		       the last byte read (60 a second): the loading screen's cost
+		       shows here (Doom: FIRE_LOAD_FIELDS 2 against 0, console only). */
       /* fog : distance in units at which a fully lit sector reaches black.  4096 is
 	 the original setting, beyond any line of sight -- L+R+Z cycles it. */
       drawStringf(-158,-90,1,"tile:%d sw:%d flat:%d/%d fog:%d",used[0],nmSwaps[0],
 		  picLastSmall,picLastFull,fogDist);
       if (mpPlayers==1)
-	 drawStringf(-158,-110,1,"B:%d",mpBudget);
+	 drawStringf(-158,-110,1,"B:%d L:%d",mpBudget,loadFields);
       /* LEGEND  W : the VDP2 weapon sheet cut into VDP1 tiles (PIC.C picWeaponSprites) --
 		     <times asked>,<tiles produced>,<LWRAM free in KB when asked>,<sub-tiles
 		     the gun put down in the last image>.  The split sky waits on the cut
@@ -3088,13 +3109,14 @@ int runLevel(char *filename,int levelNm)
 	 vtimer=smoothVTime;
 	}
      if (playerMotionEnable &&
-	 (!(lastInputSample & PER_DGT_S) || !controlerPresent || delayed_fade))
+	 (!(lastInputSample & PER_DGT_S) || !controlerPresent || delayed_fade || CFG_PAUSE_ASKED()))
 	{/* the menu can move the camera */
 	 wallsPipeDiscard();
-	 enablePlax(0);
+	 CFG_PAUSE_PREP();
 	 crashDisarm();              /* the menu waits for the player: the next beat re-arms */
-	 runInventory(currentState.inventory,keyMask,&mapOn,
-		      delayed_fade,delayed_fadeButton,delayed_fadeSel);
+	 /* GCC14: PowerSlave's inventory, or the game's own pause (SPRITE.H) */
+	 CFG_PAUSE_MENU(currentState.inventory,keyMask,&mapOn,
+			delayed_fade,delayed_fadeButton,delayed_fadeSel);
 	 delayed_fade=0;
 	 vtimer=smoothVTime;
 	}
@@ -3102,7 +3124,7 @@ int runLevel(char *filename,int levelNm)
      if (quitRequest)
 	{wallsPipeDiscard();
 	 crashDisarm();
-	 return 2;
+	 return CFG_QUIT_ACTION(quitRequest);
 	}
 #ifdef PSYQ
      pollhost();
@@ -3239,6 +3261,7 @@ void main(void)
 #ifndef TESTCODE
  abcResetEnable=1;
  playIntro();
+ CFG_TITLE_END();               /* GCC14: a game's title lets go (Doom: its fire burns on into the load) */
  mpNewGame();                   /* the players armed at the menu, none carrying anything */
 #else
  bup_initCurrentGame();

@@ -31,6 +31,8 @@ extern volatile Uint32 vtimer, htimer;
    the VBlank-OUT hook that counts them */
 extern volatile int crashArmed,crashFields;
 extern void (*vblankOutHook)(void);
+/* GCC14: a game's own vblank-out hook (game/doom/DOOM_TITLE.C: the title fire's kick) */
+extern void (*vblankUserHook)(void);
 
 #ifndef NDEBUG
 extern int errorQ[];

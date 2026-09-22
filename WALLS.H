@@ -68,6 +68,7 @@ int wallsSplitNeed(void);        /* GCC14: bytes the missing sets would still ta
 void drawWallsFinish(void);
 void wallRenderSlaveMain(void);
 void startSlave(void *slaveMain);
+void *slaveScratch(int *size);  /* GCC14: doorwayCache, free outside play (Doom's title fire) */
 void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector);
 void initWallRenderer(void);
 void removeLight(Sprite *s);

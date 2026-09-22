@@ -27,6 +27,25 @@ int level_nmObjects;
 int level_nmPushBlocks;
 int level_nmWaveVert;
 int level_nmVertex;
+#ifndef NDEBUG
+int level_nmObjectParams;              /* GCC14: only the asserts read it (OBJECT.C suckParams) */
+#endif
+
+/* GCC14: whether leaves s1 and s2 may see each other -- 0 only when the level's reject table
+   (SLEVEL.H) says they never do; 1 without a table.  canSee reads it before it traces a line, as
+   Doom's P_CheckSight reads its REJECT; the Doom lamps read it to go out unseen (DOOM_GAME.C). */
+int level_maySee(int s1,int s2)
+{int a,b;
+ if (!level_reject)
+    return 1;
+ assert(s1>=0 && s1<level_nmSectors && s2>=0 && s2<level_nmSectors);
+ a=level_sector[s1].rejectClass;
+ b=level_sector[s2].rejectClass;
+ if (a>b)
+    {int t=a; a=b; b=t;}
+ a=a*level_nmRejectClasses-((a*(a-1))>>1)+b-a;
+ return !(level_reject[a>>3] & (1<<(a&7)));
+}
 
 #define LOADPART(array,type,number) \
  size=number*sizeof(type);\
@@ -55,6 +74,9 @@ int loadLevel(int fd,int tileBase)
  level_nmPushBlocks=head->nmPushBlocks;
  level_nmWaveVert=head->nmWaveVert;
  level_nmVertex=head->nmVerticies;
+#ifndef NDEBUG
+ level_nmObjectParams=head->nmObjectParams;   /* GCC14 */
+#endif
 
  LOADPART(level_sector,sSectorType,head->nmSectors);
  LOADPART(level_wall,sWallType,head->nmWalls);

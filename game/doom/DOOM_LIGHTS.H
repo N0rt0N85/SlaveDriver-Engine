@@ -1,7 +1,8 @@
 /* DOOM_LIGHTS.H -- the Doom port's dynamic lights (an addition: Doom has none).
  * params/doom.cfg holds the values a build starts with (LIGHT_* = R,G,B,RADIUS,INTENSITY, plus
  * the two durations), turned into GP_LIGHT_*.  From there they are a live table, doomLightFx,
- * which the tuner edits (DOOM_LIGHTS.C): the effect asks, WALLS.C's player settings scale.
+ * which the tuner edits (PAUSE.OVL, game/doom/ovl/LIGHTS.C): the effect asks, WALLS.C's player
+ * settings scale.
  * DOOM_ACTOR.C, DOOM_VERBS.C and DOOM_WEAPON.C only name an effect. */
 #ifndef DOOM_LIGHTS_H
 #define DOOM_LIGHTS_H
@@ -31,12 +32,6 @@ void doom_lightImage(void);                    /* an image was drawn (60 Hz, pla
 void doom_lightTicStart(void);                 /* the tic takes the mark (35 Hz, player 1) */
 int  doom_lightStep(void);                     /* 1 = the flashes advance this tic */
 
-/* The tuner: the same values edited from the title (OPTIONS, LIGHTS) or in the level, where the
-   effects are there to be judged (L+R+RIGHT, or C+X+Y). */
-/* what it eats while it is open: pad bits, active low (DOOM_PLAYER.C doom_playerFrame) */
-#define LIGHT_TUNER_KEYS (PER_DGT_U|PER_DGT_D|PER_DGT_L|PER_DGT_R|PER_DGT_TL|PER_DGT_TR)
-void doom_lightMenu(void);                     /* INTRO.C: its own screen, back on BACK */
-int  doom_lightTuner(unsigned short input);    /* 60 Hz: 1 = it eats the d-pad this frame */
-void doom_lightTunerDraw(void);                /* with the HUD, solo only */
+/* The tuner (the title's and the pause's OPTIONS -> LIGHTS) is in PAUSE.OVL: game/doom/ovl/. */
 
 #endif

@@ -121,8 +121,23 @@ ifeq ($(shell $(PYTHON) tools/gameparams.py --get GAME $(PARAMS)),doom)
   # to ld as roots (--roots), then checks the linked ELF (--check).  PowerSlave and Duke link
   # exactly as before.
   GAME_CFLAGS  := -ffunction-sections -fdata-sections
-  MAIN_LDFLAGS  = -Wl,--gc-sections $$($(PYTHON) tools/sbl_refs.py --roots $(NM) $(LIBDIR)/SEGA_SAT.A $(filter %.o,$^))
+  MAIN_LDFLAGS  = -Wl,--gc-sections $$($(PYTHON) tools/sbl_refs.py --roots $(NM) $(LIBDIR)/SEGA_SAT.A $(filter %.o,$^)) \
+                  $$(cat $(OVL_ROOTS))
   MAIN_GCCHECK := 1
+  # GCC14: overlays (OVL.C, saturn_ovl.ld, tools/ovlpack.py, docs/PORTING_NOTES.md "Overlays").
+  # PAUSE.OVL = game/doom/ovl/*.C (a subdirectory: the wildcard above leaves them out of MAIN),
+  # linked against MAIN.elf's symbols and read from the disc when START pauses a level.  MAIN
+  # keeps the loader, the build id, and the symbols the overlay uses (OVL_ROOTS, -u roots of
+  # MAIN's gc).  The disc gets the overlay next to MAIN.BIN (mkiso), always from the same make.
+  GAME_C      += OVL
+  OVL_OBJDIR  := $(OBJDIR)/ovl
+  PAUSE_OBJS  := $(patsubst game/doom/ovl/%.C,$(OVL_OBJDIR)/%.o,$(wildcard game/doom/ovl/*.C))
+  # the objects that run only at the title (OVL_POOL: the title's LIGHTS screen), which may draw;
+  # the pause's own may not (ovlpack.py --roots, the deny list)
+  OVL_TITLE   := $(OVL_OBJDIR)/TUNER_TITLE.o
+  OVL_ROOTS   := $(BUILD)/ovlroots.txt
+  BUILDID_OBJ := $(OBJDIR)/buildid.o
+  OVL_FILES   := $(BUILD)/PAUSE.OVL
 else
   # PowerSlave's own runtime answers the CFG_MP_* hooks from PSMULTI.C, as game/doom does on
   # Doom's (SPRITE.H).  It is the game's file, not the engine's, so it joins MAIN only here.
@@ -220,6 +235,7 @@ SYSCALLS_OBJ := $(OBJDIR)/syscalls.o   # GCC14: _sbrk trap so newlib can never a
 INIT_OBJS    := $(CRT0_OBJ) $(addprefix $(OBJDIR)/,$(addsuffix .o,$(INIT_C)))   $(MEMCPY_OBJ) $(LINK_OBJ) $(SNSTUBS_OBJ) $(SYSCALLS_OBJ) $(UBC_OBJ)
 MAIN_OBJS    := $(CRT0_OBJ) $(addprefix $(OBJDIR)/,$(addsuffix .o,$(MAIN_C)))   $(MEMCPY_OBJ) $(WALLASM_OBJ) $(LINK_OBJ) $(SNSTUBS_OBJ) $(SYSCALLS_OBJ) $(UBC_OBJ) $(CRASH_OBJ)
 KEYGEN_OBJS  := $(CRT0_OBJ) $(addprefix $(OBJDIR)/,$(addsuffix .o,$(KEYGEN_C))) $(MEMCPY_OBJ) $(LINK_OBJ) $(SNSTUBS_OBJ) $(SYSCALLS_OBJ) $(UBC_OBJ)
+MAIN_OBJS    += $(BUILDID_OBJ)            # GCC14: Doom's overlays: the MAIN they were linked against
 
 ALL_OBJS     := $(sort $(INIT_OBJS) $(MAIN_OBJS) $(KEYGEN_OBJS))
 PROGRAMS     := INIT MAIN KEYGEN
@@ -238,8 +254,8 @@ MAKEFLAGS += --no-builtin-rules
 .SECONDARY:
 .DELETE_ON_ERROR:
 
-all: $(BINS)
-bins: $(BINS)
+all: $(BINS) $(OVL_FILES)
+bins: $(BINS) $(OVL_FILES)
 elfs: $(ELFS)
 objs: $(ALL_OBJS)
 
@@ -277,7 +293,8 @@ $(OBJDIR)/%.o: %.C | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 # GCC14: the multiplayer rules, menu and score run a few times a level or at the title: built for
 # size -- every byte of MAIN is a byte less for the level's tiles (tools/doom2ps/make_e1m1.py)
-$(OBJDIR)/MPRULES.o $(OBJDIR)/DOOM_MODES.o $(OBJDIR)/MPSKY.o $(OBJDIR)/DOOM_LIGHTS.o: CFLAGS += -Os
+$(OBJDIR)/MPRULES.o $(OBJDIR)/DOOM_MODES.o $(OBJDIR)/MPSKY.o $(OBJDIR)/DOOM_LIGHTS.o $(OBJDIR)/DOOM_TITLE.o: CFLAGS += -Os
+$(OBJDIR)/OVL.o $(OBJDIR)/DOOM_PAUSE.o: CFLAGS += -Os
 
 # --- shim (lower-case .c, keeps the same flags) -----------------------------------------------
 $(SNSTUBS_OBJ): shim/sn_stubs.c | $(OBJDIR)
@@ -307,7 +324,7 @@ $(MEMCPY_OBJ): MEMCPY.S | $(OBJDIR)
 #         cp sdk/sbl6/lib/coff/SEGA_SAT.A build/SEGA_SAT_noscl.A
 #         $(AR) --target=coff-sh d build/SEGA_SAT_noscl.A scl_func.o   and point LIBS at it
 $(BUILD)/INIT.elf:   $(INIT_OBJS)   saturn.ld
-$(BUILD)/MAIN.elf:   $(MAIN_OBJS)   saturn.ld
+$(BUILD)/MAIN.elf:   $(MAIN_OBJS)   saturn.ld $(OVL_ROOTS)
 $(BUILD)/KEYGEN.elf: $(KEYGEN_OBJS) saturn.ld
 $(ELFS):
 	$(LD) $(LDFLAGS) $(if $(filter MAIN.elf,$(notdir $@)),$(MAIN_LDFLAGS)) -Wl,-Map,$(@:.elf=.map) $(filter %.o,$^) $(LIBS) -o $@
@@ -323,6 +340,38 @@ $(BUILD)/%.BIN: $(BUILD)/%.elf
 	$(OBJCOPY) -O binary $< $@
 	@printf '%s: %s bytes (loads at 0x06004000, entry = first byte)\n' $@ $$(stat -c %s $@)
 
+# --- GCC14: overlays (Doom only; see the GAME = doom branch above and tools/ovlpack.py) ----------
+#  1. the overlay's objects, for size, with MAIN's flags (the COMMON semantics must be MAIN's);
+#  2. OVL_ROOTS: what they use, rooted in MAIN's link (-u) -- and the deny-list check;
+#  3. buildid.c: a CRC over MAIN's objects, its script, the roots, the SBL archive and this Makefile
+#     (link flags and order): ovl_run refuses another MAIN's file;
+#  4. two links at two bases, the diff gives the relocations; --pack checks and writes the file.
+ifneq ($(OVL_FILES),)
+$(OVL_OBJDIR)/%.o: game/doom/ovl/%.C $(BUILD)/pause_art.h | $(OBJDIR)
+	@mkdir -p $(OVL_OBJDIR)
+	$(CC) $(CFLAGS) -Os -c $< -o $@
+$(PAUSE_OBJS): $(GAMEPARAMS_H)
+$(BUILD)/pause_art.h: tools/doom2ps/wad2pause.py $(DOOMWAD) | $(OBJDIR)
+	$(PYTHON) tools/doom2ps/wad2pause.py $(DOOMWAD) $@
+$(OVL_ROOTS): $(PAUSE_OBJS) tools/ovlpack.py
+	$(PYTHON) tools/ovlpack.py --roots $(NM) $@ $(filter-out $(OVL_TITLE),$(PAUSE_OBJS)) --title $(OVL_TITLE)
+$(OBJDIR)/buildid.c: $(filter-out $(BUILDID_OBJ),$(MAIN_OBJS)) saturn.ld $(OVL_ROOTS) $(LIBDIR)/SEGA_SAT.A Makefile \
+                     tools/ovlpack.py
+	$(PYTHON) tools/ovlpack.py --buildid $@ $(filter-out tools/ovlpack.py,$^)
+$(BUILDID_OBJ): $(OBJDIR)/buildid.c
+	$(CC) $(CFLAGS) -c $< -o $@
+OVL_LINK = $(LD) -m2 -nostartfiles -nostdlib -T saturn_ovl.ld -Wl,--no-warn-rwx-segments -Wl,--gc-sections \
+           -Wl,--orphan-handling=error -Wl,--just-symbols=$(BUILD)/MAIN.elf
+$(BUILD)/%.OVL: $(BUILD)/MAIN.elf saturn_ovl.ld tools/ovlpack.py
+	$(OVL_LINK) -Wl,--defsym,OVL_BASE=0x0A000000 -Wl,-Map,$(@:.OVL=.map) $(filter %.o,$^) -o $(@:.OVL=_a.elf)
+	$(OVL_LINK) -Wl,--defsym,OVL_BASE=0x0B000000 $(filter %.o,$^) -o $(@:.OVL=_b.elf)
+	$(OBJCOPY) -O binary -j .image $(@:.OVL=_a.elf) $(@:.OVL=_a.bin)
+	$(OBJCOPY) -O binary -j .image $(@:.OVL=_b.elf) $(@:.OVL=_b.bin)
+	$(PYTHON) tools/ovlpack.py --pack $(NM) $@ $(@:.OVL=_a.elf) $(@:.OVL=_a.bin) $(@:.OVL=_b.bin) \
+	  $(BUILD)/MAIN.elf $(OVL_ROOTS) $(filter %.o,$^)
+$(BUILD)/PAUSE.OVL: $(PAUSE_OBJS)
+endif
+
 # --- sizes vs the original CPEs --------------------------------------------------------------
 size: $(ELFS)
 	@echo "program   text     data     bss      text+data  orig-span(CPE)  delta"
@@ -332,6 +381,7 @@ size: $(ELFS)
 	  printf '%-8s %8d %8d %8d %10d %15d %+7d\n' $$p $$t $$d $$b $$((t+d)) $$o $$((t+d-o)); \
 	done
 	@echo "(orig-span = 0x06004000..last CPE byte = text+data only, the original .bss started exactly at its end; compare text+data)"
+	@for f in $(OVL_FILES); do printf '%-8s %8d bytes on the disc (an overlay: 0 in MAIN)\n' $$(basename $$f) $$(stat -c %s $$f); done
 
 # --- bootable test ISO -----------------------------------------------------------------------
 #  The BIOS loads the FIRST file of the root directory at 0x06004000 (header 0xF0) and then runs
@@ -359,7 +409,8 @@ XORRISO  ?= xorrisofs
 PYTHON   ?= python
 CD_DATA  := $(filter-out $(CDDIR)/README% $(CDDIR)/readme% $(CDDIR)/.gitkeep,$(wildcard $(CDDIR)/*))
 
-# $(call mkiso,<output.iso>,<ip file>,<INIT file -> 0.BIN>,<MAIN file -> MAIN.BIN>)
+# $(call mkiso,<output.iso>,<ip file>,<INIT file -> 0.BIN>,<MAIN file -> MAIN.BIN>[,<overlays>])
+# GCC14: the overlays only with the MAIN they were built for (not with the retail bins)
 define mkiso
 	@test -f "$(2)" || { echo "ERROR: IP file not found at $(2) (set IPFILE=...)"; exit 1; }
 	@if [ -z "$(CD_DATA)" ]; then \
@@ -370,6 +421,7 @@ define mkiso
 	@if [ -n "$(CD_DATA)" ]; then cp -r $(CD_DATA) $(ISOSTAGE)/; fi
 	cp "$(3)" $(ISOSTAGE)/0.BIN
 	cp "$(4)" $(ISOSTAGE)/MAIN.BIN
+	$(if $(5),cp $(5) $(ISOSTAGE)/)
 	echo "NOT Abstracted by SEGA"      > $(BUILD)/ABS.TXT
 	echo "NOT Bibliographiced by SEGA" > $(BUILD)/BIB.TXT
 	: > $(BUILD)/CPY.TXT
@@ -431,10 +483,10 @@ cd_duke/TOMB.LEV: $(DUKE_LEV) $(wildcard cd/*)
 	 done
 	cp "$(DUKE_LEV)" $@
 	@echo "cd_duke/: $$(ls cd_duke | wc -l) fichiers (liens durs vers cd/) + notre TOMB.LEV"
-$(ISO): $(BUILD)/INIT.BIN $(BUILD)/MAIN.BIN $(CD_DATA) $(IPFILE)
-	$(call mkiso,$@,$(IPFILE),$(BUILD)/INIT.BIN,$(BUILD)/MAIN.BIN)
-$(ISOJ): $(BUILD)/INIT.BIN $(BUILD)/MAIN.BIN $(CD_DATA) $(IPJUMP)
-	$(call mkiso,$@,$(IPJUMP),$(BUILD)/INIT.BIN,$(BUILD)/MAIN.BIN)
+$(ISO): $(BUILD)/INIT.BIN $(BUILD)/MAIN.BIN $(OVL_FILES) $(CD_DATA) $(IPFILE)
+	$(call mkiso,$@,$(IPFILE),$(BUILD)/INIT.BIN,$(BUILD)/MAIN.BIN,$(OVL_FILES))
+$(ISOJ): $(BUILD)/INIT.BIN $(BUILD)/MAIN.BIN $(OVL_FILES) $(CD_DATA) $(IPJUMP)
+	$(call mkiso,$@,$(IPJUMP),$(BUILD)/INIT.BIN,$(BUILD)/MAIN.BIN,$(OVL_FILES))
 # --- bisection discs: the RETAIL binaries (`0` = INIT, `MAIN.BIN`, extracted from the PowerSlave
 #     disc into $(RETAIL_DIR), not distributed) on our ISO recipe.  Boots -> our recipe/IP/emulator
 #     are fine and the bug is in our build; stays black -> the disc side is at fault.
@@ -456,4 +508,4 @@ help:
 	@sed -n '2,17p' Makefile
 
 # auto dependencies (-MMD)
--include $(ALL_OBJS:.o=.d)
+-include $(ALL_OBJS:.o=.d) $(PAUSE_OBJS:.o=.d)

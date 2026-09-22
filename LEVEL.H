@@ -27,7 +27,11 @@ extern int level_nmObjects;
 extern int level_nmPushBlocks;
 extern int level_nmWaveVert;
 extern int level_nmVertex;
+#ifndef NDEBUG
+extern int level_nmObjectParams;       /* GCC14: bytes in level_objectParams (suckParams' bound) */
+#endif
 
 int loadLevel(int fd,int tileBase);
+int level_maySee(int s1,int s2);        /* GCC14: 0 when the reject table says never */
 
 #endif

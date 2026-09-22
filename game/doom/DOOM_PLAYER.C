@@ -203,7 +203,7 @@ void doom_playerInit(void)
 
 /* GCC14: X alone opens and closes the automap (AM_Responder, Tab).  On its RELEASE, and only if
    neither Y, Z nor L+R went down while it was held: every chord that holds X -- the mipmap
-   switch, the hole painter, the light tuner, the cheats -- holds one of them.  The request waits
+   switch, the hole painter, the cheats -- holds one of them.  The request waits
    for the next image (SRUINS.C CFG_MAP_TOGGLE), so an image is the map or the view, whole.
    Solo only: drawMap draws one map, on the whole screen. */
 static char amHeld,amChord,amToggle;
@@ -245,10 +245,6 @@ void doom_playerFrame(unsigned short input,unsigned short pushed)
 {assert(camera);
  if (mpCur==0)
     doom_lightImage();                  /* GCC14: a flash must be drawn once (DOOM_LIGHTS.C) */
- if (doom_lightTuner(input))            /* GCC14: the light tuner has the d-pad (DOOM_LIGHTS.C) */
-    {input|=LIGHT_TUNER_KEYS;           /* pad bits are active low: released */
-     pushed&=~LIGHT_TUNER_KEYS;
-    }
  doomPlayer.input=input;
  doomPlayer.pushed|=pushed;
  doomMapKey(input);                     /* GCC14: X alone, the automap */

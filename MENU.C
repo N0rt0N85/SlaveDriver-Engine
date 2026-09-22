@@ -18,6 +18,7 @@
 #include "weapon.h"
 #include "gamestat.h"
 #include "mplayer.h"
+#include "sprite.h"   /* GCC14: CFG_MENU_CURSOR */
 
 #define BUTTONBASECOLOR RGB(12,12,31)
 #define BUTTONHICOLOR RGB(25,25,31)
@@ -698,7 +699,8 @@ static void dlg_draw(int currentButton,int pressed)
 	    }
 	 case IT_WAVYBUTTON:
 	    {static Fixed32 waveCycle=0;
-	     if (i==currentButton)
+	     /* GCC14: a game may mark the chosen line with its own cursor (Doom's skull) */
+	     if (i==currentButton && !CFG_MENU_CURSOR(f(dlgItem[i].xp),f(dlgItem[i].yp)))
 		{int color=MTH_Sin(waveCycle)>>12;
 		 waveCycle+=F(8);
 		 if (waveCycle>F(180))

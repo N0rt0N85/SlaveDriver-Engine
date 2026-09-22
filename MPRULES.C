@@ -277,7 +277,7 @@ static void mpMenuLine(int r,int players,int level,char *text)
 static int mpGameMenu(int multi)
 {static Fixed32 wave;
  const char *title=multi? "MULTIPLAYER": "NEW GAME";
- int lo=multi? 2: 1,players,level,row,data,last,edge,r,d,y,k,color,shown,pitch;
+ int lo=multi? 2: 1,players,level,row,data,last,edge,r,d,y,k,color,shown,pitch,tight;
  char text[40];
  if (!multi)
     mpMode=MP_COOP;
@@ -308,13 +308,16 @@ static int mpGameMenu(int multi)
 	wave-=F(360);
      for (r=0,shown=0;r<MR_NM;r++)
 	shown+=mpRowShown(r,players,multi);
-     pitch=(shown>11)? 16: 18;  /* the boss battle, 4 players: 12 lines */
-     for (r=0,y=multi? -84: -40;r<MR_NM;r++)
+     /* GCC14: from CFG_MP_TIGHT_LINES lines on (SPRITE.H), closer and higher, so BACK stays on
+	the screen: PowerSlave's 240 lines fit 11 at 18, Doom's 224 fit 10 */
+     tight=(shown>=CFG_MP_TIGHT_LINES);
+     pitch=tight? 16: 18;
+     for (r=0,y=multi? (tight? CFG_MP_TIGHT_Y: -84): -40;r<MR_NM;r++)
 	{if (!mpRowShown(r,players,multi))
 	    continue;
 	 mpMenuLine(r,players,level,text);
 	 if (r==MR_START)
-	    y+=6;
+	    y+=tight? CFG_MP_TIGHT_GAP: 6;
 	 if (r==row)
 	    drawStringGouro(-getStringWidth(2,(unsigned char *)text)/2,y,2,
 			    greyTable[16+color],greyTable[16-color],(unsigned char *)text);

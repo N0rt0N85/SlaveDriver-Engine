@@ -90,8 +90,8 @@ def static_sound_block(wad: Wad) -> bytes           # int 8, 8 shorts, int 20, 2
 
 | # | bloc | contenu | source |
 |---|---|---|---|
-| 1 | écran de chargement | 256 × u16 BGR555 (bit 15) + `int 320` + `int 240` + 76 800 index ; TITLEPIC 320×200 décodé en patch (`wad.patch`), centré (bande 20 lignes d'index 0 haut/bas) ; `--loading black` = tout 0 | SRUINS.C:1098-1120 |
-| 2 | feuille VDP2 | 262 144 octets 8 bpp 512×512 → VRAM+0x40000, NBG0 bitmap 256 couleurs ; **zéros, définitivement** : cette feuille ne sert qu'à `displayVDP2Pic` (chunks d'armes TILEVDP, SEQUENCE.C:270-290), pas aux chars VDP1 du HUD — l'habillage Doom est un tableau C (§3bis) | SRUINS.C:1080-1096 |
+| 1 | ~~écran de chargement~~ | **remplacé (étape 3, 2026-09-22)** : le bloc logo de DTITLE.DAT, 9 520 o — voir DOOM_ABI §5, qui fait foi | `wad2title.logo_block` |
+| — | ~~feuille VDP2~~ | **plus écrite (étape 3)** : Doom ne lisait que 262 144 zéros ; voir DOOM_ABI §5 | — |
 | 3 | sons statiques | §2 (20 sons, 177 314 o) | SOUND.C:231-241 |
 | 4 | tuiles d'armes | `int n` + n × (`short 0x6A, short palNm=0, short size, RLE`) ; ordre = lumps du WAD, patch par patch, chunks `(c, r)` ligne par ligne ; **par défaut les 10 familles** PISG PISF SHTG SHTF PUNG CHGG CHGF MISG MISF SAWG ⇒ **n = 95** (130 063 o ; ABI §5) ; `--e1m1-weapons` = 5 familles, n = 48 (E1) | PIC.C:671-700, 709-711 |
 | 5 | séquences d'armes | `int size` + `seqHeader` + frames + chunks + `nmSequences` shorts, **sans carte** ; `wseq(state) = state − 1` pour `S_LIGHTDONE (1) … S_BFGFLASH2 (89)` `[core] info.h:174-262` ; une frame par état (chunks du lump `sprite+frame`, `chunkx = −lo + 64c`, `chunky = −to + 64r`, `flags 0`, `sound −1`) ; états des armes absentes du WAD (plasma, BFG) vides ; + entrée terminale ; `wSequence[0] == 0` | SEQUENCE.C:92-132 ; STATIC.C:547-549 |
@@ -103,14 +103,13 @@ dont les lumps existent, 89 terminale ; l'`overlay` dès la séquence 50 (SEQUEN
 `(126, 106)`, écran `x = 0 + cx(1) + 126 = 127` = Doom `160 + sx − lo`.
 
 ```python
-def loading_screen(wad: Wad, lump: str | None = "TITLEPIC") -> bytes    # 77 320 o
-def vdp2_sheet() -> bytes                                                # 262 144 o de zéros
+# (étape 3) loading_screen et vdp2_sheet n'existent plus : bloc 1 = wad2title.logo_block (DOOM_ABI §5)
 def weapon_tiles(wad: Wad, ids: dict, families: list[str], remap) -> tuple[list[dict], dict[str, list[Chunk]]]
 def weapon_sequences(ids: dict, chunks_by_lump: dict) -> tuple[list[dict], list[dict], list[int]]  # frames, chunks, sequence
 def write_static(path: str, wad: Wad, ids: dict, *, loading: str, weapons: list[str]) -> dict    # tailles par bloc, tileBase
 ```
 
-Taille attendue `[wad]` : 77 320 + 262 144 + 177 314 + (4 + 95×6 + 130 063) + ≈ 2 000 ≈ **649 Ko** (48 armes : ≈ 578 Ko).
+~~Taille attendue `[wad]` : 77 320 + 262 144 + 177 314 + (4 + 95×6 + 130 063) + ≈ 2 000 ≈ **649 Ko** (48 armes : ≈ 578 Ko).~~ Depuis l'étape 3 : 9 520 + 177 314 + 132 165 + 2 028 = **321 027 o** (DOOM_ABI §5).
 
 ### 3bis. `wad2hud.py` (+ `wad2font.py`) — art HUD en tableau C, `build/doom/doom_art.h`
 
@@ -251,7 +250,7 @@ tests suivants ajoutés (tous « relire le fichier, rejouer le moteur à la lign
 | barils | distance de chaque BAR1 aux murs de sa feuille ≥ 21 + 16 (sphère rayon = height/2, SPEC_RUNTIME §2 : un baril de 21 u dans un couloir de 64 u n'est plus contournable) — sinon avertissement | 6 barils |
 | tailles | bloc niveau < 900 000 (LEVEL.C:41), séquences < 1 Mo ; **somme résidente** niveau + palettes + tuiles + séquences (E1M1 ≈ 233 978 + 12 290 + ~580 Ko + 204 Ko + 5 816 ≈ 1,04 Mo) **≤ pool réel** = LWRAM 1 Mo (0x200000-0x300000) + (0x06100000 − `_end`) lu dans `build/ndebug/stext/doom/MAIN.map`, celui du disque de test, le plus gros qu'on grave (sans ce map, la conversion s'arrête ; le build ASSERT, ~12 Ko plus gros, perd la marge de la sauvegarde ; UTIL.C:352-359) − marge de croissance de MAIN.BIN (plan §4.2, 80-100 Ko) — pas la constante `DEMANDE_MAX` d'`assemble.py:45` | — |
 
-`verif_static.py` (nouveau) : 5 blocs dans l'ordre, `320/240`, 262 144 o de zéros, `int 8`, `int 20`, tuiles 0x6A
+`verif_static.py` (nouveau) : 4 blocs dans l'ordre (étape 3 : bloc logo `DLG1` = celui de DTITLE.DAT, plus de feuille VDP2 ; DOOM_ABI §5), `int 8`, `int 20`, tuiles 0x6A
 décodables (RLE → 4 096), `n == 95` (ou 48), `wSequence[0] == 0`, 90 entrées, `size` exact. `tools/lev.py --stats`
 (`:259-300`) reste l'inventaire (`distinct_tiles`, `tile_kinds`) ; `lev_io.diff == []` et `L.validate == []`
 obligatoires.

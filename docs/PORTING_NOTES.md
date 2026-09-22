@@ -280,3 +280,57 @@ off the window by an exact test, the largest share of the fit that does being ke
 a corner further than its anchor (squeezed, not stretched), and a mesh corner behind the plane —
 the face where it has two neighbours in view cannot follow, and the two would part. No command
 added; a corner in front of the plane only comes in, so the VDP1 walks less off the screen there.
+
+## Overlays — menu code on the disc, not in MAIN
+
+A program here is one flat image (`saturn.ld`), and Doom's wall tiles get only the memory MAIN
+leaves (the converter reads `_end` from `MAIN.map`): every byte of menu code costs every level.
+An **overlay** is code that waits on the disc instead. Doom's pause is the first one
+(`PAUSE.OVL`, `game/doom/ovl/`); its resident half is `game/doom/DOOM_PAUSE.C`.
+
+- **Loader**: `OVL.C` `ovl_run(file, where, entry, arg)` reads the file (`cdMark`/`cdResume`
+  around the read, as the inventory did), checks it, relocates it, clears its BSS over the spent
+  relocation table, purges the cache and calls entry `k` as `int (*)(int arg, char *freeBase,
+  char *freeEnd)`: `[freeBase, freeEnd)` is what the buffer has left after image and BSS.
+  `OVL_SCRATCH` runs it in `doorwayCache` (the renderer's scratch for one image, idle once
+  `wallsPipeDiscard` has joined the slave); `OVL_POOL` takes the top of the level pool instead
+  (`mem_nocheck_malloc`, given back on return) — the title's way in, where `doorwayCache` holds
+  the fire and the pool holds little.
+  Refusals return `OVL_MISSING`, `OVL_STALE` (another MAIN's file) or `OVL_NOROOM`.
+- **Build** (`Makefile`, Doom branch): the overlay's objects (MAIN's flags, `-Os`) ->
+  `tools/ovlpack.py --roots` lists every symbol they use as `-Wl,-u,SYM` for MAIN's link, so
+  `--gc-sections` keeps it, and a library symbol lands in MAIN, never in the overlay (which links
+  no library: a private copy of a library's state would silently diverge) -> `--buildid`: a CRC
+  over MAIN's objects, `saturn.ld`, the roots, `SEGA_SAT.A` and the `Makefile` (link flags, link
+  order) becomes `ovlBuildId` in MAIN -> the overlay is linked twice with `saturn_ovl.ld` at 0x0A000000 and 0x0B000000 against
+  `--just-symbols=MAIN.elf` and `--orphan-handling=error` (a section no rule of the script places
+  would fall outside the image `objcopy` keeps); `--pack` diffs the two images: every difference must be a 4-aligned
+  32-bit word differing by exactly 0x01000000, and those words are the relocation table (a
+  16-bit absolute or a relaxed call fails the build), and each must point into the image or its
+  BSS -> `mkiso` copies the file next to
+  `MAIN.BIN`, from the same make, so a disc cannot pair a MAIN with another MAIN's overlay.
+  `tools/ovlpack.py --verify FILE MAIN.elf` says what the loader will say of a file (magic,
+  build id, entries, file length). `--pack` also refuses a root that stayed **undefined** in
+  MAIN (neither MAIN nor a library defines it, and `ld -u` does not fail on that): its most
+  likely cause is a tentative definition (`int x;`) in the overlay, which is a COMMON and looks
+  for MAIN's datum — write `int x=0;` in the overlay instead.
+- **The contract** (an overlay in `doorwayCache`):
+  1. nothing renders until it returns: no `drawWalls*`, no slave kick, no `SCL_DisplayFrame`
+     (the frozen image would be lost), no VDP1 command (`EZ_*`), no `dlg_*` / `loadOverBase`
+     (they decompress into `doorwayCache`), no `teleportEffect`, no `pic_nextFrame`. `--roots`
+     refuses a link that references one of them (the deny list; direct references only).
+     An object that runs **only at the title** (`OVL_POOL`, where the renderer's memory is not
+     the overlay's) may draw: the `Makefile`'s `OVL_TITLE` list goes to `--roots` after `--title`
+     and is left out of the deny check, and only the object holding `ovlEntries` may name its
+     symbols, so the frozen pages cannot reach it (`game/doom/ovl/ENTRIES.C`,
+     `game/doom/ovl/TUNER_TITLE.C`);
+  2. it never tears the level down: it returns an action (`PAUSE_QUIT` ...) and the game acts
+     on it after the return (`SRUINS.C`, `CFG_PAUSE_MENU` / `CFG_QUIT_ACTION`);
+  3. no hook (`vblankUserHook`, `progressHook`, `linkHook`) may point into it after it returns
+     (a debug STATUSTEXT build checks, clears it and says `OVERLAY LEFT A HOOK`);
+  4. **COMMON**: a tentative definition (`int x;` in a header) of a symbol MAIN has resolves to
+     MAIN's; one MAIN lacks would be allocated in the overlay's own BSS, silently. `--pack`
+     refuses it.
+- **Adding an entry**: a function `int f(int, char *, char *)` in the overlay, appended to its
+  `ovlEntries[]` (the first bytes of the image, `KEEP`), and its index in the game's header
+  (`game/doom/DOOM_OVL.H`).

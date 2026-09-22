@@ -256,10 +256,10 @@ def main(argv=None):
     p = L["objectParams"]
     put("joueur OT_PLAYER en tete", bool(obj) and obj[0]["type"] == 13, str(obj[:1]))
     nmobj = sum(1 for o in obj if o["type"] not in sp.OT_SPECIAL_TYPES) - 1
-    put("firstParam cumules == nmObjectParams", sp.expected_param_bytes(obj) == len(p)
+    put("firstParam cumules == nmObjectParams", sp.expected_param_bytes(obj, p) == len(p)
         and all(obj[i + 1]["firstParam"] > obj[i]["firstParam"] for i in range(len(obj) - 1)),
         f"{len(obj)} objets (1 joueur + {nmobj} mobjs + {len(obj) - 1 - nmobj} speciaux), "
-        f"{sp.expected_param_bytes(obj)} o attendus, {len(p)} o")
+        f"{sp.expected_param_bytes(obj, p)} o attendus, {len(p)} o")
     chk = t2o.check_objects(obj, p, S, W, V)
     put("objets dans leur secteur (pointInSectorP)", not chk["hors_secteur"],
         f"{chk['n']} positionnes, {len(chk['hors_secteur'])} hors secteur {chk['hors_secteur'][:3]}")
@@ -1002,7 +1002,7 @@ def main(argv=None):
         elif o["type"] == sp.OT_DOOM_LIGHT:
             ecoute[_sh(o, 3)[1]] += 1
         elif o["type"] == sp.OT_DOOM_LAMP:
-            ecoute[_sh(o, 11)[4]] += 1           # -1 = allumee au chargement, hors du compte
+            ecoute[_sh(o, 12 + sp.LAMPE_VUS_MAX)[4]] += 1   # -1 = allumee au chargement, hors du compte
         elif o["type"] in (sp.OT_DOOM_EXIT, sp.OT_DOOM_SECRETEXIT):
             ecoute[_sh(o, 1)[0]] += 1
     boss = {t_ for t_, _g in sp.BOSS_TAGS.get((a.map or "").upper(), ())}
@@ -1036,16 +1036,20 @@ def main(argv=None):
             all(0 <= l_[0] < len(S) and 0 <= l_[2] <= 16 for l_ in lig),
             f"{len(lig)} feuilles, canaux {sorted({l_[1] for l_ in lig})}, "
             f"lumieres {sorted({l_[2] for l_ in lig})}")
-    # lampes (doom_specials.LAMPES) : les bornes que DOOM_GAME.C asserte, et la hauteur au-dessus
-    # du sol de sa feuille
-    lam = [_sh(o, 11) for o in obj if o["type"] == sp.OT_DOOM_LAMP]
+    # lampes (doom_specials.LAMPES) : les bornes que DOOM_GAME.C asserte, la hauteur au-dessus du
+    # sol de sa feuille, et ses feuilles vues : n <= LAMPE_VUS_MAX dans les bornes, -1 ensuite
+    nv = sp.LAMPE_VUS_MAX
+    lam = [_sh(o, 12 + nv) for o in obj if o["type"] == sp.OT_DOOM_LAMP]
     if lam:
         put("OT_DOOM_LAMP : feuille dans les bornes, au-dessus de son sol, teinte 0..16, "
-            "rayon 16..1024, intensite 1..31, montee >= 0",
+            "rayon 16..1024, intensite 1..31, montee >= 0, feuilles vues dans les bornes",
             all(0 <= l_[0] < len(S) and l_[2] > S[l_[0]]["floorLevel"]
                 and all(0 <= k_ <= 16 for k_ in l_[5:8]) and 16 <= l_[8] <= 1024
-                and 1 <= l_[9] <= 31 and l_[10] >= 0 for l_ in lam),
-            f"{len(lam)} lampes, feuilles {[l_[0] for l_ in lam]}, canaux {[l_[4] for l_ in lam]}")
+                and 1 <= l_[9] <= 31 and l_[10] >= 0 and 0 <= l_[11] <= nv
+                and all(0 <= v_ < len(S) for v_ in l_[12:12 + l_[11]])
+                and all(v_ == -1 for v_ in l_[12 + l_[11]:]) for l_ in lam),
+            f"{len(lam)} lampes, feuilles {[l_[0] for l_ in lam]}, canaux {[l_[4] for l_ in lam]}, "
+            f"vues {[list(l_[12:12 + l_[11]]) for l_ in lam]}")
 
     # 17-21. CONTRAT « Verifications PC » (DOOM_ABI, SPEC_CONVERTER 7) : tuiles, sequences
     #        atteignables, sons, barils, tailles. Tout est relu dans le FICHIER par lev_io (le

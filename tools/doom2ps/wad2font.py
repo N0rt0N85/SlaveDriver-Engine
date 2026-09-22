@@ -102,8 +102,18 @@ def read_glyph(wad, lump):
 
 
 # ----------------------------------------------------------------------------- police
-def font_table(wad, glyphs, playpal=None):
-    """glyphs : {code: lump} -> (bytes au format PRINT.C:51-80, info). `playpal` : PLAYPAL[0]."""
+def font_table(wad, glyphs, playpal=None, scale=1, space=None, xscale=None):
+    """glyphs : {code: lump} -> (bytes au format PRINT.C:51-80, info). `playpal` : PLAYPAL[0].
+    `scale` 2 : chaque pixel double en x et en y (hauteur et largeurs x2, meme CLUT) -- la grande
+    police de l'ecran titre (DTITLE.DAT, wad2title.py). `xscale` (defaut = `scale`) : l'echelle en x
+    seule, 1, 1.5 ou 2 ; 1.5 double une colonne sur deux (les paires), largeur = (3w + 1) // 2 -- un
+    trait de 2 px en fait toujours 3. `space` : ajoute le code 32 (espace), de
+    cette largeur en pixels FINAUX, tout transparent : STCFN n'en a pas, et drawString saute sans
+    avancer un code de largeur 0 ("NEW GAME" s'ecrirait "NEWGAME"). Defauts = polices du HUD
+    (doom_art.h), octet pour octet."""
+    if xscale is None:
+        xscale = scale
+    assert scale in (1, 2) and xscale in (1, 1.5, 2), (scale, xscale)
     if playpal is None:
         playpal = wad.playpal(0)
     patches = {c: read_glyph(wad, l) for c, l in glyphs.items()}
@@ -116,16 +126,13 @@ def font_table(wad, glyphs, playpal=None):
     clut_index = {idx: k + 1 for k, idx in enumerate(kept)}        # 1..15
     clut = [0] + [bgr555(playpal[i]) for i in kept]
     clut += [0] * (CLUT_ENTRIES - len(clut))
-    widths = [0] * 256
-    data = bytearray()
+    rows_of = {}                                                   # code -> lignes d'indices CLUT
     for code in sorted(patches):
         p = patches[code]
         assert p.lo <= 0, "code %d : leftoffset %d > 0 non representable" % (code, p.lo)
         pad = -p.lo
-        widths[code] = p.w + pad
-        assert 0 < widths[code] <= MAX_WIDTH
-        assert height * (((widths[code] + 7) & ~7) >> 1) <= FONT_BUFFER
         y0 = -p.to + max_to
+        rows = []
         for y in range(height):
             j = y - y0
             row = [0] * pad
@@ -134,12 +141,30 @@ def font_table(wad, glyphs, playpal=None):
                 if 0 <= j < p.h and p.msk[j * p.w + x]:
                     v = clut_index[remap[p.pix[j * p.w + x]]]
                 row.append(v)
+            rows.append(row)
+        rows_of[code] = rows
+    if scale != 1 or xscale != 1:
+        rep = lambda x: 2 if xscale == 2 or (xscale == 1.5 and not x & 1) else 1   # noqa: E731
+        rows_of = {c: [[v for x, v in enumerate(r) for _ in range(rep(x))] for r in rows for _ in range(scale)]
+                   for c, rows in rows_of.items()}
+        height *= scale
+    if space is not None:
+        assert 0 < space <= MAX_WIDTH and 32 not in rows_of, space
+        rows_of[32] = [[0] * space for _ in range(height)]
+    widths = [0] * 256
+    data = bytearray()
+    for code in sorted(rows_of):
+        rows = rows_of[code]
+        widths[code] = len(rows[0])
+        assert 0 < widths[code] <= MAX_WIDTH
+        assert height * (((widths[code] + 7) & ~7) >> 1) <= FONT_BUFFER
+        for row in rows:
             if len(row) & 1:
-                row.append(0)
+                row = row + [0]
             for x in range(0, len(row), 2):
                 data.append((row[x] << 4) | row[x + 1])
     out = struct.pack(">h", height) + struct.pack(">16H", *clut) + bytes(widths) + bytes(data)
-    info = dict(height=height, glyphs=len(patches), colors_in=len(counts), colors=len(kept),
+    info = dict(height=height, glyphs=len(rows_of), colors_in=len(counts), colors=len(kept),
                 merged={k: v for k, v in remap.items() if k != v}, bytes=len(out))
     return out, info
 

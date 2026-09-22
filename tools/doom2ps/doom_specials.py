@@ -221,7 +221,11 @@ TELEPORT = {39: TELE_ONCE, 97: 0}
 #   canal      -1 = allumee au chargement ; un tag = allumee quand il sonne, et pour de bon ;
 #   teinte     k 0..16 par canal, `rayon` en u, `intensite` 0..31 au centre (addLightEx, WALLS.C) ;
 #   montee     tics jusqu'a l'intensite pleine une fois allumee (0 = d'un coup).
-# 11 params : feuille, x, hauteur, y, canal, r, g, b, rayon, intensite, montee (DOOM_GAME.C).
+# 20 params : feuille, x, hauteur, y, canal, r, g, b, rayon, intensite, montee (DOOM_GAME.C), puis
+# le nombre de feuilles VUES et ces feuilles (LAMPE_VUS_MAX, -1 au-dela) : une par secteur que la
+# lampe eclaire (secteurs_eclaires). Le moteur eteint la lampe quand aucun joueur ne peut voir
+# aucune d'elles (REJECT) -- quelle que soit la direction du regard : un test a l'image la
+# rallumerait 1 a 2 images trop tard quand on se retourne (updateLights, en fin de drawWalls).
 # E1M3 -- la salle de la clef bleue : prendre la clef franchit les lignes 1017-1019 (35, tag 13 ->
 # secteurs 26, 27 et 28 a 35, soit light_of 0 : le noir) puis 733-735 (2, tag 11 -> la porte 30
 # s'ouvre sur le placard aux imps, secteur 29 : lumiere 160 -> 14, plafond TLITE6_5 rouge). Le
@@ -230,14 +234,29 @@ TELEPORT = {39: TELE_ONCE, 97: 0}
 # PORTE et montant avec elle : 172 - 97 = 75 u a 2 u/tic, 38 tics. Pas avant : une lumiere du
 # moteur traverse les murs (buildLightList ne teste que le plan du mur), elle peindrait le sol
 # devant une porte encore fermee, dans une salle a 14 qu'elle pousserait vers 31. Teinte : un
-# jaune chaud (le rouge du plafond TLITE6_5, eclairci en 16, 9, 7, sortait trop rouge a l'ecran).
+# orange a mi-teinte (30 degres) entre 16, 9, 7 -- le rouge du plafond TLITE6_5, trop rouge a
+# l'ecran -- et 16, 14, 6, trop jaune (Ymir, 2026-09-22).
 # MESURE (build/doom2ps/e1m3_geom3d.json, lightApply rejoue) : au sol devant la porte +20 en rouge,
 # +13 a 76 u de la lampe, +7 a 108 u, +2 a 140 u ; ce qui passe les murs (le moteur n'occulte rien) :
 # +11 au sol derriere le mur est du placard (feuille 69, la meme salle, noire), +5 au bord est de la
 # salle 25 (a 120 u, derriere le mur ouest), +1 dans le couloir 26.
 OT_DOOM_LAMP = 186
+# ENREGISTREMENTS DE LONGUEUR VARIABLE (un par carte au plus, emis en DERNIER : effets puis lampes).
+# Regle unique : leur 1er short est leur propre longueur en shorts, en-tete compris (nShorts) ;
+# le moteur les lit en place (OBJECT.C suckParams), verif les relit sans extras.
+OT_DOOM_SECTORFX = 187           # animations de lumiere des secteurs (p_lights.c) -- pas encore emis
+OT_DOOM_LAMPS = 188              # lampes v2, un gestionnaire par carte -- pas encore emis
+OT_LONGUEUR_VARIABLE = (OT_DOOM_SECTORFX, OT_DOOM_LAMPS)
+FX_FLASH, FX_STROBE, FX_GLOW, FX_FLICKER = 1, 2, 3, 4
+FX_SYNC = 0x80                   # strobe des speciaux 12/13 : premier compte 1 (P_SpawnStrobeFlash)
+FASTDARK, SLOWDARK = 15, 35
+# special de secteur Doom -> (genre | FX_SYNC, temps sombre du strobe) ; P_SpawnSpecials
+SECTOR_FX = {1: (FX_FLASH, 0), 2: (FX_STROBE, FASTDARK), 3: (FX_STROBE, SLOWDARK),
+             4: (FX_STROBE, FASTDARK), 8: (FX_GLOW, 0), 12: (FX_STROBE | FX_SYNC, SLOWDARK),
+             13: (FX_STROBE | FX_SYNC, FASTDARK), 17: (FX_FLICKER, 0)}
+LAMPE_VUS_MAX = 8                 # DOOM_GAME.C DoomLampObject.seen
 LAMPES = {
-    "E1M3": [dict(x=-264, y=-628, hauteur=136, secteur=29, canal=11, teinte=(16, 14, 6),
+    "E1M3": [dict(x=-264, y=-628, hauteur=136, secteur=29, canal=11, teinte=(16, 11, 6),
                   rayon=176, intensite=24, montee=38)],
 }
 
@@ -247,7 +266,7 @@ OT_SPECIAL_TYPES = frozenset((OT_NORMALDOOR, OT_NORMALELEVATOR, OT_STUCKDOWNELEV
                               OT_DOOM_EXIT, OT_DOOM_SECRETEXIT, OT_DOOM_LIGHT, OT_DOOM_DAMAGE,
                               OT_DOOM_SECRETWALL, OT_DOOM_TELEPORT, OT_DOOM_FLOOR,
                               OT_DOOM_DOOR, OT_DOOM_LIFT, OT_DOOM_WLINE,
-                              OT_DOOM_LAMP)) | frozenset(OT_SWITCH_TYPES)
+                              OT_DOOM_LAMP, OT_DOOM_SECTORFX, OT_DOOM_LAMPS)) | frozenset(OT_SWITCH_TYPES)
 
 Specials = namedtuple("Specials", "doors lifts floors raises teleports wswitch sswitch exits damage ignored")
 
@@ -575,6 +594,16 @@ def specials_of(M):
     return Specials(doors, lifts, floors, raises, teleports, wsw, ssw, exits, damage, dict(ignored))
 
 
+def secteurs_animes(M, specials):
+    """Secteurs Doom dont la lumiere change en jeu : un special de SECTOR_FX (p_lights.c), ou la
+    cible d'une ligne de lumiere (LIGHT_LINES, secteurs du tag). Le moteur y reecrit la lumiere
+    des feuilles : rien ne doit y etre cuit. -> frozenset d'index de secteurs Doom."""
+    out = {si for si, s in enumerate(M["sectors"]) if s.special in SECTOR_FX}
+    tags = {w["channel"] for w in specials.wswitch if w["special"] in LIGHT_LINES}
+    out.update(si for si, s in enumerate(M["sectors"]) if s.tag and s.tag in tags)
+    return frozenset(out)
+
+
 def mobile_sectors(sp):
     """{secteur Doom: dict du spécial} pour tout ce qui bouge (portes, ascenseurs, sols)."""
     out = {}
@@ -587,6 +616,49 @@ def mobile_sectors(sp):
 def leaves_of_sector(conv, sector):
     """Feuilles gardées (index .LEV) du secteur Doom `sector`."""
     return [conv.remap[li] for li in conv.keep if conv.leaf_sector[li] == sector]
+
+
+def secteurs_eclaires(M, x, y, rayon, pas=16):
+    """Secteurs Doom qu'une lampe en (x, y) eclaire : ceux dont un point de bord, dans le rayon, se
+    voit depuis elle en plan. Seuls les murs pleins (lignes a une face) arretent le regard ; une
+    ouverture laisse passer quelle que soit sa hauteur, une porte compte ouverte. On surestime donc,
+    jamais l'inverse : le moteur eteint la lampe quand aucun joueur ne peut voir un de ces secteurs
+    (REJECT, DOOM_GAME.C doomLampSeen) -- en oublier un l'eteindrait sous les yeux du joueur.
+    Un point est pris tous les `pas` u sur chaque ligne, a 1 u de son cote."""
+    V, L, SD = M["vertices"], M["linedefs"], M["sidedefs"]
+
+    def pres(p, q):                   # la boite du segment pq, elargie du rayon, contient la lampe
+        return (min(p[0], q[0]) - rayon <= x <= max(p[0], q[0]) + rayon
+                and min(p[1], q[1]) - rayon <= y <= max(p[1], q[1]) + rayon)
+
+    def orient(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    def coupe(p, q, a, b):            # pq et ab se croisent strictement
+        d1, d2, d3, d4 = orient(a, b, p), orient(a, b, q), orient(p, q, a), orient(p, q, b)
+        return d1 * d2 < 0 and d3 * d4 < 0
+
+    pleins = [(V[ld.v1], V[ld.v2]) for ld in L
+              if not 0 <= ld.left < len(SD) and pres(V[ld.v1], V[ld.v2])]
+    lampe, r2, vus = (x, y), rayon * rayon, set()
+    for ld in L:
+        p, q = V[ld.v1], V[ld.v2]
+        dx, dy = q[0] - p[0], q[1] - p[1]
+        n = math.hypot(dx, dy)
+        if n == 0 or not pres(p, q):
+            continue
+        nx, ny = dy / n, -dx / n          # normale vers le cote droit de v1 -> v2
+        k = max(1, int(n // pas))
+        for sd, sens in ((ld.right, 1.0), (ld.left, -1.0)):
+            if not 0 <= sd < len(SD) or SD[sd].sector in vus:
+                continue
+            for i in range(k + 1):
+                pt = (p[0] + dx * i / k + sens * nx, p[1] + dy * i / k + sens * ny)
+                if ((pt[0] - x) ** 2 + (pt[1] - y) ** 2 <= r2
+                        and not any(coupe(lampe, pt, a, b) for a, b in pleins)):
+                    vus.add(SD[sd].sector)
+                    break
+    return vus
 
 
 def leaves_on_line(conv, line):
@@ -829,7 +901,9 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
     # murs secrets : un par mur DOORWALL d'une ligne ML_SECRET
     for w in sorted(int(x) for x in (secret_walls or ())):
         emit(OT_DOOM_SECRETWALL, w, kind="secretwall")
-    # lampes de la carte (LAMPES) : la feuille qui contient (x, y), du secteur annonce
+    # lampes de la carte (LAMPES) : la feuille qui contient (x, y), du secteur annonce, et une
+    # feuille par secteur qu'elle eclaire, la sienne d'abord ; au-dela de LAMPE_VUS_MAX, aucune :
+    # la lampe reste alors candidate partout, comme sans le test
     for lp in LAMPES.get(M.get("name"), ()):
         lf = conv.leaf_at(lp["x"], lp["y"])
         si = conv.leaf_sector[lf] if lf in conv.remap else None
@@ -840,16 +914,38 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
         if not sec.floorh < lp["hauteur"] < sec.ceilh:
             raise SystemExit("lampe de %s : hauteur %d hors du secteur %d (sol %d, plafond %d)"
                              % (M.get("name"), lp["hauteur"], si, sec.floorh, sec.ceilh))
+        vus = [conv.remap[lf]]
+        for s in sorted(secteurs_eclaires(M, lp["x"], lp["y"], lp["rayon"]) - {si}):
+            fs = leaves_of_sector(conv, s)
+            if fs:
+                vus.append(fs[0])
+        if len(vus) > LAMPE_VUS_MAX:
+            notes["lampe sans test de vue (%d secteurs eclaires)" % len(vus)] += 1
+            vus = []
         emit(OT_DOOM_LAMP, conv.remap[lf], lp["x"], lp["hauteur"], lp["y"], lp["canal"],
              *lp["teinte"], lp["rayon"], lp["intensite"], lp["montee"],
-             sector_doom=si, kind="lamp")
+             len(vus), *(vus + [-1] * (LAMPE_VUS_MAX - len(vus))),
+             sector_doom=si, kind="lamp", vus=vus)
     return objects, params, dict(notes)
 
 
-def expected_param_bytes(objects):
+def longueur_variable(o, params=None):
+    """nShorts d'un enregistrement OT_LONGUEUR_VARIABLE : `o["nshorts"]` cote convertisseur (l'objet
+    porte ses extras), sinon son 1er short relu dans `params` a `o["firstParam"]` (verif relit le
+    .LEV, dont les objets n'ont pas d'extras)."""
+    if "nshorts" in o:
+        return o["nshorts"]
+    if params is None or "firstParam" not in o:
+        raise ValueError("objet %d de longueur variable sans nshorts ni params" % o["type"])
+    fp = o["firstParam"]
+    return int.from_bytes(bytes(params[fp:fp + 2]), "big", signed=True)
+
+
+def expected_param_bytes(objects, params=None):
     """Σ des params attendus par type (DOOM_ABI « Vérifications PC ») : 5 joueur, 6 mobj, 6 porte
     Doom (3 porte du moteur), 4 ascenseur, 2 sector-switch, 5 interrupteur, 1 sortie, 2 dégâts,
-    8 teleporteur, 6 sol -- en octets."""
+    8 teleporteur, 6 sol, nShorts pour les enregistrements de longueur variable (187/188 :
+    `longueur_variable`, d'ou `params` cote verif) -- en octets."""
     n = 0
     for o in objects:
         t = o["type"]
@@ -879,8 +975,11 @@ def expected_param_bytes(objects):
             n += 2
         elif t == OT_DOOM_LIGHT:
             n += 3                      # feuille, canal, lumiere
+        elif t in OT_LONGUEUR_VARIABLE:
+            n += longueur_variable(o, params)
         elif t == OT_DOOM_LAMP:
-            n += 11                     # feuille, x, hauteur, y, canal, r, g, b, rayon, intensite, montee
+            n += 11 + 1 + LAMPE_VUS_MAX  # feuille, x, hauteur, y, canal, r, g, b, rayon, intensite,
+                                        # montee ; nombre de feuilles vues, les feuilles
         else:
             n += 6                      # mobj Doom : sector, x, y, z, angle, flags
     return 2 * n

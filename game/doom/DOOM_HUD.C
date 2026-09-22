@@ -289,7 +289,6 @@ static const char *const doomMapTitles[DOOM_NMLEVELS]=
 /* SRUINS.C:2211 (CFG_DRAW_MESSAGE): HUlib_drawTextLine at (HU_MSGX 0, HU_MSGY 0) = screen (0, 0) */
 void doom_drawMessage(void)
 {int l=currentState.currentLevel;
- doom_lightTunerDraw();                 /* GCC14: the light tuner's lines, under the message */
  if (mapOn && l>=0 && l<DOOM_NMLEVELS && doomMapTitles[l])
     doomHudText(-160,CFG_YMAX-8,doomMapTitles[l]);
  if (!doomMessageOn)

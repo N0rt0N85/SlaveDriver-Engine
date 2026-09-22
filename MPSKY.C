@@ -37,8 +37,9 @@
    The moon (mpSkyMoon) is two fans of VDP1 triangles per view, not a character: the level's
    tiles leave no room in the VDP1's character VRAM (PIC.C initPicSystem takes what is left).
 
-   Only when the level loaded no VDP2 picture: B0-B1 then hold nothing (Doom's STATIC.DAT
-   sheet is zeros); a solo level load takes everything back (mpSkyOff, then setVDP2/initPlax). */
+   Only when the level loaded no VDP2 picture: B0-B1 then hold only what nobody shows
+   (Doom: the loading screen's logo and fire, left there by doom_loadingEnd), so everything this
+   sky displays is written here -- maps cleared in full, blank cells; a solo level load takes everything back (mpSkyOff, then setVDP2/initPlax). */
 #include <stdlib.h>
 #include <sega_scl.h>
 #include <sega_mth.h>
@@ -69,6 +70,8 @@ int mpSkyOn;
 #define VW(o)        ((volatile Uint16 *)(SCL_VDP2_VRAM+(o)))
 #define VL(o)        ((volatile Uint32 *)(SCL_VDP2_VRAM+(o)))
 #define CHARNM(base,k) (((base)>>5)+((k)<<2))  /* a 32768-colour cell is 4 units of 32 bytes */
+typedef char mpskyB0[HAZE_CHARS==MPSKY_B0_HAZE && CLOUD_MAP==MPSKY_B0_CLOUD && RPT_ADDR==MPSKY_B0_RPT
+		    && CLOUD_MAP>=MPSKY_B0_HAZE_END? 1: -1];      /* MPSKY.H tells the pause */
 
 /* Each layer reads its cells from one bank and its names from the other: B0 = NBG0's four
    character reads + NBG1's name read, B1 the reverse.  Names at T0, so the character reads may

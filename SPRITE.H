@@ -343,15 +343,65 @@ void doom_mpLevelStart(void);
 void doom_mpRespawned(int k);
 int doom_mpRespawnHold(int k);
 void doom_mpJoined(int k);
-void doom_lightMenu(void);
+void doom_titleLights(void);
 int  doom_bossCount(int l);
 const char *doom_bossName(int l);
 void doom_levelEnd(int action);
 #define CFG_MP_MENU            1                                 /* INTRO.C: the title's MULTIPLAYER button */
 #define CFG_MP_NEWGAME_MENU    1                                 /* ... and NEW GAME opens the skill/players screen: Doom never saves */
 #define CFG_GFX_OPTIONS        1                                 /* INTRO.C optionMenu: FOG and LIGHTS (WALLS.H) */
-#define CFG_LIGHT_MENU()       doom_lightMenu()                  /* ... LIGHTS opens the tuner  */
-#define CFG_MENU_PITCH         24                                /* INTRO.C: four title buttons fit the screen */
+#define CFG_LIGHT_MENU()       doom_titleLights()                /* ... LIGHTS opens the tuner (PAUSE.OVL) */
+#define CFG_MENU_PITCH         18                                /* INTRO.C: four title buttons fit under the logo */
+/* GCC14: the title's submenus on a 224-line screen, drawn about PowerSlave's 240-line centre (local
+   rows -120..103): a line's y is its top, and the title font is 16 rows.  OPTIONS' six lines go up
+   one pitch, heading and rule with them (DONE ends at 93); the multiplayer screen's 11-12 lines
+   (TEAM 4p, BOSS 3-4p) start higher, 16 apart, 2 above START (BACK ends at 85 / 101). */
+#define CFG_OPT_HEAD_Y         (-44)                             /* INTRO.C: OPTIONS' heading     */
+#define CFG_OPT_RULE_Y         (-25)                             /* ... the rule under it         */
+#define CFG_OPT_ROW0           (-12)                             /* ... its first line            */
+#define CFG_MP_TIGHT_LINES     11                                /* MPRULES.C mpGameMenu: this many lines and more ... */
+#define CFG_MP_TIGHT_Y         (-92)                             /* ... start here               */
+#define CFG_MP_TIGHT_GAP       2                                 /* ... START this far below the line above */
+#define CFG_TITLE_BONUS        0                                 /* INTRO.C: no DEATH TANK: cd_doom has no BONUS.BIN */
+/* GCC14: the title screen (game/doom/DOOM_TITLE.C): the DOOM logo over the PSX fire, Doom's letters
+   and its skull, from DTITLE.DAT.  INTRO.C playIntro: the VDP2 set-up, the fonts (-> the next
+   free VDP1 char), the picture, which layers are opaque (the logo and the fire keep pixel 0
+   transparent), the menu's first line; SRUINS.C main: the end, when playIntro returns; MENU.C
+   dlg_draw: the mark of the chosen line (1 = drawn, else the engine's grey wave).
+   The loading screen is the same picture, going on (SRUINS.C runLevel): STATIC.DAT's first block
+   is the title's logo block, read in place of the PowerSlave picture; there is no VDP2 sheet
+   after it (Doom's gun is VDP1 tiles); the VDP2 goes back to the game's before the wall slave. */
+#ifndef GP_TITLE_MENU_Y0
+#define GP_TITLE_MENU_Y0       34
+#endif
+void doom_titleVdp2(void);
+int  doom_titleFonts(void);
+void doom_titlePicture(void);
+void doom_titleEnd(void);
+int  doom_menuCursor(int x,int y);
+void doom_loadingScreen(int fd);
+void doom_loadingEnd(void);
+#define CFG_LOADING_SCREEN(fd) doom_loadingScreen(fd)
+#define CFG_VDP2_SHEET(fd)                                       /* STATIC.DAT carries none */
+#define CFG_LOADING_END()      doom_loadingEnd()
+/* GCC14: START in a level opens Doom's pause (DOOM_PAUSE.C -> PAUSE.OVL, an overlay: OVL.C), over
+   the frozen view, instead of PowerSlave's inventory: its action goes to quitRequest, and a quit
+   (1) leaves the level for the title (2).  The sky stays as it is (no enablePlax(0)), and in split
+   screen any joined player's START pauses too (SRUINS.C mpPollStart). */
+int  doom_pause(void);
+extern char doomPauseWho;
+#define CFG_PAUSE_PREP()                                         /* SRUINS.C: nothing to hide first */
+#define CFG_PAUSE_MENU(i,k,m,f,b,s) (quitRequest=doom_pause())   /* ... the pause, pad doomPauseWho */
+#define CFG_PAUSE_ASKED()      doomPauseWho                      /* ... a joined player's START    */
+#define CFG_PAUSE_POLL(j)      (doomPauseWho=(char)((j)+1))      /* SRUINS.C mpPollStart: it asks (-1: nobody, every image) */
+#define CFG_QUIT_ACTION(q)     ((q)==1? 2: (q))                  /* SRUINS.C: runLevel's result    */
+#define CFG_TITLE_VDP2()       doom_titleVdp2()
+#define CFG_TITLE_FONTS()      doom_titleFonts()
+#define CFG_TITLE_PICTURE()    doom_titlePicture()
+#define CFG_TITLE_OPAQUE       0
+#define CFG_TITLE_END()        doom_titleEnd()                   /* the menu ends; the fire burns on into the load */
+#define CFG_MENU_CURSOR(x,y)   doom_menuCursor(x,y)
+#define CFG_MENU_Y0            GP_TITLE_MENU_Y0                  /* MULTIPLAYER's line; NEW GAME a pitch above */
 #define CFG_MP_NMLEVELS        9                                 /* MPLAYER.C mpMenu: DOOM_NMLEVELS */
 #define CFG_MP_LEVELLABEL(l)   doom_levelLabel(l)
 #define CFG_MP_BOSSLEVEL(l)    doom_bossLevel(l)                 /* a level with a boss: the boss battle's */
@@ -448,6 +498,28 @@ void ps_roleFire(void);
 #define CFG_GFX_OPTIONS        0                                 /* PowerSlave's options as they were */
 #define CFG_LIGHT_MENU()
 #define CFG_MENU_PITCH         30
+#define CFG_OPT_HEAD_Y         (-26)                             /* PowerSlave's options, 240 lines */
+#define CFG_OPT_RULE_Y         (-7)
+#define CFG_OPT_ROW0           6
+#define CFG_MP_TIGHT_LINES     12                                /* the boss battle, 4 players: pitch 16 */
+#define CFG_MP_TIGHT_Y         (-84)
+#define CFG_MP_TIGHT_GAP       6
+#define CFG_TITLE_BONUS        1                                 /* INTRO.C: the DEATH TANK button */
+#define CFG_TITLE_VDP2()       setupVDP2()                       /* INTRO.C: PowerSlave's painting */
+#define CFG_TITLE_FONTS()      initFonts(0,7)
+#define CFG_TITLE_PICTURE()    psTitlePicture()
+#define CFG_TITLE_OPAQUE       0xf00
+#define CFG_TITLE_END()
+#define CFG_LOADING_SCREEN(fd) loadLoadingScreen(fd)             /* SRUINS.C runLevel: the picture, the bar */
+#define CFG_VDP2_SHEET(fd)     loadVDP2Sprites(fd)               /* ... the weapon sheet into VRAM B */
+#define CFG_LOADING_END()
+#define CFG_PAUSE_PREP()       enablePlax(0)                     /* SRUINS.C: START, the inventory */
+#define CFG_PAUSE_MENU(i,k,m,f,b,s) runInventory(i,k,m,f,b,s)
+#define CFG_PAUSE_ASKED()      0
+#define CFG_PAUSE_POLL(j)      ((void)0)
+#define CFG_QUIT_ACTION(q)     2
+#define CFG_MENU_CURSOR(x,y)   0
+#define CFG_MENU_Y0            20
 #define CFG_MP_NMLEVELS        23                                /* PSMULTI.C psMpLevel[]: the 24 .LEV on the disc, less TEST */
 #define CFG_MP_LEVELLABEL(l)   ps_levelLabel(l)
 #define CFG_MP_BOSSLEVEL(l)    ps_bossLevel(l)                   /* MAGMANTIS, SELKIS, SET */

@@ -198,6 +198,20 @@ int suckInt(void)
  return ret;
 }
 
+/* GCC14: the next nShorts params, read IN PLACE: a pointer into level_objectParams, which stays
+   resident for the whole level (LEVEL.C).  For variable-length records whose owner reads and
+   writes its own table (the Doom sector effects and lamps) instead of copying it.  The block is
+   2-aligned: every param before it is a short (asserted), and mem_malloc returns 4-aligned
+   memory.  Shorts are big-endian on disc, the SH-2's own order. */
+short *suckParams(int nShorts)
+{short *ret;
+ assert(!(objectPPos&1) && nShorts>=0);
+ assert(objectPPos+2*nShorts<=level_nmObjectParams);
+ ret=(short *)(level_objectParams+objectPPos);
+ objectPPos+=2*nShorts;
+ return ret;
+}
+
 void suckSpriteParams(Sprite *s)
 {if (!s)
     {suckShort();

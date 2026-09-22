@@ -34,7 +34,8 @@
      OT_DOOM_WLINE     x1, z1, x2, z2 (the linedef), channel, flags (DOOM_WLINE_ONCE)
      OT_DOOM_LAMP      leaf, x, y, z (y = the light's height), channel (-1 = lit from the
                        start), r, g, b (k 0..16), radius (u), intensity (0..31 at the centre),
-                       ramp (tics to full intensity once lit) -- GCC14, doom_specials.LAMPES
+                       ramp (tics to full intensity once lit), n, then DOOM_LAMP_SEEN leaves
+                       (n of them, -1 after) -- GCC14, doom_specials.LAMPES
    and OT_DOOM_DAMAGE's hp carries DOOM_DAMAGE_EXIT for special 11 (E1M8's last room). */
 #define OT_DOOM_TELEPORT 181
 #define OT_DOOM_FLOOR    182
@@ -42,6 +43,7 @@
 #define OT_DOOM_LIFT     184
 #define OT_DOOM_WLINE    185
 #define OT_DOOM_LAMP     186     /* GCC14: a light the map is given (doomLamp_func) */
+#define DOOM_LAMP_SEEN   8       /* GCC14: doom_specials.LAMPE_VUS_MAX */
 #define DOOM_TELE_ONCE   1
 #define DOOM_WLINE_ONCE  1
 #define DOOM_WLINE_GUN   2       /* P_ShootSpecialLine: fired by a BULLET, never by crossing */
@@ -114,6 +116,8 @@ typedef struct
  short r,g,b,radius,peak;               /* addLightEx: k 0..16, u, intensity 0..31 at the centre */
  short ramp,step;                       /* tics to full intensity; tics lit so far, -1 = unlit    */
  short shown;                           /* intensity last handed to the light list, 0 = none      */
+ short nmSeen;                          /* leaves in seen[]; 0 = no test, lit wherever you are     */
+ short seen[DOOM_LAMP_SEEN];            /* a leaf of each sector it lights (doomLampInView)        */
  Sprite spot;                           /* the light's position                                    */
 } DoomLampObject;
 
@@ -694,9 +698,27 @@ int doom_nearDoor(Sprite *s)
    wide there in solo), the slot given back beyond.  A full list (15 lights: fireballs) only
    delays it: it asks again every tic.  The player's LIGHTS OFF is read here, every tic:
    changeLightEx cannot put a light out (lightTune returns before it scales the intensity),
-   and a permanent light would otherwise keep its slot and its LOD veto after the switch. */
+   and a permanent light would otherwise keep its slot and its LOD veto after the switch.
+   And it goes out, slot given back, when no player may see what it lights (doomLampInView). */
 #define DOOM_LAMP_NEAR F(1024)
 #define DOOM_LAMP_FAR  F(1536)
+
+/* GCC14: whether a player may see what lamp o lights.  seen[] holds a leaf of each sector it
+   lights (doom2ps secteurs_eclaires: in plan, within its radius, walls stopping the eye) and the
+   level's reject table says whether a player's leaf may see one of them (LEVEL.C level_maySee)
+   -- whichever way the player looks: a test on the image drawn would light it again 1 to 2
+   images late as the player turns round (updateLights runs at the end of drawWalls). */
+static int doomLampInView(const DoomLampObject *o)
+{int k,i;
+ if (!o->nmSeen)
+    return 1;
+ for (k=0;k<mpPlayers;k++)
+    if (mpBody[k])
+       for (i=0;i<o->nmSeen;i++)
+	  if (level_maySee(mpBody[k]->s,o->seen[i]))
+	     return 1;
+ return 0;
+}
 
 static void doomLamp_func(Object *_this,int message,int param1,int param2)
 {DoomLampObject *this=(DoomLampObject *)_this;
@@ -726,7 +748,7 @@ static void doomLamp_func(Object *_this,int message,int param1,int param2)
 	      }
 	if (best>DOOM_LAMP_NEAR)
 	   p=p*f(DOOM_LAMP_FAR-best)/f(DOOM_LAMP_FAR-DOOM_LAMP_NEAR);
-	if (!lightOn)                           /* the player's switch (WALLS.H) */
+	if (!lightOn || !doomLampInView(this))  /* the player's switch (WALLS.H); nobody may see it */
 	   p=0;
 	if (p<=0)
 	   {removeLight(&this->spot);            /* nothing when it holds no slot */
@@ -908,9 +930,16 @@ int game_placeObject(int ot)
 	 int radius=suckShort();
 	 int peak=suckShort();
 	 int ramp=suckShort();
+	 int nmSeen=suckShort(),i;
+	 short seen[DOOM_LAMP_SEEN];
+	 for (i=0;i<DOOM_LAMP_SEEN;i++)
+	    seen[i]=suckShort();
 	 assert(sectorNm>=0 && sectorNm<level_nmSectors);
 	 assert(r>=0 && r<=16 && g>=0 && g<=16 && b>=0 && b<=16);
 	 assert(radius>=16 && radius<=1024 && peak>0 && peak<=31 && ramp>=0);
+	 assert(nmSeen>=0 && nmSeen<=DOOM_LAMP_SEEN);
+	 for (i=0;i<nmSeen;i++)
+	    assert(seen[i]>=0 && seen[i]<level_nmSectors);
 	 o=(DoomLampObject *)getFreeObject(doomLamp_func,ot,CLASS_SECTOR);
 	 if (o)
 	    {memset(&o->spot,0,sizeof(o->spot));
@@ -931,6 +960,8 @@ int game_placeObject(int ot)
 	     o->ramp=(short)ramp;
 	     o->step=(short)((channel==-1)? 0: -1);
 	     o->shown=0;
+	     o->nmSeen=(short)nmSeen;
+	     memcpy(o->seen,seen,sizeof(o->seen));
 	     moveObject((Object *)o,(channel==-1)? objectRunList: objectIdleList);
 	    }
 	 return 1;

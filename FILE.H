@@ -4,6 +4,7 @@
 void fs_startProgress(int swirly);
 void fs_addToProgress(char *filename);
 void fs_closeProgress(void);
+extern void (*progressHook)(int read,int total);  /* GCC14: replaces the bar while set */
 
 void fs_init(void);
 int fs_open(char *filename);

@@ -21,6 +21,11 @@ void startSlave(void *slaveMain);
 static int progressTotalSize,progressTotalRead;
 static int progressOn=0; /* 1 if on, 2 if swirly */
 static Uint32 progressNextUpdate;
+/* GCC14: a game's own progress display, called for every sector read while the progress is on,
+   in place of the bar (Doom's loading screen: the flames rise with the load).  Its owner sets it
+   before fs_read and clears it; fs_closeProgress leaves it alone.  FILE.C is in every program: a
+   pointer, not a CFG. */
+void (*progressHook)(int read,int total);
 
 #ifdef PSYQ
 #define PSYQBASEPATH "c:\\sr3\\data\\"
@@ -222,7 +227,9 @@ void fs_read(int fd,char *buf,int n)
 	{GFS_Fread(openCDFile,1,sectorBuff,2048);
 	 if (progressOn)
 	    {progressTotalRead++;
-	     if (progressOn==1 && vtimer>progressNextUpdate)
+	     if (progressHook)
+		progressHook(progressTotalRead,progressTotalSize);
+	     else if (progressOn==1 && vtimer>progressNextUpdate)
 		{XyInt parms[4];
 		 int p;
 		 progressNextUpdate=vtimer+2;

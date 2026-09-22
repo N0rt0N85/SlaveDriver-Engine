@@ -204,15 +204,17 @@ quels) ; `ot` = §1. La séquence n'est **pas** stockée : `seq(sprite, frame, v
 Armes : `doomWeaponInfo[9]` recopie `d_items.c:37-68` (ammo, up/down/ready/attack/flash) ;
 `wseq(state) = state − 1` (§5).
 
-## 5. STATIC.DAT Doom — ordre exact (SRUINS.C:1922-1932)
+## 5. STATIC.DAT Doom — ordre exact (SRUINS.C `runLevel`)
 
 | # | bloc | lecteur | contenu Doom | octets |
 |---|---|---|---|---|
-| 1 | écran de chargement | SRUINS.C:1098-1120 | 256 × BGR555 (bit 15) + `int 320, int 240` + 320×240 index (TITLEPIC 320×200 centré, bandes 0) | 77 320 |
-| 2 | feuille VDP2 NBG0 | SRUINS.C:1080-1096 | 512×512 8 bpp, **zéros** : cette feuille ne sert qu'à `displayVDP2Pic` (chunks d'armes de classe TILEVDP, SEQUENCE.C:270-290), pas aux chars VDP1 du HUD — l'art HUD Doom (STBAR, visages, clés, polices) est un **tableau C généré**, `build/doom/doom_art.h` (§8, SPEC_CONVERTER §3bis, SPEC_PLAYER §3) | 262 144 |
+| 1 | bloc logo (écran de chargement) | `doom_loadingScreen` (game/doom/DOOM_TITLE.C, `CFG_LOADING_SCREEN`) | le **bloc logo de DTITLE.DAT, octet pour octet** (`wad2title.logo_block`) : `"DLG1"`, `i16 37, 0`, PLAYPAL 256 × BGR555 (banque CRAM 0), rampe PSX 40 × BGR555, `P_title` 40 o, `P_load` 40 o (niveau de feu → index PLAYPAL), R et U 2 × 256 o (flux aléatoires du feu), `i16 w, h, x, y` du logo dans la bitmap NBG1, masque LOADING 16 × 40 o (1 bit par cellule), puis M_DOOM w × h (w multiple de 4, pas de remplissage). `--loading black` : logo 0 × 0 et masque nul | 9 520 (1 840 en `black`) |
+| — | ~~feuille VDP2 NBG0~~ | ~~SRUINS.C `loadVDP2Sprites`~~ | **plus écrite** : 262 144 zéros que Doom n'affichait jamais (son arme est en tuiles VDP1, PIC.C:767-790 ; l'art HUD est `build/doom/doom_art.h`, §8). `CFG_VDP2_SHEET` est vide pour Doom ; `doom_loadingEnd` rend à NBG0 la configuration que `loadVDP2Sprites` laissait (`vdp2SheetConfig`, feuille cachée) | 0 |
 | 3 | sons statiques | SOUND.C:231-241 | `int 8`, 8 shorts (tous 0 sauf `[3] = 6`), `int 20`, 20 sons §3 | 4+16+4+20×16+176 970 = **177 314** |
 | 4 | tuiles d'armes | PIC.C:709-711 `loadTileSet(fd,0)` | `int n`, n tuiles 0x6A (`short flags, short palNm, short size, RLE`, PIC.C:671-700) | 10 familles : n = **95** (130 063 o RLE) ; `--e1m1-weapons` : 48 |
 | 5 | séquences d'armes | SEQUENCE.C:92-132 | `int size` + header + frames + chunks + `nmSequences` shorts, **sans carte** ; `wSequence[0] == 0` asserté :126 | ≈ 2 Ko |
+
+**Pourquoi** (2026-09-22, écran de chargement Doom) : l'écran de chargement est l'écran titre qui continue — le logo, le feu (esclave SH-2, VRAM B), LOADING en pochoir, les flammes qui montent avec les secteurs lus (`FILE.C progressHook`). Le bloc 1 passe de 77 320 à 9 520 o et le bloc 2 disparaît : **330 000 o de moins lus à chaque chargement** (~1 s à 311 Ko/s), aucun octet du pool du niveau (tête du bloc dans `doorwayCache`, logo lu directement en VRAM B0), plus de barre ni de `SCL_DisplayFrame` pendant la lecture. **Un MAIN et un STATIC.DAT de formats différents ne se mélangent pas** : l'ancien MAIN lirait 256 Ko de mauvaises données en bloc 2 ; on reconstruit MAIN et on reconvertit ensemble (make_e1m1 réécrit STATIC.DAT et DTITLE.DAT à chaque carte).
 
 Tuiles d'armes `[wad]`, découpe **lump par lump** (`⌈w/64⌉·⌈h/64⌉`, chaque lump a sa taille propre) : PISG
 A0 57×62 → 1, B0 79×82 → 4, C0 66×81 → 4, D0 61×81 → 2, E0 78×103 → 4 = **15** ; PISF A0 41×38 → **1** ; SHTG A0
@@ -340,9 +342,9 @@ fin de partie seulement), `MAIN.BIN` (:624), `INTRO.PCS` (INTRO.C:418 via `playI
 `doomLevelNames`, SRUINS.C:2491-2500 `runMap` → `level = 0`, INITMAIN.C:185-246 logos sautés. **Disque minimal
 E1M1 (`cd_doom/` à la racine du dépôt, déjà dans `.gitignore:10` ; `CDDIR` est relatif à la racine,
 Makefile:280 `CDDIR ?= cd`, :286 `$(wildcard $(CDDIR)/*)` — un `build/doom/cd_doom/` donnerait un ISO sans
-données, :291-294)** : `0` (INIT), `MAIN.BIN`, `STATIC.DAT` (§5), **`E1M1.LEV`** (nom par défaut de
+données, :291-294)** : `0` (INIT), `MAIN.BIN`, `STATIC.DAT` (§5), **`DTITLE.DAT`** (l'écran titre : bloc logo, polices STCFN x1 et x2 avec espace, crânes M_SKULL1/2 ; `wad2title.py`, écrit par `wad2static.write_static` à côté de STATIC.DAT, lu par `doom_titleFonts` dans le pool du titre ; ~19 Ko), **`E1M1.LEV`** (nom par défaut de
 `make_e1m1.py`, gravé côté C ; `TOMB.LEV` seulement pour le disque de contrôle sans `GP_GAME_DOOM`),
-`INITLOAD.DAT` et `INTRO.PCS` (assets PowerSlave, texte + titre, remplacés à J4 ; rien n'est commité).
+`INITLOAD.DAT` et `INTRO.PCS` (assets PowerSlave : textes, et les deux sons du menu que `dlg_run` joue — l'image du titre n'en vient plus, DTITLE.DAT la remplace ; rien n'est commité).
 Noms : `levelGraph` (BIGMAP.C:43-82, `getLevelName` :84-86) remplacé par `doomLevelNames[DOOM_NMLEVELS] =
 {"+E1M1.LEV", …}` (8.3), **borné** (§6 : dernier niveau ⇒ *quit*) et vérifié par `make_e1m1.py` contre le
 contenu de `cd_doom/` ; `playCDTrackForLevel` (SRUINS.C:2016) sans piste audio = cas déjà exercé par

@@ -36,6 +36,9 @@
 static unsigned short *picPals[MAXNMPICS];
 static unsigned int *picDatas[MAXNMPICS];
 
+#ifndef GP_GAME_DOOM
+/* GCC14: PowerSlave's title painting (CFG_TITLE_VDP2/CFG_TITLE_PICTURE, SPRITE.H); Doom draws its
+   own (game/doom/DOOM_TITLE.C) and does not carry these. */
 static void setupVDP2(void)
 {static Uint16 cycle[]=
     {0x44ee, 0xeeee,
@@ -101,6 +104,25 @@ static void loadVDPPic(int picNm,int bankNm)
     for (x=0;x<(width>>2);x++)
        POKE(SCL_VDP2_VRAM+(y<<9)+(x<<2)+(bankNm?1024*256:0),0);
 }
+
+static __inline__ void psTitlePicture(void)   /* inline: the PowerSlave title stays as it was */
+{
+#ifndef PAL
+ loadVDPPic(0,1);
+ loadVDPPic(0,0);
+#else
+ loadVDPPic(1,1);
+ loadVDPPic(1,0);
+#endif
+ {int y,m,d,h,min;
+  getDateTime(&y,&m,&d,&h,&min);
+  if (m==12 && d==10 && y>16)
+     {loadVDPPic(2,1);
+      loadVDPPic(2,0);
+     }
+ }
+}
+#endif
 
 static void fadeUp(void)
 {int f;
@@ -196,19 +218,17 @@ static char *optFogText(void)
 {static char *const t[4]={"FOG OFF","FOG LOW","FOG MEDIUM","FOG HIGH"};
  return t[fogLevel()];
 }
-/* GCC14: six lines where PowerSlave had four, and at its pitch of 20 the last one (DONE) ran off
-   the bottom of the screen -- y is measured from its middle.  18, the pitch of the multiplayer
-   and light screens, puts the last line at 96, where those two put theirs.  PowerSlave's own
-   four lines keep the layout they had. */
-#define OPT_ROW0    6
+/* GCC14: six lines where PowerSlave had four.  A line's y is its top (PRINT.C drawString puts a
+   sprite's top-left corner there), so the last line ends a font height below its y; at the
+   multiplayer and light screens' pitch of 18 from CFG_OPT_ROW0, DONE ends inside the screen
+   (SPRITE.H).  PowerSlave's own four lines keep the layout they had. */
 #define OPT_PITCH   18
 #define OPT_NM      6
 #else
-#define OPT_ROW0    6
 #define OPT_PITCH   20
 #define OPT_NM      4
 #endif
-#define OPT_ROW(i)  (OPT_ROW0+(i)*OPT_PITCH)
+#define OPT_ROW(i)  (CFG_OPT_ROW0+(i)*OPT_PITCH)   /* GCC14: the first line's y from SPRITE.H */
 #define OPT_DONE_Y  OPT_ROW(OPT_NM-1)
 
 static void optionMenu(int hx,int hy,int lx,int ly)
@@ -236,7 +256,7 @@ static void optionMenu(int hx,int hy,int lx,int ly)
 #ifndef JAPAN
  dlg_addFontText(hx,hy,100,2,getText(LB_MAINMENU,2));
  dlg_addFontText(0,400,320,2,"");
- dlg_addRect(-60,-7,120,1,RGB(31,31,31));
+ dlg_addRect(-60,CFG_OPT_RULE_Y,120,1,RGB(31,31,31));   /* GCC14: SPRITE.H, the rule's y */
 #if CFG_GFX_OPTIONS
  dlg_addBigWavyButton(4,0,OPT_ROW(3),optFogText());
  dlg_addBigWavyButton(5,0,OPT_ROW(4),"LIGHTS");
@@ -455,11 +475,11 @@ void playIntro(void)
  displayEnable(0);
  mem_init();
  initSound();
- setupVDP2();
+ CFG_TITLE_VDP2();		/* GCC14: a game's title (SPRITE.H CFG_TITLE_*) */
  EZ_initSprSystem(500,8,500,
 		  240,0x0000);
 #ifndef JAPAN
- i=initFonts(0,7);
+ i=CFG_TITLE_FONTS();		/* GCC14: a game's title (SPRITE.H CFG_TITLE_*) */
  initPicSystem(i,((int []){50,0,0,0,0,-1}));
 #else
  i=initFonts(0,4);
@@ -496,21 +516,8 @@ void playIntro(void)
     POKE(SCL_VDP2_VRAM+i,0);
  BOOT_PROBE2(0x7fff);	/* white  = the 512 KB VDP2 VRAM clear finished */
 
-#ifndef PAL
- loadVDPPic(0,1);
- loadVDPPic(0,0);
-#else
- loadVDPPic(1,1);
- loadVDPPic(1,0);
-#endif
+ CFG_TITLE_PICTURE();	/* GCC14: PowerSlave's painting, or Doom's logo and fire (SPRITE.H) */
  BOOT_PROBE2(0x01ff);	/* orange = title picture loaded */
- {int y,m,d,h,min;
-  getDateTime(&y,&m,&d,&h,&min);
-  if (m==12 && d==10 && y>16)
-     {loadVDPPic(2,1);
-      loadVDPPic(2,0);
-     }
- }
  SCL_SetColMixRate(SCL_NBG0,31);
  SCL_SET_N0CCEN(0);
  BOOT_PROBE2(0x3def);	/* grey   = clock read (getDateTime returned) */
@@ -518,7 +525,7 @@ void playIntro(void)
     playCDTrack(titleMusic,1);
  BOOT_PROBE2(0x7c0f);	/* purple = music started; the title screen comes up next */
 
- Scl_s_reg.dispenbl|=0xf00;
+ Scl_s_reg.dispenbl|=CFG_TITLE_OPAQUE;	/* GCC14: PowerSlave 0xf00, its pictures opaque */
  if (SclProcess==0)
     SclProcess=1;
 
@@ -542,7 +549,7 @@ void playIntro(void)
 #ifndef JAPAN
 	  len=getStringWidth(2,getText(LB_MAINMENU,i));
 	  /* GCC14: MULTIPLAYER goes under NEW GAME, the whole column a line higher (CFG_MP_MENU) */
-	  dlg_addBigWavyButton(i,-len>>1,20+CFG_MENU_PITCH*((i && CFG_MP_MENU)? i: i-CFG_MP_MENU),
+	  dlg_addBigWavyButton(i,-len>>1,CFG_MENU_Y0+CFG_MENU_PITCH*((i && CFG_MP_MENU)? i: i-CFG_MP_MENU),
 			       getText(LB_MAINMENU,i));
 #else
 	  len=getStringWidth(3,getText(LB_MAINMENU,i));
@@ -551,8 +558,9 @@ void playIntro(void)
 #endif
 	 }
       if (CFG_MP_MENU)        /* GCC14: the multiplayer screen (MPLAYER.C mpMenu) */
-	 dlg_addBigWavyButton(3,-getStringWidth(2,"MULTIPLAYER")>>1,20,"MULTIPLAYER");
+	 dlg_addBigWavyButton(3,-getStringWidth(2,"MULTIPLAYER")>>1,CFG_MENU_Y0,"MULTIPLAYER");
 
+#if CFG_TITLE_BONUS   /* GCC14: a game whose disc has no BONUS.BIN shows no DEATH TANK */
       {SaveState *s;
        int i,power;
        power=0;
@@ -569,6 +577,7 @@ void playIntro(void)
 	   dlg_addBigWavyButton(69,-len>>1,-10,"DEATH TANK");
 	  }
       }
+#endif
 
       dlg_setupSlideIn();
       if (menuSel!=-1)
@@ -620,7 +629,7 @@ void playIntro(void)
 	     break;
 	  case 2:
 	     dlgItem[2].x2=dlgItem[2].x1;
-	     dlgItem[2].y2=-26;
+	     dlgItem[2].y2=CFG_OPT_HEAD_Y;   /* GCC14: SPRITE.H, OPTIONS' heading */
 	     dlg_runSlideIn();
 	     optionMenu(dlgItem[2].x2,dlgItem[2].y2,
 			dlgItem[2].x1,dlgItem[2].y1);
@@ -632,6 +641,7 @@ void playIntro(void)
 		 return;
 		}
 	     break;
+#if CFG_TITLE_BONUS
 	  case 69:
 	     if (lastInputSample==((~(PER_DGT_S|PER_DGT_C))&0xffff))
 		{enableDoorReset=0;
@@ -640,6 +650,7 @@ void playIntro(void)
 		}
 	     link("BONUS.BIN");
 	     break;
+#endif
 	    }
      }
  }

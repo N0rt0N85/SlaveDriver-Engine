@@ -29,6 +29,7 @@ int getKeyMask(void);
 void changeMessage(char *message);
 void playerGotEntombedWithRamses(void);
 int getEarthQuake(void);
+void vdp2SheetConfig(void);     /* GCC14: NBG0 as the (hidden) VDP2 weapon sheet, no read */
 
 extern Orient playerAngle;
 #endif

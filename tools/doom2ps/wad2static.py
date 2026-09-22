@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""wad2static.py -- STATIC.DAT Doom : les 5 blocs lus par SRUINS.C:1922-1932, dans l'ordre.
+"""wad2static.py -- STATIC.DAT Doom : les 4 blocs lus par SRUINS.C runLevel, dans l'ordre.
 
 Contrat docs/doom/DOOM_ABI.md section 5 (SPEC_CONVERTER section 3, tache j4) :
 
-  1. ecran de chargement   loadLoadingScreen SRUINS.C:1098-1120 : 256 x u16 BGR555 (bit 15) puis
-                           `int 320`, `int 240` (assertes), puis 320x240 indices ; TITLEPIC 320x200
-                           (wad.patch) centre, bandes de 20 lignes d'index 0 ; `--loading black` = tout 0.
-  2. feuille VDP2 NBG0     loadVDP2Sprites SRUINS.C:1080-1096 : 1024*256 = 262 144 octets, zeros
-                           (ne sert qu'a displayVDP2Pic, chunks TILEVDP ; l'art HUD est doom_art.h).
+  1. bloc logo             doom_loadingScreen (game/doom/DOOM_TITLE.C, CFG_LOADING_SCREEN) : le bloc
+                           logo de DTITLE.DAT, octet pour octet (wad2title.logo_block : PLAYPAL, rampe,
+                           P_load, flux aleatoires du feu, masque LOADING, M_DOOM) -- l'ecran de
+                           chargement est l'ecran titre qui continue ; `--loading black` = sans logo
+                           ni masque. Plus d'image 320x240 (77 320 o) : ~9,5 Ko.
+     (l'ancien bloc 2, la feuille VDP2 de 262 144 zeros de loadVDP2Sprites, n'est plus ecrit :
+      CFG_VDP2_SHEET est vide pour Doom, dont l'arme est en tuiles VDP1 -- 330 Ko de moins lus a
+      chaque chargement, et la VRAM B reste au logo et au feu)
   3. sons statiques        wad2snd.static_sound_block : int 8, 8 shorts ([3] = 6), int 20, 20 sons.
   4. tuiles d'armes        loadWeaponTiles PIC.C:709-711 = loadTileSet(fd, 0) : `int n` puis n tuiles
                            0x6A (`short flags, short palNm, short size, RLE`, PIC.C:671-700, 568-580) ;
@@ -22,6 +25,9 @@ Contrat docs/doom/DOOM_ABI.md section 5 (SPEC_CONVERTER section 3, tache j4) :
                            `sprite + lettre + '0'` est decoupe, flags 0, sound -1, chunks aux offsets
                            `(-lo + 64c, -to + 64r)` ; etats sans lump (SHTGE0, SHT2, PLSG/PLSF, BFGG/BFGF)
                            = sequence vide ; wSequence[0] == 0 (asserte :126).
+
+Et a cote, DTITLE.DAT (l'ecran titre : logo, feu, polices, crane -- wad2title.py) : write_static
+l'ecrit dans le meme repertoire, pour que make_e1m1 le pose sur le disque sans changer d'appel.
 
 Usage : python tools\\doom2ps\\wad2static.py [--wad W] [--ids build/doom/doom_ids.json]
                                              [--out cd_doom/STATIC.DAT] [--loading TITLEPIC|black]
@@ -45,15 +51,13 @@ for p in (HERE, os.path.join(ROOT, "tools", "duke2ps")):
 import wad as wadmod                                   # noqa: E402
 import rle8                                            # noqa: E402
 import wad2snd                                         # noqa: E402
-from doomtiles import bgr555                           # noqa: E402
+import wad2title                                       # noqa: E402
 from lev_write import atomic_write, serialize_tiles    # noqa: E402
 
 DEFAULT_WAD = wad2snd.DEFAULT_WAD
 DEFAULT_IDS = wad2snd.DEFAULT_IDS
 DEFAULT_OUT = os.path.join(ROOT, "cd_doom", "STATIC.DAT")
 
-SCREEN_W, SCREEN_H = 320, 240                          # SRUINS.C:1105-1106
-VDP2_SHEET = 1024 * 256                                # SRUINS.C:1084
 WEAPON_FAMILIES = ["PISG", "PISF", "SHTG", "SHTF", "PUNG", "CHGG", "CHGF", "MISG", "MISF", "SAWG"]
 E1M1_FAMILIES = WEAPON_FAMILIES[:5]                    # repli --e1m1-weapons (SPEC_CONVERTER E1)
 WSEQ_FIRST, WSEQ_LAST = 1, 89                          # S_LIGHTDONE .. S_BFGFLASH2 (info.h)
@@ -61,34 +65,6 @@ SEQ_HEADER_FMT = ">iii"                                # struct seqHeader SLEVEL
 FRAME_FMT = ">hhhbb"                                   # sFrameType SLEVEL.H:214-219
 CHUNK_FMT = ">hhhbb"                                   # sChunkType SLEVEL.H:221-226
 SEQ_BLOCK_MAX = 1024 * 1024                            # SEQUENCE.C:102
-
-
-# ----------------------------------------------------------------------------- bloc 1
-def loading_screen(wad, lump="TITLEPIC"):
-    """77 320 o : 512 (CRAM) + 4 + 4 + 76 800 indices. `lump=None` (--loading black) = tout a zero."""
-    if lump is None:
-        cram = [0] * 256
-        data = bytes(SCREEN_W * SCREEN_H)
-    else:
-        cram = [bgr555(c) for c in wad.playpal(0)]
-        w, h, pix, msk = wad.patch(lump)
-        assert w <= SCREEN_W and h <= SCREEN_H, "%s %dx%d ne tient pas en 320x240" % (lump, w, h)
-        x0, y0 = (SCREEN_W - w) // 2, (SCREEN_H - h) // 2
-        buf = bytearray(SCREEN_W * SCREEN_H)
-        for j in range(h):
-            for i in range(w):
-                if msk[j * w + i]:
-                    buf[(y0 + j) * SCREEN_W + x0 + i] = pix[j * w + i]
-        data = bytes(buf)
-    out = struct.pack(">256H", *cram) + struct.pack(">ii", SCREEN_W, SCREEN_H) + data
-    assert len(out) == 512 + 8 + SCREEN_W * SCREEN_H
-    return out
-
-
-# ----------------------------------------------------------------------------- bloc 2
-def vdp2_sheet():
-    """262 144 octets de zeros (SRUINS.C:1084 : fs_read(fd, vram + 1024*256, 1024*256))."""
-    return bytes(VDP2_SHEET)
 
 
 # ----------------------------------------------------------------------------- bloc 4
@@ -179,16 +155,15 @@ def build_static(wad, ids, loading="TITLEPIC", families=None):
     if families is None:
         families = WEAPON_FAMILIES
     _pal, remap = rle8.object_palette(wad.playpal(0))
-    b1 = loading_screen(wad, None if loading == "black" else loading)
-    b2 = vdp2_sheet()
+    b1 = wad2title.logo_block(wad, loading)             # "black" : sans logo ni masque
     b3 = wad2snd.static_sound_block(wad)
     tiles, by_lump = weapon_tiles(wad, families, remap)
     b4 = serialize_tiles(tiles)
     frames, chunks, sequence, populated = weapon_sequences(ids, by_lump)
     b5 = serialize_weapon_sequences(frames, chunks, sequence)
     distinct = len(set(hashlib.sha1(t["rle"]).digest() for t in tiles))
-    info = dict(blocks=[len(b1), len(b2), len(b3), len(b4), len(b5)],
-                total=len(b1) + len(b2) + len(b3) + len(b4) + len(b5),
+    info = dict(blocks=[len(b1), len(b3), len(b4), len(b5)],     # pas de bloc 2 (feuille VDP2)
+                total=len(b1) + len(b3) + len(b4) + len(b5),
                 tileBase=len(tiles), tiles_distinct=distinct,
                 bytes_rle=sum(len(t["rle"]) for t in tiles), rle_max=max(len(t["rle"]) for t in tiles),
                 lumps=len(by_lump), families=list(families),
@@ -198,13 +173,16 @@ def build_static(wad, ids, loading="TITLEPIC", families=None):
                 # sans son `int size`), alignes 4 comme mem_nocheck_malloc (UTIL.C:370)
                 weapon_tiles_bytes=sum((len(t["rle"]) + 3) & ~3 for t in tiles),
                 wseq_bytes=(len(b5) - 4 + 3) & ~3)
-    return b"".join([b1, b2, b3, b4, b5]), info
+    return b"".join([b1, b3, b4, b5]), info
 
 
 def write_static(path, wad, ids, *, loading="TITLEPIC", weapons=None):
+    """STATIC.DAT, puis DTITLE.DAT dans le meme repertoire (info title_path, title_bytes)."""
     data, info = build_static(wad, ids, loading, weapons)
     atomic_write(path, data)
     info["path"] = path
+    tinfo = wad2title.write_title(os.path.join(os.path.dirname(os.path.abspath(path)), "DTITLE.DAT"), wad)
+    info["title_path"], info["title_bytes"] = tinfo["path"], tinfo["bytes"]
     return info
 
 
@@ -221,6 +199,7 @@ def main(argv=None):
     fams = E1M1_FAMILIES if a.e1m1_weapons else WEAPON_FAMILIES
     info = write_static(a.out, w, ids, loading=a.loading, weapons=fams)
     print("%s : %d o = blocs %s" % (info["path"], info["total"], info["blocks"]))
+    print("%s : %d o" % (info["title_path"], info["title_bytes"]))
     print("tuiles d'armes : n = tileBase = %d (%d lumps, %d distinctes par sha1), RLE %d o, max %d o"
           % (info["tileBase"], info["lumps"], info["tiles_distinct"], info["bytes_rle"], info["rle_max"]))
     print("sequences d'armes : %d (+1 terminale), frames %d (+1), chunks %d, bloc %d o ; etats peuples : %s"
