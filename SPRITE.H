@@ -175,7 +175,7 @@ char *doom_levelName(int lNm);                       /* DOOM_GAME.C, doomLevelNa
 #define CFG_LIFT_STOP_SND    3                       /* AI.C:4674: ST_PUSHBLOCK+3 = PSTOP       */
 void doom_pbBlockBits(int pb);                       /* DOOM_GAME.C                             */
 #define CFG_LIFT_MOVED(o)    doom_pbBlockBits((o)->pbNum)   /* AI.C:4670: lift portals follow the floor */
-void doom_spriteLeaves(MthMatrix *view,MthXyz *eye); /* WALLS.C (end): the leaf that draws each sprite */
+void doom_spriteLeaves(MthMatrix *view,MthXyz *eye,int cpu); /* WALLS.C (end): the leaf that draws each sprite */
 Sprite *doom_sprFirst(int s);
 extern short doomDrawNext[];
 short doom_drawSeq(Sprite *o,MthXyz *eye);           /* DOOM_ACTOR.C: the rotation SIGNAL_VIEW will draw */
@@ -184,7 +184,7 @@ short doom_drawSeq(Sprite *o,MthXyz *eye);           /* DOOM_ACTOR.C: the rotati
    first promotion (things seen through walls) and the PowerSlave rule of the 21-09 disc (the
    neighbour's floor tile over a monster's feet).  eye: where the camera stands when drawSprites
    sends SIGNAL_VIEW -- the rotation drawn is picked there, after the leaves are. */
-#define CFG_SPRITE_LEAVES(v,e) doom_spriteLeaves(v,e) /* WALLS.C wallsTraverse, drawWalls: once the draw order is known */
+#define CFG_SPRITE_LEAVES(v,e,c) doom_spriteLeaves(v,e,c) /* WALLS.C wallsTraverse, drawWalls: once the draw order is known */
 #define CFG_SPR_FIRST(s)      doom_sprFirst(s)       /* WALLS.C drawSprites                     */
 #define CFG_SPR_NEXT(o)       ((doomDrawNext[(o)-sprites]<0)? NULL: sprites+doomDrawNext[(o)-sprites])
 #define CFG_LEVEL_NAME(l)    doom_levelName(l)       /* SRUINS.C:2510 (BIGMAP.C levelGraph)     */
@@ -263,7 +263,7 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_LIFT_RESET(o)
 #define CFG_LIFT_STOP_SND    1
 #define CFG_LIFT_MOVED(o)
-#define CFG_SPRITE_LEAVES(v,e)
+#define CFG_SPRITE_LEAVES(v,e,c)
 #define CFG_SPR_FIRST(s)     sectorSpriteList[s]
 #define CFG_SPR_NEXT(o)      (o)->next
 #define CFG_LIGHTRADIUS      256

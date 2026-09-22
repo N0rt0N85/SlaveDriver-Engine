@@ -3625,7 +3625,7 @@ void wallsTraverse(MthMatrix *view,int onSlave)
     updateList[i]=drawList[updateListSize-i-1];
 
  if (onSlave!=2)                /* 2: split screen, during the logic -- see TravSet */
-    CFG_SPRITE_LEAVES(view,&viewPos);  /* tr->pos: the camera drawWalls will signal from */
+    CFG_SPRITE_LEAVES(view,&viewPos,onSlave!=0);  /* tr->pos: the camera drawWalls will signal from */
  if (!onSlave) CFG_PROF_SUB_END();
 }
 
@@ -3779,7 +3779,7 @@ void drawWalls(int k,MthMatrix *view)
  bestAutoAimRating=INT_MAX;
 
  if (queued)
-    CFG_SPRITE_LEAVES(view,&camera->pos);  /* the sprites as they are now, on the master
+    CFG_SPRITE_LEAVES(view,&camera->pos,0);  /* the sprites as they are now, on the master
 					     (TravSet); SIGNAL_VIEW sees the camera as it is now,
 					     not as the traversal saw it */
  else
@@ -4476,6 +4476,7 @@ typedef struct
 {MthMatrix *m;
  MthXyz x,y;                             /* the view's right and up axes, in world units */
  MthXyz *eye;                            /* the camera SIGNAL_VIEW will see (doom_drawSeq) */
+ int cpu;                                /* which set of box memos is this walk's (0 master)     */
 } DoomView;
 
 typedef struct
@@ -4629,6 +4630,38 @@ static int doomLeafPasses(SectorDrawRecord *n,DoomSprBox *b,DoomView *v)
  return 1;
 }
 
+/* GCC14: the box of a sprite, kept for the rest of this walk.  A sprite is asked for its box
+   once per sprite it may hide, so a crowded leaf built the same box again and again -- a
+   transform, a rotation, the floor under the feet and two projections each time.  Direct mapped
+   on the sprite's index, one set per CPU (the slave walks the leaves in the tail, the master for
+   a split view): a collision simply builds the box again.  The stamp empties the whole set at
+   the start of each walk, so nothing survives a camera move. */
+#define DOOM_MEMO 32
+typedef struct
+{unsigned short stamp;
+ short spr;
+ short x0,y0,x1,y1;
+ signed char r;
+} DoomBoxMemo;
+static DoomBoxMemo boxMemo[2][DOOM_MEMO];
+static unsigned short boxStamp[2];
+
+static int doomSprBoxMemo(Sprite *u,DoomView *v,DoomSprBox *b)
+{DoomBoxMemo *m=&boxMemo[v->cpu][(u-sprites)&(DOOM_MEMO-1)];
+ int r;
+ if (m->stamp==boxStamp[v->cpu] && m->spr==(short)(u-sprites))
+    {b->x0=m->x0; b->y0=m->y0; b->x1=m->x1; b->y1=m->y1;
+     return m->r;
+    }
+ r=doomSprBox(u,v,b);
+ m->stamp=boxStamp[v->cpu];
+ m->spr=(short)(u-sprites);
+ m->r=(signed char)r;
+ if (r>0)
+    {m->x0=(short)b->x0; m->y0=(short)b->y0; m->x1=(short)b->x1; m->y1=(short)b->y1;}
+ return r;
+}
+
 /* 1 when u, another sprite, is nearer than o (drawSprites' key) and overlaps it on screen --
    or may: a sprite drawn without a box is taken as over it */
 static int doomSprOver(Sprite *u,Sprite *o,DoomSprBox *b,DoomView *v)
@@ -4636,7 +4669,7 @@ static int doomSprOver(Sprite *u,Sprite *o,DoomSprBox *b,DoomView *v)
  int r;
  if (u==o || doomSprDist(u)>=b->dist)
     return 0;
- r=doomSprBox(u,v,&c);
+ r=doomSprBoxMemo(u,v,&c);
  if (r<0)
     return 1;
  return r && c.x0<=b->x1 && c.x1>=b->x0 && c.y0<=b->y1 && c.y1>=b->y0;
@@ -4655,13 +4688,16 @@ static int doomSprNearer(Sprite *h,int k,Sprite *o,DoomSprBox *b,DoomView *v,int
  return 0;
 }
 
-void doom_spriteLeaves(MthMatrix *view,MthXyz *eye)
+void doom_spriteLeaves(MthMatrix *view,MthXyz *eye,int cpu)
 {int i,j,t,k,len;
  Sprite *o,*home;
  SectorDrawRecord *a,*n;
  DoomSprBox b;
  DoomView v;
  MthXyz e,o0,ax[3];
+ v.cpu=cpu&1;
+ if (!++boxStamp[v.cpu])                /* 0 is the empty set */
+    boxStamp[v.cpu]=1;
  /* the view's axes in world units, from the matrix as MTH_CoordTrans applies it */
  v.m=view;
  v.eye=eye;
