@@ -221,7 +221,7 @@ extern int doomViewBob;                              /* DOOM_PLAYER.C: P_CalcHei
 #define CFG_PROF_SUB(id)
 #define CFG_PROF_SUB_END()
 extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, the slave's share   */
-#define CFG_STATUS_SECTOR()    drawStringf(-158,-80,1,"sector:%d vis:%d sl:%d/%d",camera->s,updateListSize,slaveSize+1,nmSlavePolys)   /* SRUINS.C:2220 */
+#define CFG_STATUS_SECTOR()    drawStringf(-158,-100,1,"sector:%d vis:%d sl:%d/%d",camera->s,updateListSize,slaveSize+1,nmSlavePolys)   /* SRUINS.C, row -100 */
 #define CFG_LIGHTRADIUS        181                               /* subtractive lights only (addLight); Doom: params LIGHT_* */
 #define CFG_LIGHTSHIFT         10                                /* subtractive lights only: 181^2>>10 = 31 */
 #define CFG_LIGHTSMOOTH        1                                 /* WALLS.C lightApply: s^2 falloff, soft edge */
@@ -280,7 +280,7 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_PROF_END()
 #define CFG_PROF_SUB(id)       pushProfile(id)
 #define CFG_PROF_SUB_END()     popProfile()
-#define CFG_STATUS_SECTOR()    drawStringf(-158,-80,1,"sector:%d",camera->s)
+#define CFG_STATUS_SECTOR()    drawStringf(-158,-100,1,"sector:%d",camera->s)
 #endif
 
 /* HUD / screen frame (SPEC_PLAYER section 3, owner: DOOM_HUD.C).  Doom runs a 320x224 frame: 3D

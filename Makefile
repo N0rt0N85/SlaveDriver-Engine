@@ -11,6 +11,7 @@
 #   make BOOTPROBE=1 iso-retailbins -> the RETAIL 0 + MAIN.BIN (refs/extract/PS) on our disc recipe, both IPs
 #   make size       -> text/data/bss per program vs the original CPE spans
 #   make iso        -> build/slavedriver.bin + .cue: bootable test disc (SRL generic IP.BIN + cd/ data)
+#                      with music, also .ccd/.img/.sub: the CloneCD form an ODE needs to play CD-DA
 #   make discs      -> one .bin/.cue per game in GAMES (default "doom duke"), built in sequence:
 #                      build/.../doom/AguzzinoDoom.cue and build/.../duke/AguzzinoDuke.cue
 #   make clean      -> remove build/
@@ -389,9 +390,13 @@ endef
 # The music is not ours, so the folder is not in the repository (.gitignore) -- drop the files in,
 # or point MUSIC_<game> elsewhere.  iso2bin.py converts each one ONCE into its own track file next
 # to the .bin, so a rebuild still only rewrites the data track and the .cue.
+# A disc with music is ALSO written as a CloneCD triple (.ccd/.img/.sub, tools/ccd.py): an ODE
+# mounts a .cue as one data track and the music never reaches the console's TOC, so the .cue is the
+# testers' and the emulators' disc and the CloneCD one is the console's.  It costs a second copy of
+# the image on disk -- the .bin/.cue pair is untouched.
 MUSIC_doom ?= $(sort $(wildcard music/doom/*.wav))
 MUSIC      ?= $(MUSIC_$(notdir $(basename $(PARAMS))))
-%.bin %.cue: %.iso tools/iso2bin.py $(MUSIC)
+%.bin %.cue: %.iso tools/iso2bin.py tools/ccd.py $(MUSIC)
 	@$(PYTHON) tools/iso2bin.py $< $*.bin $*.cue $(MUSIC)
 
 iso: $(ISO:.iso=.cue)

@@ -2797,7 +2797,18 @@ int runLevel(char *filename,int levelNm)
 				      60/framesElapsed,lodFused,lodCells,lodFlat,
 				      picLastSpriteOut,picSpriteLod);
 
-     CFG_STATUS_SECTOR();
+     /* LEGEND  sector : the leaf the camera stands in (SRUINS.C camera->s)
+		 vis  : sectors the traversal kept -- the update list (WALLS.C updateListSize)
+		 sl   : of them, the slave's share / the cells it emitted (nmSlavePolys, also
+			on the polys line).  PowerSlave's build shows the leaf alone.
+	 GCC14: row -100 and solo only.  It used to sit on -80 and wrote over obj:, both every
+	 image.  -100 is the row the shipping build leaves free, and the three that borrow it
+	 win over this one: the split screen's c: line, the walk probe (WALK=1), the ASSERT
+	 build's extra:.  Before moving any line, check the row -- SRUINS.C draws nine. */
+#if defined(NDEBUG) && !defined(WALKPROBE)
+     if (mpPlayers==1)
+	CFG_STATUS_SECTOR();
+#endif
 
      if (mpPlayers>1)
 	{/* LEGEND  B : the split-screen cell budget -- the 1448-command list less what this
