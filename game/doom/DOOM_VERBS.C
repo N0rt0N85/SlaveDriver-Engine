@@ -129,8 +129,9 @@ int doom_lookForPlayer(DoomActor *this,int allaround)
 	continue;                               /* dead */
      if (doom_isMonsterPlayer(k))
 	continue;                               /* GCC14: one of theirs -- until it hurts them */
-     if (!doomSee(s,p))
-	continue;                               /* out of sight */
+     /* GCC14: the facing test before the line of sight, not after: both must pass and neither
+	draws P_Random or writes anything, so the answer is Doom's, and the cheap one goes
+	first -- a third of the sleepers' traces were of a player behind their back */
      if (!allaround)
 	{an=normalizeAngle(getAngle(p->pos.x-s->pos.x,p->pos.z-s->pos.z)-s->angle);
 	 if (an>F(90) || an<F(-90))
@@ -138,6 +139,8 @@ int doom_lookForPlayer(DoomActor *this,int allaround)
 		continue;                       /* behind back */
 	    }
 	}
+     if (!doomSee(s,p))
+	continue;                               /* out of sight */
      this->lastlook=(short)k;
      this->target=mpObj[k];
      return 1;
@@ -163,7 +166,10 @@ int doom_meleeRange(DoomActor *this)
  return 1;
 }
 
-/* P_CheckMissileRange (p_enemy.c:188-256) */
+/* P_CheckMissileRange (p_enemy.c:188-256).  GCC14: a monster still waiting (reactiontime) and
+   not just hit answers 0 whatever the line of sight says, and the trace writes nothing: it is
+   not traced -- id's own "OPTIMIZE" note on that line.  A shot that wakes thirty monsters used
+   to trace thirty lines for nothing on their first A_Chase. */
 int doom_missileRange(DoomActor *this)
 {const DoomMobjInfo *info;
  Sprite *ts;
@@ -172,6 +178,8 @@ int doom_missileRange(DoomActor *this)
  info=&doomMobjInfo[this->mt];
  ts=doom_targetSprite(this->target);
  if (!ts)
+    return 0;
+ if (this->reactiontime && !(this->mflags & DF_JUSTHIT))
     return 0;
  if (!doomSee(this->sprite,ts))
     return 0;

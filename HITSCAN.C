@@ -303,8 +303,11 @@ int singleSectorWallHitScan(MthXyz *ray,MthXyz *pos,int sector,
 }
 
 
+/* GCC14: target = the leaf of the thing looked at: the ray that enters it reaches it -- a leaf is
+   convex, so none of its faces lies between the ray's way in and a point inside it.  It went on
+   to the next wall past the target and compared the distances. */
 static int wallHitScan(MthXyz *ray,MthXyz *pos,int sector,
-		       MthXyz *outPos,int *outSector)
+		       MthXyz *outPos,int *outSector,int target)
 {int w,count,loop;
  sSectorType *s;
  MthXyz tempPos;
@@ -312,6 +315,8 @@ static int wallHitScan(MthXyz *ray,MthXyz *pos,int sector,
  count=0;
  while (1)
     {if (count++>50)
+	return 0;
+     if (sector==target)
 	return 0;
      s=level_sector+sector;
      for (loop=0;loop<2;loop++)
@@ -359,7 +364,7 @@ int canSee(Sprite *s1,Sprite *s2)
     }
  pos=s1->pos;
  sector=s1->s;
- if (!wallHitScan(&v,&pos,sector,&outPos,&outSector))
+ if (!wallHitScan(&v,&pos,sector,&outPos,&outSector,s2->s))
     return 1;
  /* see if collision point is closer than object */
  d2s=f(s1->pos.x-s2->pos.x)*f(s1->pos.x-s2->pos.x)+
