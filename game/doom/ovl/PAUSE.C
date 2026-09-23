@@ -52,6 +52,9 @@
 #include "doom_ovl.h"
 #include "pause_art.h"
 #include "tuner.h"
+#include "pmap.h"
+#include <sega_bup.h>
+#include "bup.h"
 
 #ifndef GP_PAUSE_VEIL
 #define GP_PAUSE_VEIL 16                /* params/doom.cfg PAUSE_VEIL */
@@ -75,6 +78,28 @@
 #define TITLE_Y     18
 #define HELP_Y      204
 #define BIG_H       (2*(*(const short *)doom_font_stcfn))   /* a big letter's rows: 16 */
+#define STAT_X      40                  /* STATS: the names, their values right-aligned here */
+#define STAT_RX     284
+#define STAT_Y0     58
+#define STAT_NAME_Y 40                  /* the level's name, small, over the rows */
+#define STAT_ROW_Y0 52                  /* split screen: a small table, a row a player */
+#define STAT_ROW_P  14
+#define WPN_X       40                  /* WEAPONS: the names, their damage right-aligned ... */
+#define WPN_RX      214
+#define WPN_Y0      46
+#define WPN_PICX    224                 /* ... and the chosen one's pickup in this box */
+#define WPN_PICW    94
+#define WPN_PICY    40
+#define WPN_PICH    56
+#define WPN_AMMO_Y  192
+#define SAV_X       56                  /* SAVE / LOAD: the slots, two lines each */
+#define SAV_Y0      52
+#define SAV_PITCH   26
+#define SAV_SUB     17                  /* the small line under a slot's big one */
+#define SAV_DEV_Y   38
+#define SAV_FOOT_Y  212
+#define SAV_LIB     (16*1024)           /* what BUP_Init wants, out of the free memory */
+#define SAV_WORK    (8*1024)
 #define CTL_X       56                  /* CONTROLS: the actions, their buttons at CTL_BX */
 #define CTL_BX      264
 #define CTL_Y0      38
@@ -103,10 +128,28 @@ static const Uint16 regList[]=
 static const char *const items[]={"RESUME","MAP","STATS","WEAPONS","OPTIONS","SAVE / LOAD",
 				  "RESTART LEVEL","QUIT TO TITLE"};
 #define NITEMS 8
-#define ITEM_RESUME 0
+#define ITEM_RESUME  0
+#define ITEM_MAP     1
+#define ITEM_STATS   2
+#define ITEM_WEAPONS 3
 #define ITEM_OPTIONS 4
-#define ITEM_QUIT   7
-#define LIVE ((1<<ITEM_RESUME)|(1<<ITEM_OPTIONS)|(1<<ITEM_QUIT))   /* the others: grey, later */
+#define ITEM_SAVE    5
+#define ITEM_RESTART 6
+#define ITEM_QUIT    7
+
+/* Doom's own par times for episode 1, in seconds (g_game.c pars[1]).  The STATS page shows them
+   next to the time played, as the intermission does. */
+static const short parTime[DOOM_NMLEVELS]={30,75,120,90,165,180,180,30,165};
+
+/* The eight weapons in slot order (doom_weapontype_t), what Doom's rules do to a target, and the
+   ammo each spends.  The damage is FIXED TEXT: these are Doom v1.9's numbers (p_pspr.c, info.c),
+   not something the port computes, and the port has no berserk, so the fist stays 2-20. */
+#define WPN_NM 8                        /* weaponOwned is 8 bits: fist .. chainsaw */
+static const char *const wpnName[WPN_NM]=
+   {"FIST","PISTOL","SHOTGUN","CHAINGUN","ROCKET LAUNCHER","PLASMA RIFLE","BFG 9000","CHAINSAW"};
+static const char *const wpnDamage[WPN_NM]=
+   {"2-20","5-15","35-105","5-15","20-160","5-40","100-800","2-20"};
+static const char *const ammoName[DOOM_NUMAMMO]={"CLIP","SHELL","CELL","ROCKET"};
 
 enum {OPT_CONTROLS,OPT_SOUND,OPT_MUSIC,OPT_FOG,OPT_SHADOWS,OPT_LIGHTS,OPT_BACK,OPT_NM};
 /* SHADOWS: the blob's mode, its size, the spectre's mode.  The blob may be off; the spectre may
@@ -145,6 +188,13 @@ static short lineY[LR_NM];              /* ... and each line's top */
 static int skullShown;                  /* the skull frame on screen */
 static unsigned char red[16],grey[16];  /* STCFN nibble -> PLAYPAL index */
 static unsigned short glyphAt[128];     /* STCFN: where code c's rows start */
+static char *pmapFree,*pmapEnd;         /* what the loader left free: the MAP browser's scratch */
+/* Which half of the NBG0 bitmap the drawing below writes into: 0 = VRAM B0 (rows 0..255, what the
+   menu shows at scroll 0), 1 = VRAM B1 (rows 256..511), where the MAP builds its next frame while
+   this one is on screen.  One VDP2 bank each, so the chip reads one while the CPU fills the other.
+   The veil's own bytes are outside this: they are always in B0, rows 224..237. */
+static Uint32 halfOff;
+#define HALF (B0+halfOff)
 
 /* ------------------------------------------------------------------------ the VDP2 */
 /* what SCL's buffers hold for register o: the state the game shows next */
@@ -217,31 +267,6 @@ static void setRegs(int on)
     VDP2R(regList[i])=on? pauseReg(regList[i],31): bufReg(regList[i]);
 }
 
-/* Split screen: the B0 bytes the menu covers that the sky keeps (rows 0..PAUSE_ROWS-1, columns
-   0..319, inside MPSKY.H's ranges), to buf (save) or back from it.  buf NULL: only the count. */
-static int skyBytes(Uint32 *buf,int save)
-{static const Uint32 keep[2][2]={{MPSKY_B0_HAZE,MPSKY_B0_HAZE_END},
-				 {MPSKY_B0_CLOUD,MPSKY_B0_CLOUD_END}};
- int y,k,n=0;
- for (y=0;y<PAUSE_ROWS;y++)
-    for (k=0;k<2;k++)
-       {Uint32 a=0x40000+(y<<9),e=a+PAUSE_COLS;
-	volatile Uint32 *v;
-	if (a<keep[k][0])
-	   a=keep[k][0];
-	if (e>keep[k][1])
-	   e=keep[k][1];
-	for (v=(volatile Uint32 *)(SCL_VDP2_VRAM+a);a<e;a+=4,v++,n+=4)
-	   if (buf)
-	      {if (save)
-		  *buf++=*v;
-	       else
-		  *v=*buf++;
-	      }
-       }
- return n;
-}
-
 /* ------------------------------------------------------------------------ letters */
 /* STCFN's layout (PRINT.C initFonts' format) and its colours as PLAYPAL indices: each of the 15
    CLUT colours is found in CRAM bank 0 (PLAYPAL); the grey of a disabled line follows its red */
@@ -276,7 +301,7 @@ static int putChar(int x,int y,int c,const unsigned char *lut,int big)
     return (big? 6: 4)+1;               /* the title fonts' space */
  s=f+34+256+glyphAt[c];
  for (j=0;j<h;j++,s+=(w+1)>>1)
-    {volatile unsigned char *d=B0+((y+(j<<big))<<9)+x;
+    {volatile unsigned char *d=HALF+((y+(j<<big))<<9)+x;
      for (i=0,cx=0;i<w;i++)
 	{n=(i&1)? s[i>>1]&15: s[i>>1]>>4;
 	 if (n)
@@ -313,13 +338,30 @@ static void text(int x,int y,const char *t,const unsigned char *lut,int big)
     x+=putChar(x,y,*t,lut,big);
 }
 
+/* the same, ending at xr: a column of numbers lines up on its right edge */
+static void textRight(int xr,int y,const char *t,const unsigned char *lut,int big)
+{text(xr-textWidth(t,big),y,t,lut,big);
+}
+
 /* ------------------------------------------------------------------------ the page */
+/* GCC14: THE HUD IS HIDDEN, NOT COVERED.  The status bar belongs to the FROZEN VDP1 image --
+   the chip is idle and nothing can rub it out -- and the menu's own bitmap is transparent
+   wherever it draws nothing, so the bar showed straight through the page.  The lines at the
+   bottom, a page's footer among them (SAV_FOOT_Y), were written over its brass and its faces
+   and could not be read; NBG0 already owns priority 7, so this was never a question of what
+   passes in front.  So the bar's rows take PLAYPAL 247 instead of the transparent index: the
+   veil's own opaque black, which is what the rest of the page is read on.
+   The bar is st_stuff.c 168..199, which DOOM_HUD.C's HUD_Y(y)=y-88 puts at local 80..111 --
+   rows 192..223 of the 224 the pause owns. */
+#define HUD_ROW0    192
+
 static void clearRows(int y0,int y1)
 {int y,x;
  for (y=y0;y<y1;y++)
-    {volatile Uint32 *d=(volatile Uint32 *)(B0+(y<<9));
+    {volatile Uint32 *d=(volatile Uint32 *)(HALF+(y<<9));
+     unsigned int v=(y>=HUD_ROW0)? VEIL_INDEX*0x01010101u: 0;
      for (x=0;x<PAUSE_COLS/4;x++)
-	d[x]=0;
+	d[x]=v;
     }
 }
 
@@ -328,7 +370,7 @@ static void skull(int i,int frame)
 {const unsigned char *s=frame>=0? pauseSkull[frame]: NULL;
  int x,y;
  for (y=0;y<PAUSE_SKULL_H;y++)
-    {volatile unsigned char *d=B0+((lineY[i]-2+y)<<9)+pgX-32;
+    {volatile unsigned char *d=HALF+((lineY[i]-2+y)<<9)+pgX-32;
      for (x=0;x<PAUSE_SKULL_W;x++)
 	d[x]=s? *s++: 0;
     }
@@ -355,18 +397,32 @@ static void pageSkull(void)
 static void lineAgain(int i,const char *t)
 {int y,x;
  for (y=lineY[i];y<lineY[i]+BIG_H;y++)
-    {volatile unsigned char *d=B0+(y<<9);
+    {volatile unsigned char *d=HALF+(y<<9);
      for (x=pgX;x<PAUSE_COLS;x++)
 	d[x]=0;
     }
  text(pgX,lineY[i],t,red,1);
 }
 
+/* the lines the skull may stop on.  MAP is grey in split screen: VRAM B belongs to the split
+   sky there (MPSKY.C), and the browser draws into it.  SAVE / LOAD is not written yet. */
+static unsigned int liveItems(void)
+{unsigned int m=(1<<ITEM_RESUME)|(1<<ITEM_STATS)|(1<<ITEM_WEAPONS)|(1<<ITEM_OPTIONS)|
+							  (1<<ITEM_RESTART)|(1<<ITEM_QUIT);
+ if (!mpSkyOn)
+    m|=1<<ITEM_MAP;
+ if (bup_canSaveGame())                 /* one player, a campaign, and a device that answered:
+						    a split or competitive game has no single arsenal to write */
+    m|=1<<ITEM_SAVE;
+ return m;
+}
+
 static void drawMain(void)
-{int i;
- pageStart("PAUSE",ITEM_X,NITEMS,LIVE);
+{unsigned int live=liveItems();
+ int i;
+ pageStart("PAUSE",ITEM_X,NITEMS,live);
  for (i=0;i<NITEMS;i++)
-    text(ITEM_X,lineY[i]=ITEM_Y0+i*ITEM_PITCH,items[i],((LIVE>>i)&1)? red: grey,1);
+    text(ITEM_X,lineY[i]=ITEM_Y0+i*ITEM_PITCH,items[i],((live>>i)&1)? red: grey,1);
  text(-1,HELP_Y,"A SELECT   B BACK   START RESUME",red,0);
  pageSkull();
 }
@@ -390,16 +446,37 @@ static Uint16 nextField(void)
  return hit;
 }
 
-/* A (or C) yes, B (or START) no */
-static int confirm(const char *question)
+/* any button, once the player has read it */
+static void notice(const char *a,const char *b)
 {Uint16 hit;
  clearRows(0,PAUSE_ROWS);
+ text(-1,88,a,red,1);
+ if (b)
+    text(-1,116,b,red,0);
+ text(-1,160,"PRESS A BUTTON",red,0);
+ do
+    hit=nextField();
+ while (!(hit&BUTTONS));
+}
+
+/* A (or C) yes, B (or START) no.  `sub` is the line of context over the question -- the slot being
+   overwritten, the level being loaded.  It is drawn HERE and nowhere else: the page is cleared
+   first, so anything painted before the call would go with it. */
+static int confirmSub(const char *sub,const char *question)
+{Uint16 hit;
+ clearRows(0,PAUSE_ROWS);
+ if (sub)
+    text(-1,64,sub,red,0);
  text(-1,88,question,red,1);
  text(-1,116,"A YES   B NO",red,1);
  do
     hit=nextField();
  while (!(hit&(BUTTONS)));
  return !!(hit&(PER_DGT_A|PER_DGT_C));
+}
+
+static int confirm(const char *question)
+{return confirmSub(NULL,question);
 }
 
 static void move(int d)
@@ -432,6 +509,339 @@ static int navigate(Uint16 hit)
  else
     return 0;
  return 1;
+}
+
+/* ------------------------------------------------------------------------ STATS */
+/* Doom's intermission numbers, read where the game already keeps them: mpStat[k] counted as the
+   level ran, mpTotal[] counted when the level was placed (MPRULES.C), the clock doomLevelTime,
+   which does not move while the game is paused because no tic runs.  SECRETS is new with this
+   build (DOOM_GAME.C DOOM_SECRET_BIT); a map whose total is 0 shows "--" rather than a division. */
+static void statPct(char *t,int n,int total)
+{if (total>0)
+    sprintf(t,"%d / %d   %d%%",n,total,(n*100)/total);
+ else
+    sprintf(t,"%d / %d    --",n,total);
+}
+
+static void statTime(char *t,int seconds)
+{sprintf(t,"%d:%02d",seconds/60,seconds%60);
+}
+
+/* one line: its name on the left, its value against STAT_RX */
+static void statRow(int i,const char *name,const char *value)
+{int y=STAT_Y0+i*ITEM_PITCH;
+ text(STAT_X,y,name,red,1);
+ textRight(STAT_RX,y,value,red,1);
+}
+
+static void drawStats(void)
+{char t[48],u[48];
+ int l=currentState.currentLevel,s=doomLevelTime/35,k,y;
+ pageStart("STATS",STAT_X,1,1);         /* no skull: there is nothing to choose here */
+ if (l>=0 && l<DOOM_NMLEVELS)
+    text(-1,STAT_NAME_Y,doomMapTitles[l],red,0);
+ if (mpPlayers>1)
+    {/* a row per player, small: P1..P4 against the same three totals */
+     text(112,STAT_ROW_Y0,"KILLS",red,0);
+     text(168,STAT_ROW_Y0,"ITEMS",red,0);
+     text(224,STAT_ROW_Y0,"SECRET",red,0);
+     if (mpCompetitive())
+	   text(280,STAT_ROW_Y0,"FRAGS",red,0);
+     for (k=0;k<mpPlayers;k++)
+	   {y=STAT_ROW_Y0+(k+1)*STAT_ROW_P;
+	    sprintf(t,"PLAYER %d",k+1);
+	    text(STAT_X,y,t,red,0);
+	    statPct(t,mpStat[k].kills,mpTotal[0]);   textRight(160,y,t,red,0);
+	    statPct(t,mpStat[k].items,mpTotal[1]);   textRight(216,y,t,red,0);
+	    statPct(t,mpStat[k].secrets,mpTotal[2]); textRight(276,y,t,red,0);
+	    if (mpCompetitive())
+	       {sprintf(t,"%d",mpStat[k].frags);
+	        textRight(312,y,t,red,0);
+	       }
+	   }
+     y=STAT_ROW_Y0+(mpPlayers+2)*STAT_ROW_P;
+     statTime(t,s);
+     sprintf(u,"TIME  %s",t);
+     text(STAT_X,y,u,red,0);
+     sprintf(u,"SKILL  %s",doom_skillName(mpSkill));
+     textRight(STAT_RX,y,u,red,0);
+    }
+ else
+    {k=mpCur;
+     statPct(t,mpStat[k].kills,mpTotal[0]);   statRow(0,"KILLS",t);
+     statPct(t,mpStat[k].items,mpTotal[1]);   statRow(1,"ITEMS",t);
+     statPct(t,mpStat[k].secrets,mpTotal[2]); statRow(2,"SECRETS",t);
+     statTime(t,s);
+     if (l>=0 && l<DOOM_NMLEVELS)
+	   {statTime(u,parTime[l]);
+	    strcat(t,"   PAR ");
+	    strcat(t,u);
+	   }
+     statRow(3,"TIME",t);
+     statRow(4,"SKILL",doom_skillName(mpSkill));
+     if (mpMode==MP_HORDE)
+	   {sprintf(t,"%d",doom_hordeWave());
+	    statRow(5,"WAVE",t);
+	   }
+    }
+ text(-1,HELP_Y,"B BACK   START RESUME",red,0);
+}
+
+/* -> 1 = START: the pause closes; 0 = back to the first page */
+static int stats(void)
+{Uint16 hit;
+ drawStats();
+ while (1)
+    {hit=nextField();
+     if (hit&PER_DGT_S)
+	   return 1;
+     if (hit&(PER_DGT_A|PER_DGT_B|PER_DGT_C))
+	   return 0;
+    }
+}
+
+/* ------------------------------------------------------------------------ WEAPONS */
+/* One line per weapon the player owns, in slot order, with Doom's damage and, beside the chosen
+   one, the pickup as the WAD draws it (pause_art.h, in the overlay).  The shareware WAD has no
+   pistol, plasma or BFG pickup: those lines simply show no picture. */
+static int wpnList(signed char *slot)
+{int w,n=0;
+ for (w=0;w<WPN_NM;w++)
+    if (doomPlayer.weaponOwned & (1<<w))
+       slot[n++]=(signed char)w;
+ return n;
+}
+
+static void wpnPicture(int w)
+{int x,y,pw,ph;
+ const unsigned char *s;
+ for (y=0;y<WPN_PICH;y++)               /* the box first: the previous weapon's picture goes */
+    {volatile unsigned char *d=HALF+((WPN_PICY+y)<<9)+WPN_PICX;
+     for (x=0;x<WPN_PICW;x++)
+	   d[x]=0;
+    }
+ if (w<0 || w>=PAUSE_PIC_NM || !(s=pausePic[w]))
+    return;
+ pw=pausePicW[w];
+ ph=pausePicH[w];
+ if (pw>WPN_PICW || ph>WPN_PICH)
+    return;                             /* a WAD with a bigger pickup than the box: none shown */
+ for (y=0;y<ph;y++)
+    {volatile unsigned char *d=HALF+((WPN_PICY+((WPN_PICH-ph)>>1)+y)<<9)+WPN_PICX+((WPN_PICW-pw)>>1);
+     for (x=0;x<pw;x++,s++)
+	   if (*s)
+	      d[x]=*s;
+    }
+}
+
+static void drawWeapons(signed char *slot,int n)
+{char t[64],u[16];
+ int i,w,a;
+ pageStart("WEAPONS",WPN_X,n,(1u<<n)-1);
+ for (i=0;i<n;i++)
+    {w=slot[i];
+     lineY[i]=WPN_Y0+i*ITEM_PITCH;
+     text(WPN_X,lineY[i],wpnName[w],w==doomPlayer.readyWeapon? red: grey,1);
+     textRight(WPN_RX,lineY[i],wpnDamage[w],red,0);
+    }
+ t[0]=0;
+ for (a=0;a<DOOM_NUMAMMO;a++)
+    {sprintf(u,"%s %d/%d  ",ammoName[a],doomPlayer.ammo[a],doomPlayer.maxAmmo[a]);
+     strcat(t,u);
+    }
+ text(-1,WPN_AMMO_Y,t,red,0);
+ text(-1,HELP_Y,"THE ONE IN HAND IS LIT   B BACK",red,0);
+ pageSkull();
+}
+
+static int weapons(void)
+{signed char slot[WPN_NM];
+ int n=wpnList(slot),shown=-1,i;
+ Uint16 hit;
+ sel=0;
+ for (i=0;i<n;i++)                      /* the page opens on the weapon in hand */
+    if (slot[i]==doomPlayer.readyWeapon)
+	   sel=i;
+ drawWeapons(slot,n);
+ while (1)
+    {if (shown!=sel)
+	   wpnPicture(slot[shown=sel]);
+     hit=step();
+     if (hit&PER_DGT_S)
+	   return 1;
+     if (hit&(PER_DGT_A|PER_DGT_B|PER_DGT_C))
+	   return 0;
+     navigate(hit);
+    }
+}
+
+/* ------------------------------------------------------------------------ SAVE / LOAD */
+/* A save is the START of the level being played (DOOM_SAVE.C): map, skill, health, armour,
+   weapons, ammo, backpack -- a PlayStation Doom password, in other words.  The footer says so, and
+   each slot names a level rather than a place in one.
+   The BUP library's 24 KB come from the memory the overlay loader left free, so the level's own
+   pool is never asked for them; they are given back by doing nothing, because the next image
+   rebuilds that buffer from scratch anyway. */
+static int savLoadPage;                 /* 0 = SAVE, 1 = LOAD */
+static int savDevice;
+
+static void savLine(int slot,char *big,char *sub)
+{const DoomSaveRec *r=doom_saveSlot(slot);
+ int t;
+ if (!r)
+    {sprintf(big,"%d  EMPTY",slot+1);
+     sub[0]=0;
+     return;
+    }
+ sprintf(big,"%d  %s  %s",slot+1,doom_levelLabel(r->level),doom_skillName(r->skill));
+ t=r->gameSeconds;
+ /* these are the values the level BEGAN with, not the ones in hand: that is what a save is
+    here, and a player who has since found a soulsphere must not read it as a mistake. */
+ sprintf(sub,"STARTED %d HP  %d AP  %d:%02d   %02d/%02d %02d:%02d",
+	   r->health,r->armorPoints,t/60,t%60,r->day,r->month,r->hour,r->min);
+}
+
+static const char *savDeviceName(int d)
+{return d? "< CARTRIDGE >": "< INTERNAL MEMORY >";
+}
+
+static void drawSave(void)
+{char big[48],sub[64];
+ int i;
+ pageStart(savLoadPage? "LOAD GAME": "SAVE GAME",SAV_X,DOOM_NMSAVES,(1u<<DOOM_NMSAVES)-1);
+ if (doomSaveDevices>1)
+    text(-1,SAV_DEV_Y,savDeviceName(savDevice),red,0);
+ else
+    text(-1,SAV_DEV_Y,"A SLOT HOLDS THE LEVEL AS IT BEGAN",red,0);
+ for (i=0;i<DOOM_NMSAVES;i++)
+    {savLine(i,big,sub);
+     lineY[i]=SAV_Y0+i*SAV_PITCH;
+     text(SAV_X,lineY[i],big,doom_saveSlotUsed(i)? red: grey,1);
+     if (sub[0])
+	   text(SAV_X,lineY[i]+SAV_SUB,sub,red,0);
+    }
+ text(-1,SAV_FOOT_Y,savLoadPage? "A LOAD RESTARTS THAT LEVEL FROM ITS BEGINNING":
+								   "SAVES THE START OF THIS LEVEL",red,0);
+ text(-1,HELP_Y,doomSaveDevices>1? "A CHOOSE   L R SAVE/LOAD   LEFT RIGHT DEVICE   B BACK":
+									       "A CHOOSE   L R SAVE/LOAD   B BACK",red,0);
+ pageSkull();
+}
+
+/* read the chosen device's file into the list.  The library is already open. */
+static void savRefresh(void)
+{doom_saveRead(savDevice);
+}
+
+/* -> 0 the slot was not written, 1 it was */
+static int savStore(int slot)
+{char t[64];
+ int shortBy=0,r=doom_saveRoom(savDevice,&shortBy);
+ if (r==BUP_UNFORMAT)
+    {sprintf(t,"%s IS NOT FORMATTED",savDevice? "THE CARTRIDGE": "THE INTERNAL MEMORY");
+     if (!confirmSub(t,"FORMAT IT?"))
+	   return 0;
+     if (doom_saveFormat(savDevice))
+	   {notice("FORMAT FAILED",NULL);
+	    return 0;
+	   }
+     savRefresh();
+    }
+ else if (r==BUP_NOT_ENOUGH_MEMORY)
+    {sprintf(t,"FREE %d BLOCK%s WITH THE SATURN MEMORY MANAGER",
+	    shortBy,(shortBy==1)? "": "S");
+     notice("NOT ENOUGH SPACE",t);
+     return 0;
+    }
+ else if (r)
+    {notice("NO BACKUP MEMORY",NULL);
+     return 0;
+    }
+ if (doom_saveSlotUsed(slot))
+    {char sub[64];
+     savLine(slot,t,sub);                /* two buffers: savLine writes 48 and 64 bytes */
+     if (!confirmSub(t,"OVERWRITE IT?"))
+	   return 0;
+    }
+ clearRows(0,PAUSE_ROWS);
+ text(-1,100,"SAVING",red,1);
+ r=doom_saveStore(savDevice,slot);
+ if (r)
+    {sprintf(t,"BACKUP ERROR %d",r);
+     notice("SAVE FAILED",t);
+     savRefresh();
+     return 0;
+    }
+ doom_saveSetDevice(savDevice);
+ return 1;
+}
+
+/* -> PAUSE_RESUME (back to the menu), PAUSE_RESTART (a record was applied), or -1 = START */
+static int saveLoad(char *freeBase,char *freeEnd)
+{Uint16 hit;
+ int r=-2;
+ if (freeEnd-freeBase<SAV_LIB+SAV_WORK+16)
+    {notice("NOT ENOUGH MEMORY",NULL);   /* never: doorwayCache has 66 000 bytes */
+     return PAUSE_RESUME;
+    }
+ freeBase=(char *)(((int)freeBase+3)&~3);
+ doom_bupOpen(freeBase,freeBase+SAV_LIB);
+ savDevice=doom_saveLoadDevice();
+ if (savDevice<0 || !doom_saveDevicePresent(savDevice))
+    {savDevice=doom_saveDevicePresent(1)? 1: 0;
+     if (!doom_saveDevicePresent(savDevice))
+	   {doom_bupClose();
+	    notice("NO BACKUP MEMORY FOUND",NULL);
+	    return PAUSE_RESUME;
+	   }
+    }
+ savLoadPage=0;
+ savRefresh();
+ sel=0;
+ drawSave();
+ while (r==-2)
+    {hit=step();
+     if (hit&PER_DGT_S)
+	   r=-1;
+     else if (hit&PER_DGT_B)
+	   r=PAUSE_RESUME;
+     else if (hit&(PER_DGT_TL|PER_DGT_TR))
+	   {savLoadPage=!savLoadPage;
+	    doom_playerSound(sfx_swtchn);
+	    drawSave();
+	   }
+     else if ((hit&(PER_DGT_L|PER_DGT_R)) && doomSaveDevices>1)
+	   {savDevice=!savDevice;
+	    savRefresh();
+	    doom_playerSound(sfx_pstop);
+	    drawSave();
+	   }
+     else if (navigate(hit))
+	   ;
+     else if (hit&(PER_DGT_A|PER_DGT_C))
+	   {doom_playerSound(sfx_pistol);
+	    if (!savLoadPage)
+	       {if (savStore(sel))
+		  notice("SAVED",NULL);
+	        savRefresh();
+	        drawSave();
+	       }
+	    else if (!doom_saveSlotUsed(sel))
+	       drawSave();                     /* an empty slot: nothing to load */
+	    else
+	       {char t[48],u[64];
+	        savLine(sel,t,u);
+	        if (confirmSub(t,"LOAD IT?  THIS LEVEL IS LOST"))
+		  {doom_saveApply(doom_saveSlot(sel));
+		   doom_saveSetDevice(savDevice);
+		   r=PAUSE_RESTART;
+		  }
+	        else
+		  drawSave();
+	       }
+	   }
+    }
+ doom_bupClose();
+ return r;
 }
 
 /* ------------------------------------------------------------------------ OPTIONS */
@@ -721,28 +1131,45 @@ static int options(void)
  return r;
 }
 
+/* ------------------------------------------------------------------------ lent to the MAP */
+/* PMAP.C rasterises its own pixels, but it borrows the letters, the field and the buttons rather
+   than carrying a second copy of them in the same overlay (pmap.h). */
+void pause_half(int h)
+{halfOff=h? PAUSE_HALF_BYTES: 0;
+}
+
+void pause_text(int x,int y,const char *t,int big,int dim)
+{text(x,y,t,dim? grey: red,big);
+}
+
+Uint16 pause_field(void)
+{return nextField();
+}
+
+Uint16 pause_held(void)
+{return held;
+}
+
 /* ------------------------------------------------------------------------ the entry */
 int pause_main(int k,char *freeBase,char *freeEnd)
-{Uint32 *sky=NULL;
- int r=-1,i;
+{int r=-1,i;
  Uint16 hit;
  pad=k;
  field=0;
  sel=ITEM_RESUME;
  lastField=vtimer;
  held=lastInputSampleP[k];              /* the START that opened it is not a press */
+ /* GCC14: the split sky's own bytes in B0 are NOT saved -- MPSKY.C makes them again on the way
+    out (mpSkyRepaintB0).  Saving them wanted 46208 bytes of the memory the loader leaves here,
+    which is 43105: the guard that stood here fired on EVERY split game, waited for START to be
+    released and returned, so the menu never opened -- the game froze for the read and carried
+    on (reported 2026-09-23).  The map browser gets those 46 KB of scratch instead. */
  if (mpSkyOn)
-    {freeBase=(char *)(((int)freeBase+3)&~3);
-     if (freeEnd-freeBase<skyBytes(NULL,0))
-	{while (!(lastInputSampleP[k]&PER_DGT_S))
-	    ;                           /* never: doorwayCache holds 66 000 bytes */
-	 return PAUSE_RESUME;
-	}
-     sky=(Uint32 *)freeBase;
-     vblankIn();                        /* the mist and the clouds go before their bytes do */
+    {vblankIn();                        /* the mist and the clouds go before the menu lands on them */
      VDP2R(0x20)=bufReg(0x20)&~0x0003;
-     skyBytes(sky,1);
     }
+ pmapFree=freeBase;
+ pmapEnd=freeEnd;
  saveSoundState();
  stopAllLoopedSounds();
  doom_playerSound(sfx_swtchn);
@@ -772,6 +1199,57 @@ int pause_main(int k,char *freeBase,char *freeEnd)
 		 drawMain();
 		}
 	    }
+	 else if (sel==ITEM_MAP)
+	    {if (doom_pmapBrowse(pmapFree,pmapEnd))
+		r=PAUSE_RESUME;
+	     else
+		{/* the browser left the map on the OTHER half: this page is painted unseen,
+		    and only then does the screen scroll back to it -- no flash of the map. */
+		 doom_playerSound(sfx_swtchn);
+		 drawMain();
+		 sel=ITEM_MAP;
+		 pageSkull();
+		 vblankIn();
+		 VDP2R(PAUSE_SCYIN0)=0;
+		}
+	    }
+	 else if (sel==ITEM_STATS || sel==ITEM_WEAPONS)
+	    {int back=sel;
+	     if (sel==ITEM_STATS? stats(): weapons())
+		r=PAUSE_RESUME;
+	     else
+		{doom_playerSound(sfx_swtchn);
+		 drawMain();
+		 sel=back;
+		 pageSkull();
+		}
+	    }
+	 else if (sel==ITEM_SAVE)
+	    {int a=saveLoad(pmapFree,pmapEnd);
+	     if (a<0)
+		r=PAUSE_RESUME;				   /* START from the page */
+	     else if (a==PAUSE_RESTART)
+		r=PAUSE_RESTART;			   /* a record was applied: the level it names starts */
+	     else
+		{doom_playerSound(sfx_swtchn);
+		 drawMain();
+		 sel=ITEM_SAVE;
+		 pageSkull();
+		}
+	    }
+	 else if (sel==ITEM_RESTART)
+	    {if (confirm("RESTART THIS LEVEL?"))
+		{/* the level over again with the arsenal it began with: DOOM_PLAYER.C armed
+		    every player's stash, SRUINS.C's main case 7 starts CFG_START_LEVEL. */
+		 mpStartLevel=currentState.currentLevel;
+		 doom_playerRestart();
+		 r=PAUSE_RESTART;
+		}
+	     else
+		{doom_playerSound(sfx_swtchx);
+		 drawMain();
+		}
+	    }
 	 else if (sel==ITEM_QUIT)
 	    {if (confirm("QUIT TO THE TITLE?"))
 		r=PAUSE_QUIT;
@@ -786,10 +1264,10 @@ int pause_main(int k,char *freeBase,char *freeEnd)
     }
  while ((held&BUTTONS)!=BUTTONS)        /* released: the hook must not see START again */
     nextField();
- if (sky)
+ if (mpSkyOn)
     {vblankIn();
-     VDP2R(0x20)=bufReg(0x20)&~0x0003;  /* menu and veil off before the sky's bytes return */
-     skyBytes(sky,0);
+     VDP2R(0x20)=bufReg(0x20)&~0x0003;  /* menu and veil off before the sky comes back */
+     mpSkyRepaintB0();
     }
  setRegs(0);
  if (r==PAUSE_RESUME)

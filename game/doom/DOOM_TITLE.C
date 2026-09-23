@@ -182,7 +182,8 @@ struct fireCtl                          /* read and written through the cache-th
  int yOff;                              /* master: the screen row that row `top` lands on  */
  int look;                              /* master: LOOK_*                                  */
  int shown;                             /* slave: the look VRAM holds (-1: none yet)       */
- int pad[11];
+ int reset;                             /* master: take the look, top and yOff below and rebuild */
+ int pad[10];
 };
 /* The fire's own tables sit AFTER its buffer, because the BASE of doorwayCache is borrowed by
    other code at the title -- MENU.C loadOverBase's picture temp, INTRO.C's sperm -- and the base
@@ -357,6 +358,21 @@ static void fireSlaveMain(void)
      *FTCSR=0x0;
      *CACHECNTRL=0x10;
      *CACHECNTRL=0x01;
+     /* GCC14: THE FIRE IS HANDED OVER, NOT TAKEN BACK.  This is what fireSlaveMain's own entry
+	does, in the loop, so the master never has to halt a slave that is already burning: SSHOFF
+	in the middle of a VDP2 blit did not give it back.  The load's fire then painted nothing at
+	all and what stayed on screen was the TITLE's image, read through PLAYPAL instead of its own
+	bank -- white speckles over black and a slab of pink, which are just the fire's own levels
+	0..36 as PLAYPAL indices (photo, 2026-09-23).  The three tests below are all false after a
+	reset, so they cost nothing. */
+     if (c->reset)
+	{look=c->look;
+	 top=c->top;
+	 yOff=c->yOff;
+	 fireReset(a,look,top,yOff);
+	 c->reset=0;
+	 c->shown=look;
+	}
      if (c->top<top || c->yOff!=yOff)   /* a load takes the rows the title lent out, and the
 					   whole screen with them */
 	{if (c->top<top)
@@ -520,6 +536,7 @@ void doom_titlePicture(void)
  fireField=0;
  fireEvery=GP_FIRE_FIELDS;
  dmaNoScu=1;                            /* the slave writes VDP2 VRAM: no SCU-DMA on the B-bus */
+ c->reset=0;
  startSlave(fireSlaveMain);             /* resets the slave, whatever it ran */
  fireOn=1;
  vblankUserHook=fireEvery>0? doom_fireKick: NULL;
@@ -556,7 +573,9 @@ static void doom_loadProgress(int read,int total)
     t=256;
  FIRECTL(fireArea())->pQ8=GP_FIRE_LOAD_Q0-
     (((GP_FIRE_LOAD_Q0-GP_FIRE_LOAD_Q1)*t)>>8);
- fireWord(fireArea(),(read*100)/(total>0? total: 1));
+ if (!loadAfterDeath)                   /* a death load is BLACK: the word would come out as a
+										 white band across the bottom of it */
+    fireWord(fireArea(),(read*100)/(total>0? total: 1));
  /* GCC14: the logo BURNS AWAY.  The flames grow with the load -- the decay walks from
     FIRE_LOAD_Q0 down to FIRE_LOAD_Q1, so they go from a quarter of the band to longer than the
     screen -- but a fire is a random thing and the last cold cells let the word show through.  At
@@ -623,11 +642,10 @@ static void fireWord(struct fireArea *a,int pct)
  firePct(a,pct);
  for (y=0;y<MASK_H;y++)
     {volatile unsigned int *v=(volatile unsigned int *)(VRAM_B1+((WORD_Y0+y)<<9));
-     const unsigned char *m=a->M[y],*d=a->MD[y];
+     const unsigned char *m=a->M[y];     /* the body alone: the grown plane was its black
+										   outline, and the word reads better without it */
      for (x=0;x<FIRE_W/4;x++)
-	{unsigned int w=base,hl=MASKLONG(d,x),mk=MASKLONG(m,x);
-	 if (hl!=0xffffffffu)
-	    w=(w & hl)|(~hl & FIRE_INK);
+	{unsigned int w=base,mk=MASKLONG(m,x);
 	 if (mk!=0xffffffffu)
 	    w=(w & mk)|(~mk & FIRE_ROUGE);
 	 v[x]=w;
@@ -700,11 +718,20 @@ void doom_loadingScreen(int fd)
  fireField=0;
  fireEvery=GP_FIRE_LOAD_FIELDS;
  dmaNoScu=1;                            /* the slave writes VDP2 VRAM: no SCU-DMA on the B-bus */
- if (!fireOn)
-    {c->shown=-1;
-     startSlave(fireSlaveMain);         /* resets the slave: the wall renderer's, idle */
-     fireOn=1;
+ /* GCC14: a fire that is ALREADY burning is handed the load's screen, not halted and restarted.
+    Taking the chip back on every load was the fix for a band that kept the pixels of the LAST
+    load; it cost the load its fire altogether, because a slave stopped in the middle of a VDP2
+    blit does not come back.  c->reset asks the running loop to do exactly what startSlave's
+    entry does.  When the flag is wrong -- when the slave is somewhere else -- nothing answers,
+    and the wait below takes the chip back for real. */
+ c->shown=-1;
+ if (fireOn)
+    c->reset=1;                         /* it is burning: give it the new look, top and tables */
+ else
+    {c->reset=0;
+     startSlave(fireSlaveMain);         /* it is running something else, or nothing */
     }
+ fireOn=1;
  vblankUserHook=fireEvery>0? doom_fireKick: NULL;
  *(Uint16 volatile *)0x21000000=0xffff; /* one step now: the repaint in the load's look */
  SCL_DisplayFrame();                    /* the registers reach the chip (frame mode 3) */
@@ -712,6 +739,21 @@ void doom_loadingScreen(int fd)
  t=vtimer;                              /* the first image shows the load's colours and letters */
  while (c->shown!=look && vtimer-t<30)
     ;
+ if (c->shown!=look)
+    {/* GCC14: HALF A SECOND AND NO ANSWER -- the slave is not running the fire.  fireOn said it
+	 was, so startSlave was skipped above, and the band kept the pixels of the LAST load: the
+	 flames stood still for the whole screen (reported 2026-09-23).  Whatever left the slave
+	 elsewhere, take it back here rather than show a frozen fire.  It costs one SMPC exchange,
+	 and only on the load where it went wrong. */
+     c->shown=-1;
+     c->reset=0;
+     startSlave(fireSlaveMain);
+     fireOn=1;
+     *(Uint16 volatile *)0x21000000=0xffff;
+     t=vtimer;
+     while (c->shown!=look && vtimer-t<30)
+	   ;
+    }
  fireWord(a,0);                         /* the word, over the base the slave just laid */
 }
 

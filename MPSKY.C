@@ -746,6 +746,21 @@ void mpSkyPlayers(int players)
     SclProcess=1;
 }
 
+/* GCC14: THE TWO THINGS THE PAUSE WRITES OVER, MADE AGAIN.  Its menu is a bitmap at B0 and it
+   covers the mist's cells (HAZE_CHARS) and the cloud plane's names (CLOUD_MAP); the cloud cells
+   and the mist's own plane are in B1 and it never touches them.  Everything those two are built
+   from is still in RAM -- the permutation, the palette, the layout -- and makeMist is
+   deterministic, so what comes back is what was there.
+   The pause used to SAVE those bytes instead, into the memory the overlay loader leaves it: 46208
+   wanted against 43105 free, because the free area is doorwayCache LESS the overlay's own 22895.
+   Its guard therefore fired on every split game and the menu never opened at all (2026-09-23). */
+void mpSkyRepaintB0(void)
+{if (!mpSkyOn)
+    return;
+ makeMist();
+ mapRows(layout);
+}
+
 void mpSkyOff(void)
 {if (!mpSkyOn)
     return;

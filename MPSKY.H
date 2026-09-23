@@ -5,6 +5,7 @@
 #include <sega_mth.h>
 
 extern int mpSkyOn;             /* the split sky owns RBG0, NBG0, NBG1 and both windows */
+void mpSkyRepaintB0(void);      /* the mist's cells and the cloud names, after something used B0 */
 
 void mpSkyPlayers(int players); /* 2-4: build the sky (once a level) or lay it for this count */
 void mpSkyOff(void);            /* level load: the solo set-up takes the VDP2 back */
