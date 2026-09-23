@@ -142,7 +142,8 @@ static int doomSee(Sprite *a,Sprite *b)
  if (k>=0)
     {m=sightMemo+(((a->s<<2)+k)&(DOOM_SIGHT_MEMO-1));
      if (m->k==(signed char)k && m->look==(short)a->s && m->seen==(short)b->s &&
-	 (unsigned short)(doomLevelTime-m->tic)<=(unsigned short)GP_MONSTER_SIGHT_SHARE)
+	 (unsigned short)((unsigned short)doomLevelTime-m->tic)<=
+	 (unsigned short)GP_MONSTER_SIGHT_SHARE)   /* both 16 bits: the subtraction wraps as it must */
 	return m->ans;
     }
 #endif
