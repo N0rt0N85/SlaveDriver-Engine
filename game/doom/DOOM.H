@@ -174,6 +174,9 @@ void        doom_spawnBlood(MthXyz *pos,int sector,int damage);
 int         doom_lineAttack(DoomActor *src,int yaw,int damage);   /* returns the hitScan code    */
 void        doom_missileLightsReset(void);     /* every level: forget the missiles carrying a light */
 void        doom_sightShareReset(void);        /* every level: empty the shared sight answers */
+void        doom_sightSnap(void);              /* master, at the traversal kick: freeze the marines */
+void        doom_sightBatch(void);             /* SLAVE, before that traversal: answer the tic's pairs */
+extern int  nmSightBatch;                      /* what the last batch answered (overlay `sb:`)  */
 void        doom_actorLevelInit(void);         /* level start: sound targets, nmSpawnFail       */
 Sprite     *doom_targetSprite(Object *t);      /* player -> camera, DoomActor -> sprite, else NULL */
 int         doom_targetAlive(Object *t);       /* player: currentState.health; actor: health && DF_SHOOTABLE */

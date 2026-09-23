@@ -3170,8 +3170,17 @@ static volatile int slaveDone;
    A negative slack means the master waited for the traversal (pipe: says the same in spins). */
 static volatile int travDoneLine;
 #define TRAVDONELINE (*(volatile int *)((int)&travDoneLine|0x20000000))
+static volatile int sightDoneLine;
+#define SIGHTDONELINE (*(volatile int *)((int)&sightDoneLine|0x20000000))
 static int pipeKickLine;
-int slaveIdle,slaveTrav,slaveSlack;
+static int slaveKicked;       /* drawWalls really kicked the slave: drawWallsFinish may wait */
+int slaveIdle,slaveSight,slaveTrav,slaveSlack;
+/* GCC14: htimer is zeroed at the top of the game loop (SRUINS.C), and this probe straddles that:
+   the kick is at the end of an image, the slave finishes in the next one.  The first reading of
+   it gave trav = -822 and slack = 0 on console (2026-09-23) -- the reset, not a measure.  SRUINS
+   leaves the count the image reached here just before zeroing, so a stamp smaller than the kick's
+   is simply one image further on. */
+int lastFrameLines=1;
 static MthMatrix pipeMatrix;   /* copie stable : viewTransform sera depile entre-temps */
 static int pipeInFlight;
 static int pipeDone;
@@ -3304,7 +3313,12 @@ void wallRenderSlaveMain(void)
      job=slaveJob;
      SLAVESTEP=0x10|job;
      if (job==1)
-	{wallsTraverse(&pipeMatrix,1);
+	{/* GCC14: the sight batch rides THIS kick -- it takes none of its own.  A kick that lands
+	    while the slave is clearing its capture flag is lost and hangs both chips (the bounded
+	    wait in wallsPipeJoin), so a third kick an image is the one thing not to add here. */
+	 CFG_SIGHT_BATCH();
+	 SIGHTDONELINE=HTIMER;  /* what the batch cost, before the traversal starts */
+	 wallsTraverse(&pipeMatrix,1);
 	 TRAVDONELINE=HTIMER;   /* the probe's `trav` and `slack`, wallsPipeJoin */
 	}
      else
@@ -3858,6 +3872,7 @@ void wallsPipeKick(MthMatrix *view)
  pipeInFlight=1;
  slaveIdle=(int)htimer-slaveDone;  /* it has done nothing since it finished its share of the draw */
  pipeKickLine=(int)htimer;
+ CFG_SIGHT_SNAP();          /* the marines as they now stand: the slave reads no sprite */
  *(Uint16 volatile *)0x21000000=0xffff;
 #endif
 }
@@ -3909,8 +3924,16 @@ void wallsPipeJoin(void)
  pipeInFlight=0;
  slaveJob=0;
  pipeSpin=i;               /* 0 = the traversal fit entirely in the tail */
- slaveTrav=TRAVDONELINE-pipeKickLine;    /* what the traversal cost the slave */
- slaveSlack=(int)htimer-TRAVDONELINE;    /* tail left over once it was done */
+ {/* every stamp on the same line count as the kick's: one taken after the zeroing is an image
+     further on (lastFrameLines) */
+  int s=SIGHTDONELINE,t=TRAVDONELINE,now=(int)htimer;
+  if (s<pipeKickLine) s+=lastFrameLines;
+  if (t<pipeKickLine) t+=lastFrameLines;
+  if (now<pipeKickLine) now+=lastFrameLines;
+  slaveSight=s-pipeKickLine;             /* what the sight batch cost the slave */
+  slaveTrav=t-s;                         /* ... and the traversal after it */
+  slaveSlack=now-t;                      /* tail left over once both were done */
+ }
 #if WALLPIPE>=2
  pipeDone=1;
 #endif
@@ -4019,7 +4042,7 @@ void drawWalls(int k,MthMatrix *view)
      travKicked=1;
     }
  kickLine=htimer;
- *(Uint16 volatile *)0x21000000=0xffff; CFG_PROF("Master Draw");
+ *(Uint16 volatile *)0x21000000=0xffff; slaveKicked=1; CFG_PROF("Master Draw");
  for (i=updateListSize-1;i>slaveDrawStart;i--)
     {parms[0].x=updateList[i]->xmin+viewCx;parms[0].y=updateList[i]->ymin+viewCy;
      parms[1].x=updateList[i]->xmax+viewCx;parms[1].y=updateList[i]->ymax+viewCy;
@@ -4048,6 +4071,16 @@ void drawWalls(int k,MthMatrix *view)
 
 void drawWallsFinish(void)
 {int i,arrive,dir;
+ /* GCC14: the automap draws INSTEAD of the view (CFG_MAP_HIDES_VIEW, SRUINS.C), so drawWalls --
+    and with it the slave's kick -- never ran.  This function waited for a signal nobody would
+    ever send: pressing X in solo froze the game, master `IN ROOT/WALLS/SLAVE WAIT` against
+    `SLAVE JOB 0 STEP 1`, the slave parked at its own wait (console 2026-09-23).  Nothing below
+    means anything without that draw; the light list still has to age. */
+ if (!slaveKicked)
+    {updateLights();
+     return;
+    }
+ slaveKicked=0;
  /* wait for slave to finish */
  arrive=htimer;
  i=0; CFG_PROF("Slave Wait");

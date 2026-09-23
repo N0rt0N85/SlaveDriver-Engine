@@ -113,15 +113,46 @@ const DoomAction doomActions[DOOM_NUMACTIONS]=
    Direct mapped -- a collision simply traces again.  Only a marine is filed: monster-to-monster
    sight (the noise target) is rare and its second leaf would not fit the key. */
 #if GP_MONSTER_SIGHT_SHARE
-#define DOOM_SIGHT_MEMO 32
+/* GCC14: 32 leaves PER MARINE.  The key holds which marine, so the distinct keys are as many as
+   there are players, and a table that did not grow with them thrashed exactly where sight costs
+   most: on console, E1M3 in 2 players spends 8.8-12.5 ms a frame in Sight against 0.3-8.6 solo
+   (captures 2026-09-23).  Four slots per leaf bucket, one per marine: no player ever takes a
+   slot from another. */
+#define DOOM_SIGHT_MEMO (32*MPMAX)
+#define DOOM_SIGHT_SLOT(leaf,k) (((((leaf)<<2)+(k)))&(DOOM_SIGHT_MEMO-1))
 typedef struct
 {short look;                            /* leaf the looker stands in                            */
  short seen;                            /* leaf the marine stands in                            */
  unsigned short tic;                    /* doomLevelTime when it was traced                     */
+ unsigned short qstamp;                 /* image this pair was last queued for the batch on     */
  signed char k;                         /* which marine, -1 = free                              */
  signed char ans;                       /* what canSee answered                                 */
 } DoomSightMemo;
 static DoomSightMemo sightMemo[DOOM_SIGHT_MEMO];
+
+/* GCC14: THE SLAVE'S SIGHT BATCH.  Every pair the tic had to trace is written down here with the
+   point it traced from; in the tail of the image the slave answers them all again against the
+   marines as they now stand, and fills the file, so the next tic reads instead of tracing.
+   Where it runs: at the head of the traversal the slave already does in the tail (WALLS.C
+   wallRenderSlaveMain, job 1).  It takes NO kick of its own -- a kick that lands while the slave
+   is clearing its capture flag is lost and hangs both chips (wallsPipeJoin, seen on console
+   2026-09-23), so the one thing not to do here is add a third one an image.  And by then Weapon,
+   the HUD and the overlay have run: nothing of the master's spawns or frees sprites any more.
+   It still reads no sprite at all -- only the snapshot below and the level's geometry -- because
+   the master owns the sprites and this must never depend on that. */
+#define DOOM_SIGHT_JOBS 48
+typedef struct
+{MthXyz pos;                            /* where the monster that asked stood                   */
+ short leaf,k;
+} DoomSightJob;
+static DoomSightJob sightJob[DOOM_SIGHT_JOBS];
+static int nmSightJobs;
+static MthXyz sightEye[MPMAX];          /* the marines, copied at the kick: the slave reads this */
+static short sightEyeLeaf[MPMAX];
+static int nmSightEyes;
+static unsigned short sightBatchTic;
+static unsigned short sightQueueStamp=1;   /* bumped once an image: one job per pair, not per ask */
+int nmSightBatch;                       /* what the last batch answered (overlay) */
 #endif
 
 void doom_sightShareReset(void)
@@ -129,7 +160,58 @@ void doom_sightShareReset(void)
 #if GP_MONSTER_SIGHT_SHARE
  int i;
  for (i=0;i<DOOM_SIGHT_MEMO;i++)
-    sightMemo[i].k=-1;
+    {sightMemo[i].k=-1;
+     sightMemo[i].qstamp=0;
+    }
+ nmSightJobs=0;
+ nmSightEyes=0;
+ nmSightBatch=0;
+#endif
+}
+
+/* The master, in the tail (CFG_SIGHT_SNAP): freeze what the slave will need.  Called where the
+   traversal is kicked -- the tic, Post, the weapon and the drawing are all behind us. */
+void doom_sightSnap(void)
+{
+#if GP_MONSTER_SIGHT_SHARE
+ int k;
+ nmSightEyes=0;
+ for (k=0;k<mpPlayers && k<MPMAX;k++)
+    {Sprite *p=mpBody[k];
+     if (!p)
+	break;
+     sightEye[k]=p->pos;
+     sightEyeLeaf[k]=(short)p->s;
+     nmSightEyes++;
+    }
+ sightBatchTic=(unsigned short)doomLevelTime;
+ if (!++sightQueueStamp)                /* 0 means "never queued" in a fresh table */
+    sightQueueStamp=1;
+#endif
+}
+
+/* The slave (CFG_SIGHT_BATCH), at the head of its traversal. */
+void doom_sightBatch(void)
+{
+#if GP_MONSTER_SIGHT_SHARE
+ int i,n=0;
+ for (i=0;i<nmSightJobs;i++)
+    {int leaf=sightJob[i].leaf,k=sightJob[i].k;
+     DoomSightMemo *m;
+     if (k<0 || k>=nmSightEyes)
+	continue;                       /* that marine left between the tic and here */
+     if (leaf<0 || leaf>=level_nmSectors)
+	continue;                       /* this runs on the SLAVE: never index on a torn read */
+     m=sightMemo+DOOM_SIGHT_SLOT(leaf,k);
+     m->look=(short)leaf;
+     m->seen=sightEyeLeaf[k];
+     m->tic=sightBatchTic;
+     m->k=(signed char)k;
+     m->ans=(signed char)canSeePos(&sightJob[i].pos,leaf,sightEye+k,sightEyeLeaf[k]);
+     n++;
+    }
+ nmSightJobs=0;                         /* the next tic writes its own list */
+ nmSightBatch=n;
 #endif
 }
 
@@ -139,24 +221,41 @@ static int doomSee(Sprite *a,Sprite *b)
 #if GP_MONSTER_SIGHT_SHARE
  DoomSightMemo *m=NULL;
  int k=mpIndexOfSprite(b);
+ int hit=0;
  if (k>=0)
-    {m=sightMemo+(((a->s<<2)+k)&(DOOM_SIGHT_MEMO-1));
-     if (m->k==(signed char)k && m->look==(short)a->s && m->seen==(short)b->s &&
-	 (unsigned short)((unsigned short)doomLevelTime-m->tic)<=
-	 (unsigned short)GP_MONSTER_SIGHT_SHARE)   /* both 16 bits: the subtraction wraps as it must */
-	return m->ans;
+    {m=sightMemo+DOOM_SIGHT_SLOT(a->s,k);
+     hit=(m->k==(signed char)k && m->look==(short)a->s && m->seen==(short)b->s &&
+	  (unsigned short)((unsigned short)doomLevelTime-m->tic)<=
+	  (unsigned short)GP_MONSTER_SIGHT_SHARE);  /* both 16 bits: the subtraction wraps as it must */
     }
+ if (!hit)
 #endif
- CFG_PROF("Sight");
- r=canSee(a,b);
- CFG_PROF_END();
+    {CFG_PROF("Sight");
+     r=canSee(a,b);
+     CFG_PROF_END();
+    }
 #if GP_MONSTER_SIGHT_SHARE
+ else
+    r=m->ans;
  if (m)
-    {m->look=(short)a->s;
-     m->seen=(short)b->s;
-     m->tic=(unsigned short)doomLevelTime;
-     m->k=(signed char)k;
-     m->ans=(signed char)r;
+    {if (!hit)
+	{m->look=(short)a->s;
+	 m->seen=(short)b->s;
+	 m->tic=(unsigned short)doomLevelTime;
+	 m->k=(signed char)k;
+	 m->ans=(signed char)r;
+	}
+     /* Ask the slave for this pair again in the tail, whether we traced it or read it: a list
+	built from the MISSES alone starves itself -- everything the batch answered is then a hit,
+	nothing is asked for again, and the image after that misses all over again.  Once per pair
+	per image (qstamp), so one leaf full of monsters queues one job. */
+     if (m->qstamp!=sightQueueStamp && nmSightJobs<DOOM_SIGHT_JOBS)
+	{m->qstamp=sightQueueStamp;
+	 sightJob[nmSightJobs].pos=a->pos;
+	 sightJob[nmSightJobs].leaf=(short)a->s;
+	 sightJob[nmSightJobs].k=(short)k;
+	 nmSightJobs++;
+	}
     }
 #endif
  return r;

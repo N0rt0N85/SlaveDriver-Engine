@@ -2532,7 +2532,11 @@ int runLevel(char *filename,int levelNm)
  crashInstall();                    /* the vectors again: a level load may have re-registered */
 
  while(1)
-    {htimer=0;
+    {lastFrameLines=(int)htimer;   /* GCC14: the count this image reached -- the slave's probe
+				      straddles this zeroing (WALLS.C wallsPipeJoin) */
+     if (lastFrameLines<1)
+	lastFrameLines=1;
+     htimer=0;
      crashBeat();                   /* freeze report: armed while the loop turns (CRASH.H) */
      mpPollStart();                 /* START on the next pad: that player joins, once */
      soundNmEars=(mpPlayers>1)? mpPlayers: 0;   /* GCC14: every player hears (SOUND.C) */
@@ -2911,7 +2915,12 @@ int runLevel(char *filename,int levelNm)
 			 slave's share.  The second divides SLAVECMDS of the tree to give
 			 the cost of one record.  (lod is on the fps line, -60)
 		 slv   : the slave's spare time, in the same hblank lines as `time:` (one line
-			 is about 63 us, and a 60 Hz frame is 262 of them), as idle/trav/slack.
+			 is about 63 us, and a 60 Hz frame is 262 of them), as
+			 idle/sight/trav/slack.  `sight` is the batch of lines of sight the
+			 slave answers for the next tic, which rides the traversal's kick and
+			 runs just before it (WALLS.C, DOOM_VERBS.C doom_sightBatch): it eats
+			 into `slack`, and when slack goes negative the master is waiting for
+			 the pair -- the batch no longer fits and its list must be shortened.
 			 The slave has exactly two jobs -- its share of the wall draw, and the
 			 NEXT image's traversal, started in the tail:
 			   idle  from the line it finished its share on to the line the
@@ -2924,8 +2933,8 @@ int runLevel(char *filename,int levelNm)
 				 idle window is the only room left.
 			 (this replaced `pipe`, the spin count at the join, which said only
 			 whether slack was negative and not by how much) */
-     drawStringf(-158,-70,1,"polys:%d/%d slv:%d/%d/%d",nmPolys+nmSlavePolys,nmSlavePolys,
-		 slaveIdle,slaveTrav,slaveSlack);
+     drawStringf(-158,-70,1,"polys:%d/%d slv:%d/%d/%d/%d",nmPolys+nmSlavePolys,nmSlavePolys,
+		 slaveIdle,slaveSight,slaveTrav,slaveSlack);
 
      /* LEGEND  obj : objects of the pool in use / its size (OBJECT.C MAXOBJECTS).  Everything
 	       the level places takes one, and so does every shot, puff and drop of blood.
@@ -3045,7 +3054,11 @@ int runLevel(char *filename,int levelNm)
 	}
      /* used to be here */
      EZ_closeCommand();
-     SPR_WaitDrawEnd();
+     /* GCC14: waiting for the VDP1 to finish the image.  It was the biggest thing inside ROOT
+	that belonged to no node of the tree: on console 7 to 38 ms an image were unaccounted for,
+	more than several named nodes (E1M3 captures 2026-09-23).  Named, so a capture says
+	whether the frame is held by the master's own work or by the drawing hardware. */
+     CFG_PROF("VDP1 Wait"); SPR_WaitDrawEnd(); CFG_PROF_END();
      lastDraw=htimer-lastCalc;
      /* GCC14: the wall tiles this image took from the last one go in now the VDP1 is done with it
 	(PIC.H) -- before the display, and before the gap's kick */
@@ -3094,7 +3107,13 @@ int runLevel(char *filename,int levelNm)
      else
 	vspeedSwitchCount=0;
      ENABLE;
+     /* GCC14: and the wait for the field the image is shown on.  The frame rate is quantised to
+	60/N -- every capture reads 20, 15 or 12 -- so what is spent here is the rounding up to the
+	next whole field: work removed anywhere else only shows as frames per second once this one
+	has been eaten through. */
+     CFG_PROF("VBlank Wait");
      while (vtimer<smoothVTime) ;
+     CFG_PROF_END();
 
      /* sometimes a vtimer switch can occur in here */
      SCL_DisplayFrame();

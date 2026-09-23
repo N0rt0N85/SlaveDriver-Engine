@@ -229,6 +229,8 @@ short doom_drawSeq(Sprite *o,MthXyz *eye);           /* DOOM_ACTOR.C: the rotati
    neighbour's floor tile over a monster's feet).  eye: where the camera stands when drawSprites
    sends SIGNAL_VIEW -- the rotation drawn is picked there, after the leaves are. */
 #define CFG_SPRITE_LEAVES(v,e,c) doom_spriteLeaves(v,e,c) /* WALLS.C wallsTraverse, drawWalls: once the draw order is known */
+#define CFG_SIGHT_SNAP()     doom_sightSnap()   /* WALLS.C wallsPipeKick: freeze what the slave reads */
+#define CFG_SIGHT_BATCH()    doom_sightBatch()  /* WALLS.C, ON THE SLAVE, at the head of its traversal */
 #define CFG_SPR_FIRST(s)      doom_sprFirst(s)       /* WALLS.C drawSprites                     */
 #define CFG_SPR_NEXT(o)       ((doomDrawNext[(o)-sprites]<0)? NULL: sprites+doomDrawNext[(o)-sprites])
 #define CFG_LEVEL_NAME(l)    doom_levelName(l)       /* SRUINS.C:2510 (BIGMAP.C levelGraph)     */
@@ -375,6 +377,8 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_LIFT_STOP_SND    1
 #define CFG_LIFT_MOVED(o)
 #define CFG_SPRITE_LEAVES(v,e,c)
+#define CFG_SIGHT_SNAP()
+#define CFG_SIGHT_BATCH()
 #define CFG_SPR_FIRST(s)     sectorSpriteList[s]
 #define CFG_SPR_NEXT(o)      (o)->next
 #define CFG_LIGHTRADIUS      256

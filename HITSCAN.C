@@ -346,37 +346,44 @@ static int wallHitScan(MthXyz *ray,MthXyz *pos,int sector,
 }
 
 
-int canSee(Sprite *s1,Sprite *s2)
+/* GCC14: the line of sight between two POINTS, each with the leaf it stands in.  canSee below is
+   this one reading the two sprites; a batch that must not touch a sprite at all -- the slave's,
+   which runs while the master is free to spawn and free them (DOOM_VERBS.C) -- calls this form on
+   positions it copied first.  It reads only level_wall, level_sector and the reject table. */
+int canSeePos(const MthXyz *p1,int s1,const MthXyz *p2,int s2)
 {MthXyz v,pos,outPos;
- int sector,outSector;
+ int outSector;
  int d2s,d2w;
- /* GCC14: the level's reject table, when it has one (SLEVEL.H): two sectors it says never see
-    each other are not traced -- Doom's P_CheckSight reads its REJECT first */
- if (!level_maySee(s1->s,s2->s))
+ /* the level's reject table, when it has one (SLEVEL.H): two sectors it says never see each
+    other are not traced -- Doom's P_CheckSight reads its REJECT first */
+ if (!level_maySee(s1,s2))
     return 0;
- v.x=s2->pos.x-s1->pos.x;
- v.y=s2->pos.y-s1->pos.y;
- v.z=s2->pos.z-s1->pos.z;
+ v.x=p2->x-p1->x;
+ v.y=p2->y-p1->y;
+ v.z=p2->z-p1->z;
  while (abs(v.x)>F(8) || abs(v.y)>F(8) || abs(v.z)>F(8))
     {v.x>>=1;
      v.y>>=1;
      v.z>>=1;
     }
- pos=s1->pos;
- sector=s1->s;
- if (!wallHitScan(&v,&pos,sector,&outPos,&outSector,s2->s))
+ pos=*p1;
+ if (!wallHitScan(&v,&pos,s1,&outPos,&outSector,s2))
     return 1;
  /* see if collision point is closer than object */
- d2s=f(s1->pos.x-s2->pos.x)*f(s1->pos.x-s2->pos.x)+
-     f(s1->pos.y-s2->pos.y)*f(s1->pos.y-s2->pos.y)+
-     f(s1->pos.z-s2->pos.z)*f(s1->pos.z-s2->pos.z);
+ d2s=f(p1->x-p2->x)*f(p1->x-p2->x)+
+     f(p1->y-p2->y)*f(p1->y-p2->y)+
+     f(p1->z-p2->z)*f(p1->z-p2->z);
  assert(d2s>=0);
- d2w=f(s1->pos.x-outPos.x)*f(s1->pos.x-outPos.x)+
-     f(s1->pos.y-outPos.y)*f(s1->pos.y-outPos.y)+
-     f(s1->pos.z-outPos.z)*f(s1->pos.z-outPos.z);
+ d2w=f(p1->x-outPos.x)*f(p1->x-outPos.x)+
+     f(p1->y-outPos.y)*f(p1->y-outPos.y)+
+     f(p1->z-outPos.z)*f(p1->z-outPos.z);
  assert(d2w>=0);
  if (d2s>d2w)
     return 0;
  else
     return 1;
+}
+
+int canSee(Sprite *s1,Sprite *s2)
+{return canSeePos(&s1->pos,s1->s,&s2->pos,s2->s);
 }
