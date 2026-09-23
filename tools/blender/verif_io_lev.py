@@ -105,12 +105,46 @@ def verifier(chemin):
             ecarts.append("tuile[%d] rend %d pixels au lieu de %d"
                           % (i, len(px), t["w"] * t["h"]))
             break
-        if max(px) >= 256:
-            ecarts.append("tuile[%d] indice %d hors palette" % (i, max(px)))
-            break
+        # ⚠ `max(px) >= 256` ETAIT ICI, ET NE POUVAIT PAS TIRER : `px` est un `bytes`, donc chacun
+        # de ses elements vaut 0..255 par construction du type. Un controle qui ne peut pas se
+        # declencher a exactement la meme sortie qu'un controle qui passe, et fait croire que la
+        # palette a ete verifiee. (Trouve le 24-09 par relecture contradictoire.)
+        # Ce qui suit, LUI, peut tirer : le flux RLE doit etre consomme entierement, au bourrage de
+        # mot pres. Un flux tronque rendrait moins de pixels (deja vu au-dessus) mais un flux TROP
+        # LONG -- un convertisseur qui ecrit un bloc de trop -- passait jusqu'ici inapercu.
+        if "rle" in t:
+            lu = _consomme_rle(t["rle"], t["w"] * t["h"])
+            if lu is None:
+                ecarts.append("tuile[%d] : le flux RLE se termine avant les %d pixels"
+                              % (i, t["w"] * t["h"]))
+                break
+            if not (0 <= len(t["rle"]) - lu <= 3):
+                ecarts.append("tuile[%d] : %d octets de flux RLE pour %d consommes"
+                              % (i, len(t["rle"]), lu))
+                break
     return ecarts, dict(secteurs=len(M["sectors"]), murs=len(M["walls"]),
                         faces=len(M["faces"]), tuiles=len(mine["tiles"]),
                         palettes=len(mine["palettes"]))
+
+
+def _consomme_rle(data, nm_pixels):
+    """Combien d'octets le decodeur RLE consomme pour rendre nm_pixels, ou None s'il en manque.
+
+    Deuxieme ecriture de levdata.unrle, volontairement independante, et qui rend EN PLUS le
+    curseur -- ce que l'originale ne fait pas. Sans ce curseur on ne peut dire que « le flux rend
+    assez de pixels », jamais « le flux fait la bonne longueur »."""
+    out = i = 0
+    n = len(data)
+    while out < nm_pixels:
+        if i + 1 >= n:
+            return None
+        z, lit = data[i], data[i + 1]
+        i += 2
+        if i + lit > n:
+            return None
+        out += z + lit
+        i += lit
+    return i
 
 
 def main(argv=None):

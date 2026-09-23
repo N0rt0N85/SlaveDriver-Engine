@@ -16,7 +16,7 @@ TROIS FAMILLES, ET LA DEUXIEME EST LA RAISON D'ETRE DU FICHIER.
 2. CE QUI NE PLANTE PAS ET CASSE QUAND MEME -- les defauts SILENCIEUX. Aucun `assert` ne les
    couvre, et `assert` est de toute facon un no-op sur un disque NDEBUG (UTIL.H:124 contre :129) :
    sur la console ils ne se manifestent que par une image fausse ou une salle qui n'apparait pas.
-   Le plus couteux est `portails_en_tete` : `findDoorways` (WALLS.C:2833-2835) sort de la boucle
+   Le plus couteux est `portails_en_tete` : `findDoorways` (WALLS.C:2871-2875) sort de la boucle
    AU PREMIER mur sans `nextSector`, donc un portail range derriere un mur plein n'est jamais
    franchi et toute la geometrie derriere lui est invisible -- sans message, sans ralentissement,
    sans trace. C'est le controle qui justifie a lui seul de lancer cet outil.
@@ -33,9 +33,15 @@ majoritairement sous les 30 images par seconde par ces paliers. (920 est la SUPE
 valeurs centrales, 894 et 920 : c'est la convention `t[n//2]` que suivent tous les outils qui lisent
 cet etalon. La mediane vraie, moyenne des deux, vaut 907 ; la moyenne 886. Nommer la convention
 evite d'ecrire un nombre que l'etalon ne peut pas produire -- il y en avait un ici, 928, corrige le
-24-09.) Ils ne sont donc pas un seuil de recette ; ils situent. Le vrai etalon est la DISTRIBUTION RETAIL, et c'est pour ca que `--etalon`
-existe : la question utile n'est pas « suis-je au-dessus de 470 » mais « suis-je plus cher que le
-pire niveau qui a ete presse sur un CD ».
+24-09.) Ils ne sont donc pas un seuil de recette ; ils situent. Le vrai etalon est la DISTRIBUTION
+RETAIL, et c'est pour ca que `--etalon` existe : la question utile n'est pas « suis-je au-dessus de
+470 » mais « suis-je plus cher que le pire niveau qui a ete presse sur un CD ».
+
+⚠ LES CITATIONS `WALLS.C:n` DE CE FICHIER ONT ETE RE-ANCREES LE 24-09, et il faut savoir pourquoi :
+elles avaient glisse de 40 a 155 lignes, y compris celle que le message de `portails_en_tete`
+IMPRIME A L'AUTEUR -- qui atterrissait donc en plein milieu d'autre chose. Un numero de ligne dans
+un fichier que d'autres branches modifient est une donnee PERISSABLE ; les re-verifier fait partie
+de la relecture, et l'ancre a verifier en premier est toujours celle qu'un message montre.
 
 Usage : python tools\\lev_report.py [FICHIER.LEV ...] [--map MAIN.map] [--tile-base N] [--slots N]
                                     [--secteurs] [--json OUT.json] [--etalon] [--vite]
@@ -68,9 +74,9 @@ ETALON = os.path.join(HERE, "lev_etalon.json")
 MAXNMSECTORS = 600          # UTIL.H:21
 MAXNMWALLS = 5500           # UTIL.H:22
 MAXCUTSECTORS = 128         # SLEVEL.H:191
-MAXVPERWALL = 700           # WALLS.C:1146, :1783, :2018 -- sommets ET cellules d'un mur
-MAXNMSLAVEPOLYS = 1300      # walls.h:101 ; au-dela l'esclave LACHE le mur (WALLS.C:2304, :2516)
-MAXFANIN = 20               # WALLS.C:3444 -- ancestor[] est de taille fixe
+MAXVPERWALL = 700           # WALLS.C:1186, :1823, :2058 -- sommets ET cellules d'un mur
+MAXNMSLAVEPOLYS = 1300      # walls.h:101 ; au-dela l'esclave LACHE le mur (WALLS.C:2344, :2556)
+MAXFANIN = 20               # WALLS.C:91, :3598 -- ancestor[] est de taille fixe
 TAILLE_NIVEAU_MAX = 900000  # LEVEL.C:65-66
 
 # --- ce qui n'est pas dans le .LEV et doit donc etre passe --------------------------------
@@ -85,8 +91,8 @@ SLOTS = dict(ps=28, doom=32)
 
 # --- classes de tuiles (PIC.C:98-106, SLEVEL.H:216) ---------------------------------------
 T_16_64, T_VDP2, T_8RLE_64, T_8RLE_32, T_16_32, T_16RLE_64 = 0x32, 0x01, 0x6A, 0x6C, 0x34, 0x72
-# Le moteur exige la classe TILE16BPP sous une cellule de geometrie (WALLS.C:1981 pour la grille,
-# :2049 pour le maillage). Seuls 0x32 et 0x72 la portent.
+# Le moteur exige la classe TILE16BPP sous une cellule de geometrie (WALLS.C:2021 pour la grille,
+# :2089 pour le maillage). Seuls 0x32 et 0x72 la portent.
 GEOMETRIE_OK = (T_16_64, T_16RLE_64)
 # Ce qu'une tuile occupe dans le POOL une fois chargee. 0x32 garde ses 4 096 octets d'index
 # (PIC.C:932, COMPRESS16BPP) ; une RLE garde son flux compresse (PIC.C:993) ; une VDP2 n'a pas
@@ -153,7 +159,7 @@ def defauts_silencieux(modele, tile_base):
                   % (len(W), MAXNMWALLS)))
 
     # --- 2.2 LE controle : les portails d'abord ---------------------------------------------
-    # findDoorways (WALLS.C:2833-2835) parcourt firstWall..lastWall et fait `return` au PREMIER
+    # findDoorways (WALLS.C:2871-2875) parcourt firstWall..lastWall et fait `return` au PREMIER
     # mur dont nextSector vaut -1. Un portail place apres un mur plein n'est donc jamais franchi,
     # et tout ce qu'il ouvre disparait de l'image. Aucun assert nulle part.
     mal_ranges = []
@@ -169,7 +175,7 @@ def defauts_silencieux(modele, tile_base):
         ex = ", ".join("s%d/m%d" % t for t in mal_ranges[:6])
         P.append(("FATAL", "portails_en_tete",
                   "%d secteurs ont un portail range APRES un mur plein (%s%s) -- findDoorways "
-                  "s'arrete au premier mur plein (WALLS.C:2833), ces portails ne sont jamais "
+                  "s'arrete au premier mur plein (WALLS.C:2873), ces portails ne sont jamais "
                   "franchis et les salles derriere ne sont jamais dessinees"
                   % (len(mal_ranges), ex, "..." if len(mal_ranges) > 6 else "")))
 
@@ -187,13 +193,13 @@ def defauts_silencieux(modele, tile_base):
                   % (imax, tile_base, imax + tile_base)))
 
     # --- 2.4 la classe de la tuile sous une cellule ------------------------------------------
-    # WALLS.C:1981 et :2049 exigent TILE16BPP. MESURE 23-09 sur les 24 retail + le build Doom :
+    # WALLS.C:2021 et :2089 exigent TILE16BPP. MESURE 23-09 sur les 24 retail + le build Doom :
     # 279 399 references de face.tile et 89 746 de texture[impair] tombent TOUTES sur du 0x32.
     mauvaises = sorted({i for i in set([f["tile"] for f in F] + [TEX[i] for i in range(1, len(TEX), 2)])
                         if i < len(tuiles) and tuiles[i]["flags"] not in GEOMETRIE_OK})
     if mauvaises:
         P.append(("FATAL", "classe_tuile",
-                  "%d tuiles de geometrie ne sont pas TILE16BPP (0x32/0x72) : %s (WALLS.C:1981, :2049)"
+                  "%d tuiles de geometrie ne sont pas TILE16BPP (0x32/0x72) : %s (WALLS.C:2021, :2089)"
                   % (len(mauvaises), ", ".join("#%d=0x%02x" % (i, tuiles[i]["flags"]) for i in mauvaises[:8]))))
     hors = sorted({i for i in set([f["tile"] for f in F]) if i >= len(tuiles)})
     if hors:
@@ -201,15 +207,15 @@ def defauts_silencieux(modele, tile_base):
                   % (len(tuiles), ", ".join(str(i) for i in hors[:8]))))
 
     # --- 2.5 le motif de cellule --------------------------------------------------------------
-    # L'octet PAIR de chaque cellule indexe pattern[8][4] (WALLS.C:1153) et WALLS.C:1951 l'assert
+    # L'octet PAIR de chaque cellule indexe pattern[][4], 8 lignes (WALLS.C:1193) et WALLS.C:1968 et :1992 l'indexent SANS borne
     # < 8. Au-dela on lit hors du tableau, donc des sommets au hasard.
     motifs = [TEX[i] for i in range(0, len(TEX), 2)]
     if motifs and max(motifs) > 7:
-        P.append(("FATAL", "motif", "octet de motif max %d > 7 (WALLS.C:1951, pattern[8][4] :1153)"
+        P.append(("FATAL", "motif", "octet de motif max %d > 7 (WALLS.C:1968 et :1992, pattern[][4] :1193)"
                   % max(motifs)))
 
     # --- 2.6 l'indexation RELATIVE des sommets de face ---------------------------------------
-    # face.v[] est relatif a wall.firstVertex (WALLS.C:2021-2040, :922). Un convertisseur qui
+    # face.v[] est relatif a wall.firstVertex (WALLS.C:1667, :2061-2069). Un convertisseur qui
     # ecrit des index globaux produit un fichier qui se LIT parfaitement et se dessine faux :
     # les valeurs restent des index globaux valides. lev.py:validate ne voit pas ce defaut.
     hors_plage = 0
@@ -223,7 +229,7 @@ def defauts_silencieux(modele, tile_base):
     if hors_plage:
         P.append(("FATAL", "face_relative",
                   "%d faces ont un sommet hors de [0, lastVertex-firstVertex] -- face.v[] est "
-                  "RELATIF a wall.firstVertex (WALLS.C:2021-2040)" % hors_plage))
+                  "RELATIF a wall.firstVertex (WALLS.C:1667, :2061-2069)" % hors_plage))
 
     # --- 2.7 un sol et un plafond par secteur -------------------------------------------------
     # Le sol et le plafond sont des murs ORDINAIRES de firstWall..lastWall, reconnus au seul signe
@@ -250,26 +256,26 @@ def defauts_silencieux(modele, tile_base):
     trop_larges = [wi for wi, w in enumerate(W) if _cellules_du_mur(w) >= MAXVPERWALL]
     if trop_larges:
         P.append(("FATAL", "mur_trop_large",
-                  "%d murs demandent >= %d cellules (WALLS.C:1146, :1783, :2018) : %s"
+                  "%d murs demandent >= %d cellules (WALLS.C:1186, :1823, :2058) : %s"
                   % (len(trop_larges), MAXVPERWALL, ", ".join("m%d=%d" % (wi, _cellules_du_mur(W[wi]))
                                                               for wi in trop_larges[:6]))))
     lache = [wi for wi, w in enumerate(W) if _cellules_du_mur(w) > MAXNMSLAVEPOLYS - 50]
     if lache:
         P.append(("ALERTE", "mur_lache_par_esclave",
                   "%d murs approchent MAXNMSLAVEPOLYS %d -- au-dela l'esclave abandonne le mur "
-                  "sans rien dire (WALLS.C:2304, :2516)" % (len(lache), MAXNMSLAVEPOLYS)))
+                  "sans rien dire (WALLS.C:2344, :2556)" % (len(lache), MAXNMSLAVEPOLYS)))
 
     # --- 2.9 le tri : cutIndex et le degre entrant ---------------------------------------------
     ncut = len(Lv["cutPlane"])
     mauvais_cut = [si for si, s in enumerate(S) if s["cutIndex"] and not (0 <= s["cutIndex"] < ncut)]
     if mauvais_cut:
         P.append(("FATAL", "cutIndex",
-                  "%d secteurs ont un cutIndex hors des %d lignes de cutPlane (WALLS.C:3518)"
+                  "%d secteurs ont un cutIndex hors des %d lignes de cutPlane (WALLS.C:3636)"
                   % (len(mauvais_cut), ncut)))
     if ncut > MAXCUTSECTORS:
         P.append(("FATAL", "cutSectors", "%d secteurs de coupe > %d (SLEVEL.H:191)" % (ncut, MAXCUTSECTORS)))
 
-    # Degre entrant : buildTree remplit ancestor[MAXFANIN] (WALLS.C:3444). Le compte STATIQUE
+    # Degre entrant : buildTree remplit ancestor[MAXFANIN] (WALLS.C:91, :3598). Le compte STATIQUE
     # majore le compte par image, et le retail le depasse deja (CAVERN : 36) -- d'ou ALERTE.
     entrant = Counter()
     for w in W:
@@ -280,7 +286,7 @@ def defauts_silencieux(modele, tile_base):
         pires.sort(key=lambda t: -t[1])
         P.append(("ALERTE", "fanin",
                   "%d secteurs recoivent > %d portails (pire s%d avec %d) -- borne haute de "
-                  "ancestor[MAXFANIN] (WALLS.C:3444) ; le retail monte a 36, donc a surveiller, "
+                  "ancestor[MAXFANIN] (WALLS.C:91, :3598) ; le retail monte a 36, donc a surveiller, "
                   "pas a refuser" % (len(pires), MAXFANIN, pires[0][0], pires[0][1])))
 
     # --- 2.10 le curseur des parametres d'objet -------------------------------------------------

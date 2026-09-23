@@ -64,10 +64,17 @@ python tools\blender\gen_ot_names.py     # SLEVEL.H -> io_lev/ot_names.py (229 t
 
 ## Deux pièges à connaître
 
-* **Les cellules d'aire nulle.** Tout niveau retail en porte (6 à 58 par fichier, toujours par
-  paires : les deux faces d'un portail). Le moteur les garde et `tools/cout.py` les compte ;
-  Blender refuse une face dont deux sommets sont confondus. L'extension les écarte **et le dit**
-  dans son rapport d'import, pour que l'écart de comptage ne surprenne personne.
+* **Un indice de sommet répété n'est pas une cellule vide : c'est le plus souvent un triangle.**
+  Le format range un triangle en quad dont un sommet se répète, exactement comme le VDP1 le
+  dessine. ⚠ Le premier jet de l'extension écartait *toutes* ces cellules en les croyant d'aire
+  nulle. **Mesure du 2026-09-24, sur les 24 niveaux retail plus les 9 cartes Doom converties :
+  28 482 cellules ont un indice répété, et seules 411 sont réellement plates** — tout le reste a
+  trois coins distincts et une surface visible, jusqu'à 2 408 unités². Sur E1M1 les 439 cellules
+  concernées étaient 439 triangles et zéro cellule plate, soit **11 % des surfaces du niveau
+  perdues en silence**. L'extension les rend donc comme triangles, et n'écarte que ce qui a moins
+  de trois coins distincts — en disant combien, dans son rapport d'import comme dans
+  `verif_scene.py`. Les vraies cellules plates sont rares et vont par paires : les deux faces d'un
+  portail (20 sur TOMB, 0 sur les cartes Doom converties).
 * **`tileBase` ne s'applique pas à l'import.** Le chargeur ajoute le nombre de tuiles d'arme aux
   index de géométrie (LEVEL.C:122-125) ; sur le disque ils sont relatifs au jeu de tuiles du
   fichier. L'extension ne l'ajoute pas — l'ajouter sur-indexerait chaque niveau.

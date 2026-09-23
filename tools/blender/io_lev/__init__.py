@@ -95,18 +95,13 @@ def importer(chemin, echelle=ECHELLES["TUILE"], portails=True, objets=True,
     # Blender a +Z vers le haut. On echange donc Y et Z.
     verts = [(p[0] * echelle, p[2] * echelle, p[1] * echelle) for p in sc.sommets]
 
-    # ⚠ LES CELLULES D'AIRE NULLE. Tout niveau retail en porte (6 a 58 par fichier, toujours en
-    # nombre PAIR : ce sont les deux faces d'un portail). Le moteur les garde dans ses tableaux et
-    # `tools/cout.py` les compte, parce que le peintre les traverse ; Blender, lui, refuse une
-    # face dont deux sommets sont confondus et `validate()` la retire -- ce qui desalignerait tous
-    # les tableaux par face. On les ecarte donc ICI, et seulement ici : `scene.py` reste fidele au
-    # moteur, cette couche montre ce qui est montrable, et l'ecart est dit a l'utilisateur.
-    garde = [i for i, q in enumerate(sc.quads)
-             if len(set(q)) == 4 and (plafonds or sc.genre[i] != 2)]
-    ecartees = len(sc.quads) - len(garde)
+    # Les triangles et les cellules plates sont demeles par `scene.faces_a_montrer`, qui est
+    # SANS bpy et donc juge par `verif_scene.py` : c'est la partie qui peut etre fausse.
+    faces, garde, coins, plates, triangles = scn.faces_a_montrer(sc, plafonds)
+    ecartees = plates
 
     mesh = bpy.data.meshes.new(nom)
-    mesh.from_pydata(verts, [], [sc.quads[i] for i in garde], shade_flat=True)
+    mesh.from_pydata(verts, [], faces, shade_flat=True)
     mesh.validate(verbose=False)
     if len(mesh.polygons) != len(garde):
         raise RuntimeError("Blender a garde %d faces sur %d -- des cellules se recouvrent "
@@ -124,19 +119,22 @@ def importer(chemin, echelle=ECHELLES["TUILE"], portails=True, objets=True,
     mesh.polygons.foreach_set("material_index",
                               array.array("i", [slot[sc.tuiles[i]] for i in garde]))
 
+    # Les tableaux par COIN suivent `coins` et non plus quatre entrees par face : un triangle en
+    # depose trois, et dans le meme ordre que ses sommets, sinon la texture part de travers.
     uv = mesh.uv_layers.new(name="tuile")
     plat = []
-    for i in garde:
-        for u, v in sc.uv[i]:
+    for i, cs in zip(garde, coins):
+        for k in cs:
+            u, v = sc.uv[i][k]
             plat += [u, 1.0 - v]                # v du .LEV va vers le BAS, celui de Blender monte
     uv.data.foreach_set("uv", array.array("f", plat))
 
     if lumiere:
         col = mesh.color_attributes.new(name="lumiere", type="BYTE_COLOR", domain="CORNER")
         plat = []
-        for i in garde:
-            for o in sc.lum[i]:
-                c = scn.clarte(o)
+        for i, cs in zip(garde, coins):
+            for k in cs:
+                c = scn.clarte(sc.lum[i][k])
                 plat += [c, c, c, 1.0]
         col.data.foreach_set("color", array.array("f", plat))
 
@@ -196,7 +194,8 @@ def importer(chemin, echelle=ECHELLES["TUILE"], portails=True, objets=True,
     obj["cellules"] = len(sc.quads)
     obj["tuiles_geometrie"] = len(tuiles)
     obj["cellules_ecartees"] = ecartees
-    return dict(quads=len(garde), cellules=len(sc.quads), ecartees=ecartees,
+    obj["triangles"] = triangles
+    return dict(quads=len(garde), cellules=len(sc.quads), ecartees=ecartees, triangles=triangles,
                 sommets=len(verts), tuiles=len(tuiles), portails=n_port,
                 objets=len(sc.objets), muets=sc.objets_muets, secteurs_peints=peint)
 
@@ -212,7 +211,11 @@ def _cellules_du_rapport(chemin_json, nom_fichier):
     for r in rap if isinstance(rap, list) else [rap]:
         if r.get("fichier") == nom_fichier:
             return r.get("cellules_secteur")
-    return rap[0].get("cellules_secteur") if isinstance(rap, list) and rap else None
+    # ET RIEN D'AUTRE. Retomber sur  quand le niveau demande n'est pas dans le JSON
+    # peignait une carte avec les chiffres d'une AUTRE carte, sans un mot -- la pire facon de se
+    # tromper, puisque le resultat a l'air juste. (Defaut trouve le 24-09 par relecture
+    # contradictoire.)
+    return None
 
 
 class IMPORT_SCENE_OT_lev(bpy.types.Operator, ImportHelper):
@@ -249,10 +252,10 @@ class IMPORT_SCENE_OT_lev(bpy.types.Operator, ImportHelper):
                       objets=self.objets, textures=self.textures, lumiere=self.lumiere,
                       plafonds=self.plafonds, rapport=(self.rapport or None))
         self.report({"INFO"},
-                    "%d cellules sur %d (%d d'aire nulle ecartees), %d sommets, %d tuiles, "
-                    "%d portails, %d objets (%d non lus)"
-                    % (st["quads"], st["cellules"], st["ecartees"], st["sommets"], st["tuiles"],
-                       st["portails"], st["objets"], st["muets"]))
+                    "%d cellules sur %d, dont %d triangles ; %d d'aire nulle ecartees ; "
+                    "%d sommets, %d tuiles, %d portails, %d objets (%d non lus)"
+                    % (st["quads"], st["cellules"], st["triangles"], st["ecartees"],
+                       st["sommets"], st["tuiles"], st["portails"], st["objets"], st["muets"]))
         return {"FINISHED"}
 
 

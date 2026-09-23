@@ -245,3 +245,46 @@ def couleur_de_cout(valeur, pire):
     if t < 0.5:
         return (2.0 * t, 0.8, 0.1, 1.0)
     return (1.0, 0.8 * (1.0 - 2.0 * (t - 0.5)), 0.1, 1.0)
+
+
+def coins_utiles(q):
+    """Les indices de COIN (0..3) a garder dans une cellule, les repetitions d'indice de sommet
+    supprimees en gardant le premier de chaque.
+
+    UN INDICE REPETE N'EST PAS UNE CELLULE VIDE : C'EST LE PLUS SOUVENT UN TRIANGLE. Le format
+    range un triangle en quad dont un sommet se repete, exactement comme le VDP1 le dessine.
+    MESURE DU 24-09, sur les 24 retail plus les 9 cartes Doom converties : 28 482 cellules ont un
+    indice repete, et seules 411 sont vraiment plates -- toutes les autres ont trois coins distincts
+    et une surface bien visible, jusqu'a 2 408 unites carrees. Sur E1M1, les 439 cellules concernees
+    etaient 439 triangles et zero cellule plate, soit 11 % des surfaces du niveau. Les jeter, comme
+    le faisait le premier jet, perdait donc des surfaces que la console dessine.
+
+    -> quatre coins pour un quad, trois pour un triangle, moins de trois pour ce qui n'est pas une
+    surface et n'a rien a montrer."""
+    vus, out = set(), []
+    for c, v in enumerate(q):
+        if v not in vus:
+            vus.add(v)
+            out.append(c)
+    return out
+
+
+def faces_a_montrer(sc, plafonds=True):
+    """-> (faces, garde, coins, plates, triangles) -- tout ce qu'il faut pour batir un maillage.
+
+    EST ICI, ET PAS DANS LA COUCHE `bpy`, parce que c'est exactement ce qui peut etre faux : le
+    nombre de coins d'une face doit valoir le nombre d'entrees par coin qu'on lui donnera ensuite
+    (UV, lumiere), sinon l'import echoue sur un desalignement de tableau. Mis ici, `verif_scene.py`
+    le juge sans Blender ; laisse dans `__init__.py`, il n'etait jugeable que dans Blender."""
+    faces, garde, coins, plates = [], [], [], 0
+    for i, q in enumerate(sc.quads):
+        if not plafonds and sc.genre[i] == 2:
+            continue
+        c = coins_utiles(q)
+        if len(c) < 3:
+            plates += 1
+            continue
+        faces.append([q[k] for k in c])
+        garde.append(i)
+        coins.append(c)
+    return faces, garde, coins, plates, sum(1 for c in coins if len(c) == 3)

@@ -105,7 +105,39 @@ def verifier(chemin):
             ecarts.append("octet de lumiere hors de [0, %d] : %d..%d -- worldGrey deborde "
                           "(UTIL.C:151)" % (scn.LUM_MAX, lo, hi))
         bandes = {scn.niveau_et_bande(v)[1] for l in sc.lum for v in l}
+    # --- 6. les faces a montrer : triangles, cellules plates, et l'INVARIANT DES COINS -----
+    # Ce controle remplace un defaut reel : la couche Blender ecartait toute cellule dont un indice
+    # de sommet se repete, en les croyant toutes d'aire nulle. Mesure du 24-09 : sur les 33 fichiers
+    # du banc, 28 482 cellules sont dans ce cas et seules 411 sont vraiment plates -- le reste sont
+    # des TRIANGLES, et les jeter perdait 11 % des surfaces d'E1M1. On verifie donc ici les deux
+    # choses qui peuvent casser, et qui autrement ne se manifesteraient qu'a l'import :
+    #   * chaque face gardee a 3 ou 4 coins, tous distincts, et ses coins designent des sommets
+    #     distincts -- sinon Blender la retire dans `validate()` et desaligne TOUS les tableaux ;
+    #   * le total des coins est ce que les tableaux par coin (UV, lumiere) devront compter.
+    for plafonds in (True, False):
+        faces, garde, coins, plates, triangles = scn.faces_a_montrer(sc, plafonds)
+        if not (len(faces) == len(garde) == len(coins)):
+            ecarts.append("faces_a_montrer (plafonds=%s) rend %d faces, %d gardes, %d coins"
+                          % (plafonds, len(faces), len(garde), len(coins)))
+            break
+        if len(faces) + plates + (0 if plafonds else sum(1 for g in sc.genre if g == 2)) \
+                != len(sc.quads):
+            ecarts.append("faces_a_montrer (plafonds=%s) : %d faces + %d plates ne rendent pas "
+                          "les %d cellules" % (plafonds, len(faces), plates, len(sc.quads)))
+            break
+        mauvaises = 0
+        for f, c in zip(faces, coins):
+            if len(f) != len(c) or len(f) not in (3, 4) or len(set(f)) != len(f):
+                mauvaises += 1
+        if mauvaises:
+            ecarts.append("%d faces dont les coins ne sont pas 3 ou 4 sommets distincts"
+                          % mauvaises)
+            break
+        if plafonds:
+            n_tri, n_plat = triangles, plates
+
     return ecarts, dict(quads=len(sc.quads), sommets=ns, degen=degen,
+                        triangles=n_tri, plates=n_plat,
                         portails=len(sc.portails), objets=len(sc.objets),
                         muets=sc.objets_muets, tuiles=len(set(sc.tuiles)),
                         bandes=sorted(bandes))
@@ -136,10 +168,12 @@ def main(argv=None):
             for e in ecarts[:6]:
                 print("        %s" % e)
         else:
-            print("  ok    %-22s %6d quads, %6d sommets, %3d tuiles, %4d portails, "
-                  "%3d objets (%d muets), bandes %s%s"
-                  % (os.path.basename(c), st["quads"], st["sommets"], st["tuiles"],
-                     st["portails"], st["objets"], st["muets"],
+            # Les triangles et les cellules plates sont IMPRIMES, pas seulement comptes : c'est en
+            # les croyant tous plats que le premier jet de la couche Blender les a jetes.
+            print("  ok    %-22s %6d quads (%d triangles, %d plates), %6d sommets, %3d tuiles, "
+                  "%4d portails, %3d objets (%d muets), bandes %s%s"
+                  % (os.path.basename(c), st["quads"], st["triangles"], st["plates"],
+                     st["sommets"], st["tuiles"], st["portails"], st["objets"], st["muets"],
                      "".join(str(b) for b in st["bandes"]) or "-",
                      "" if not st["degen"] else ", %d quads degeneres" % st["degen"]))
     print("\n%d fichier(s), %d en defaut" % (len(fichiers), faux))

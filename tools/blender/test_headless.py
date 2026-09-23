@@ -94,11 +94,23 @@ def tester(chemin, rendu=None):
     hors = sum(1 for d in uv if not (-0.001 <= d.uv[0] <= 1.001 and -0.001 <= d.uv[1] <= 1.001))
     if hors:
         pb.append("%d coins d'UV hors de [0, 1]" % hors)
-    # Les 8 motifs doivent tous etre representables : on verifie qu'on voit bien des quads
-    # retournes (sinon la permutation de WALLS.C:1153 n'a jamais servi).
+    # ⚠ CE CONTROLE NE POUVAIT PAS TIRER, ET IL NE MONTRAIT PAS CE QU'IL ANNONCAIT.
+    # Il ramassait l'ENSEMBLE des coins de texture vus, `{(0,0),(0,1),(1,0),(1,1)}`, et exigeait
+    # qu'il en compte quatre. Or `pattern[][4]` (WALLS.C:1193) est une PERMUTATION : elle change
+    # quel coin va sur quel sommet, jamais l'ensemble des coins deposes. Des que la carte porte une
+    # seule cellule pleine, l'ensemble vaut quatre, motif ou pas -- le test passait donc toujours,
+    # y compris si la permutation n'avait jamais ete appliquee. (Trouve le 24-09 par relecture
+    # contradictoire.) Ce qui prouve vraiment qu'elle a servi, c'est que l'ORDRE des coins varie
+    # d'une face a l'autre : une carte qui n'utilise qu'un motif ne rend qu'une seule sequence.
     coins = {(round(d.uv[0]), round(d.uv[1])) for d in uv}
     if len(coins) != 4:
         pb.append("les UV n'utilisent que %d coins de texture sur 4" % len(coins))
+    seqs = set()
+    for p in me.polygons:
+        seqs.add(tuple((round(uv[li].uv[0]), round(uv[li].uv[1])) for li in p.loop_indices))
+    if len(seqs) < 2:
+        pb.append("une seule sequence de coins sur %d faces : la permutation de motif "
+                  "(WALLS.C:1193) n'a jamais ete appliquee" % len(me.polygons))
 
     if rendu:
         os.makedirs(rendu, exist_ok=True)

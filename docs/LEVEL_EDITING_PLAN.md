@@ -108,9 +108,14 @@ Trois choses ont été apprises en le construisant, toutes contre-intuitives :
   `addPic` reçoit `NULL` (PIC.C:996, :1010) — et le VDP1 tire par la banque CRAM 0, c'est-à-dire la
   palette objet. Honorer `palNm` recolorie faux : sur TOMB, 237 des 414 tuiles 8 bpp annoncent la
   palette 13, qui diffère de la palette 0 sur ses 255 entrées.
-* **Les cellules d'aire nulle.** Tout niveau retail en porte (6 à 58, toujours par paires : les
-  deux faces d'un portail). Le moteur les garde et `cout.py` les compte ; Blender les refuse.
-  L'extension les écarte et **le dit**.
+* **Un indice de sommet répété n'est pas une cellule vide, c'est un triangle.** Le format range un
+  triangle en quad dont un sommet se répète, comme le VDP1 le dessine. ⚠ Le premier jet de
+  l'extension les écartait tous en les croyant plats. **Mesure du 24-09 sur 33 fichiers : 28 482
+  cellules ont un indice répété, dont seulement 411 sont réellement plates** — sur E1M1, les 439
+  écartées étaient 439 triangles et zéro cellule plate, soit **11 % des surfaces du niveau perdues
+  en silence**. Corrigé : elles sont rendues comme triangles, et `verif_scene.py` juge l'invariant
+  des coins sans Blender, sur 34 fichiers. Les vraies cellules plates (les deux faces d'un portail)
+  restent écartées et comptées à part.
 
 ---
 
