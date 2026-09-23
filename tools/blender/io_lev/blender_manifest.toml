@@ -1,0 +1,14 @@
+schema_version = "1.0.0"
+
+id = "io_lev_slavedriver"
+version = "0.1.0"
+name = "SlaveDriver .LEV (lecture seule)"
+tagline = "Voir un niveau SlaveDriver / Aguzzino avec ses vraies tuiles et sa lumiere"
+maintainer = "N0rt0N85"
+type = "add-on"
+
+website = "https://github.com/N0rt0N85"
+tags = ["Import-Export"]
+
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
