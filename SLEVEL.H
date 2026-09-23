@@ -200,7 +200,11 @@ typedef struct
    not its floors -- take the world's GREEN ramp (UTIL.C worldGreen) instead of the neutral one,
    which is the only way a level's own light can carry a colour: the light of a vertex is one
    scalar, and the ramp it reads is what turns it into a colour word. */
-#define SECFLAG_NUKAGE 64
+#define SECFLAG_TINTED 64
+/* GCC14: ... and this one is in its HEART -- close enough to the liquid that its walls are at
+   the top green band.  A thing standing there is drawn in the green object bank (PIC.C
+   buildTintBank): the nukage colours what walks in it, not only what surrounds it. */
+#define SECFLAG_TINT_CORE 128
 
 typedef struct
 {void *object;

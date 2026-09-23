@@ -135,8 +135,18 @@
 #define FIRE_DARK   247                 /* PLAYPAL's opaque black (PAUSE.C VEIL_INDEX): the
 					   letters' outline.  Index 0 is TRANSPARENT here, so it
 					   would show the logo through the outline           */
+#define FIRE_RED    176                 /* PLAYPAL's pure red (31,0,0), the menus' own ink: the
+					   letters themselves.  Measured on the disc's PLAYPAL */
+#define DIGIT_BYTES 3                   /* a percentage cell: 24 cells wide, byte-aligned      */
+#define PCT_CELLS   4                   /* "100%"                                              */
+#define PCT_NMGLYPH 12                  /* '0'..'9', '%', ' '                                  */
 #define MASK_H      16                  /* "LOADING": STCFN x2, 16 rows ...                       */
-#define MASK_Y0     (FIRE_H-FIRE_SRC-MASK_H)    /* ... fire rows 181..196, just over the source   */
+#define WORD_Y0     (224-MASK_H-5)      /* ... on SCREEN rows 203..218, in the solid base below
+					   the band.  The word lived INSIDE the band and the slave
+					   painted it through a stencil, over rows the fire rewrites
+					   at every step: the letters came out in pieces (photo,
+					   2026-09-23).  The base is written once, by fireBase, and
+					   nothing walks over it -- so the master paints there.   */
 #define LOGO_ROWS   112                 /* NBG1 bitmap rows on screen: 224 lines at x2            */
 #define VRAM_B0     (SCL_VDP2_VRAM+0x40000)     /* NBG1: the logo */
 #define VRAM_B1     (SCL_VDP2_VRAM+0x60000)     /* NBG0: the fire */
@@ -151,8 +161,10 @@
 #define LB_U        936                 /* u8[256]                                 */
 #define LB_LOGO     1192                /* i16 w, h, x, y in the NBG1 bitmap       */
 #define LB_MASK     1200                /* u8[16][40]: LOADING, the letters' BODY, 1 bit a cell */
-#define LB_MASKG    1840                /* u8[16][40]: ... and every opaque cell of the glyph  */
-#define LB_PIXELS   2480                /* u8[w*h], w a multiple of 4, no padding  */
+#define LB_MASKG    1840                /* u8[16][40]: ... and the glyph GROWN by a cell: the ink */
+#define LB_PCTX     2480                /* i16: the cell the percentage's field starts at, i16 0 */
+#define LB_DIGITS   2484                /* 12 x (body, ink) x 16 x 2: '0'..'9', '%', ' '        */
+#define LB_PIXELS   3636                /* u8[w*h], w a multiple of 4, no padding  */
 
 /* the slave's on-chip registers, as WALLS.C has them (its own are file-local) */
 #define IPRA (Uint16 volatile *)0xfffffee2
@@ -164,8 +176,6 @@
 /* doorwayCache, as the fire uses it (the slave's cache is purged on every kick) */
 #define LOOK_MAP     1                  /* VRAM gets P[level] (a load); else the level itself (the
 					   title's bank-1 ramp, P the identity)                 */
-#define LOOK_LETTERS 2                  /* LOADING stencilled over fire rows MASK_Y0.. (display only:
-					   the flames above the letters burn on)                */
 struct fireCtl                          /* read and written through the cache-through alias */
 {int pQ8;                               /* master: chance x256 a cell loses a level in a row */
  int top;                               /* master: first row of the band that burns        */
@@ -199,6 +209,10 @@ int fs_getFileSize(int fd);             /* FILE.C */
 static unsigned char *titleBlock;       /* DTITLE.DAT's logo block, in the title's pool */
 static unsigned char *titleFonts[5];    /* small, small, big: initFonts' list at the title */
 static short skullChar=-1;              /* M_SKULL1's VDP1 char, M_SKULL2 the next; -1 = none */
+/* the percentage's glyphs, kept out of doorwayCache: the fire's buffer has 400 bytes left and
+   these want 768, and they are read long after the DAT's own buffer is gone */
+static unsigned char fireDigits[PCT_NMGLYPH][2][MASK_H][DIGIT_BYTES];
+static short firePctX;                  /* the cell the field starts at, a multiple of 8 */
 static int fireField,fireEvery;
 static int fireOn;                      /* the fire slave runs (title, or a load) */
 static Uint16 savedCyc[8];              /* a load: setVDP2's cycle table ... */
@@ -212,23 +226,20 @@ static struct fireArea *fireArea(void)
 /* What VRAM shows of 4 cells w (a long of F): the level itself, or P[level]; then the letters'
    mask in their rows (mp: the mask's long, or NULL).  A macro: fireStep is built at O2 and the
    rest of the file at Os, and GCC does not inline across the two. */
-/* GCC14: the word is painted with an OUTLINE, and the letters are the DARK half.  White letters
-   with a black outline were still unreadable on the console, and the measurement says why: the
-   word sits on fire rows 181..196, one to sixteen rows above the source, where the ramp is at its
-   top -- and the top of the load's ramp is PLAYPAL 4, (31,31,31), the very white the letters were
-   painted in.  Only the outline showed.  So it is the other way round now: the whole glyph, grown
-   by a cell, takes the fire's white, and the letter's own body PLAYPAL's opaque black on top. */
-#define FIREPIX(w,P,look,hl,mk,dark,hot)					   {if ((look)&LOOK_MAP)							       w=((unsigned int)(P)[w>>24]<<24)|((unsigned int)(P)[(w>>16)&255]<<16)|		 ((unsigned int)(P)[(w>>8)&255]<<8)|(P)[w&255];			    if (hl!=0xffffffffu)							       w=(w & (hl))|(~(hl) & (dark));					    if (mk!=0xffffffffu)							       w=(w & (mk))|(~(mk) & (hot));					   }
-/* GCC14: the letters are PAINTED, not punched.  They were the mask's zeroes -- level 0, the
-   transparent pixel -- so LOADING was a hole in the flames, and the flames' own dark gaps are
-   holes too: at a glance there was no word there.  Now the cells the mask clears take the top of
-   the ramp, the white the source rows burn at, so the word reads over the fire whatever it is
-   doing underneath.  FIRE_HOT is that pixel, four cells at a time. */
-#define FIRE_HOT(P) ((unsigned int)(P)[FIRE_MAX]*0x01010101u)
+/* GCC14: the word is painted with an OUTLINE, and the letters are RED.  It sits on fire rows
+   181..196, one to sixteen rows above the source, where the ramp is at its top -- and the top of
+   the load's ramp is PLAYPAL 4, (31,31,31): white letters there were white on white and only
+   their outline showed, and black letters read but said nothing.  So the whole glyph, grown by a
+   cell, takes PLAYPAL's opaque black, and the letter's own body PLAYPAL 176, the pure red the
+   menus are written in.  Red on the fire's own white, with a black edge. */
+#define FIREPIX(w,P,look)							\
+   {if ((look)&LOOK_MAP)						       \
+       w=((unsigned int)(P)[w>>24]<<24)|((unsigned int)(P)[(w>>16)&255]<<16)|	\
+	 ((unsigned int)(P)[(w>>8)&255]<<8)|(P)[w&255];				   \
+   }
+/* the letters' two inks, four cells at a time (fireWord) */
 #define FIRE_INK    ((unsigned int)FIRE_DARK*0x01010101u)
-#define FIRELETTER(a,look,y) (((look)&LOOK_LETTERS) && (y)>=MASK_Y0 && (y)<MASK_Y0+MASK_H)
-#define FIREMASK(a,look,y) (FIRELETTER(a,look,y)? (a)->M[(y)-MASK_Y0]: NULL)
-#define FIREHALO(a,look,y) (FIRELETTER(a,look,y)? (a)->MD[(y)-MASK_Y0]: NULL)
+#define FIRE_ROUGE  ((unsigned int)FIRE_RED*0x01010101u)
 /* the mask is one bit a cell (1 = letter), the blit works four cells at a time: a nibble, the
    first cell in the top bit, to the long that keeps the fire where the letter is not */
 static const unsigned int maskExp[16]=
@@ -246,16 +257,12 @@ static const unsigned int maskExp[16]=
    no telling which longs changed: all of them go. */
 static void fireBlit(struct fireArea *a,int look,int top,int yOff)
 {int y,x;
- unsigned int hot=FIRE_HOT(a->P);
  for (y=top;y<FIRE_H;y++)
     {const unsigned int *f=(const unsigned int *)a->F[y];
-     const unsigned char *m=FIREMASK(a,look,y);
-     const unsigned char *d=FIREHALO(a,look,y);
      volatile unsigned int *v=(volatile unsigned int *)(VRAM_B1+((yOff+y)<<9));
      for (x=0;x<FIRE_W/4;x++)
 	{unsigned int w=f[x];
-	 FIREPIX(w,a->P,look,d? MASKLONG(d,x): 0xffffffffu,
-		 m? MASKLONG(m,x): 0xffffffffu,hot,FIRE_INK);
+	 FIREPIX(w,a->P,look);
 	 v[x]=w;
 	}
     }
@@ -542,12 +549,14 @@ int doom_menuCursor(int x,int y)
 /* FILE.C progressHook: once a sector read (~150 a second), a few cycles.  The flames GROW with
    the load -- the decay falls from FIRE_LOAD_Q0 to FIRE_LOAD_Q1, so a flame goes from about a
    third of the band to the whole of it and its tips scatter over the logo. */
+static void fireWord(struct fireArea *a,int pct);   /* the word and its percentage, below */
 static void doom_loadProgress(int read,int total)
 {int t=(read<<8)/(total>0? total: 1)+GP_FIRE_LOAD_LEAD;
  if (t>256)
     t=256;
  FIRECTL(fireArea())->pQ8=GP_FIRE_LOAD_Q0-
     (((GP_FIRE_LOAD_Q0-GP_FIRE_LOAD_Q1)*t)>>8);
+ fireWord(fireArea(),(read*100)/(total>0? total: 1));
  /* GCC14: the logo BURNS AWAY.  The flames grow with the load -- the decay walks from
     FIRE_LOAD_Q0 down to FIRE_LOAD_Q1, so they go from a quarter of the band to longer than the
     screen -- but a fire is a random thing and the last cold cells let the word show through.  At
@@ -559,27 +568,30 @@ static void doom_loadProgress(int read,int total)
     }
 }
 
-/* GCC14: the letters' INK -- every opaque cell of the glyph, grown by one cell in the eight
-   directions, built once by the master.  `g` is the DAT's second mask plane, not the first: a
-   letter of STCFN is not a silhouette, its body is bright red and its outline -- the ring around
-   it, the hole of the O, the counters of the A and the D -- a very dark red.  Painting the body
-   alone left white blobs with no detail; painting the WHOLE glyph dark and the body white on top
-   gives the letter its holes back, over a white-hot fire as well as over black. */
-static void fireHalo(struct fireArea *a,const unsigned char *g)
-{int y,x,dy,dx,b;
- memset(a->MD,0,sizeof(a->MD));
- for (y=0;y<MASK_H;y++)
-    for (x=0;x<FIRE_W;x++)
-       {if (!(g[y*(FIRE_W/8)+(x>>3)] & (0x80>>(x&7))))
-	   continue;
-	for (dy=-1;dy<=1;dy++)
-	   for (dx=-1;dx<=1;dx++)
-	      {b=x+dx;
-	       if (y+dy<0 || y+dy>=MASK_H || b<0 || b>=FIRE_W)
-		  continue;
-	       a->MD[y+dy][b>>3]|=(unsigned char)(0x80>>(b&7));
-	      }
-       }
+/* GCC14: THE PERCENTAGE, written into the mask as the load goes.  Four cells, right aligned:
+   "  7%", " 42%", "100%".  The glyphs come from the DAT at a fixed width and already grown, so
+   this is four column copies and nothing else -- it runs inside the file's progress hook, while
+   the slave is reading the same mask to paint the band, and a torn image for one field is not
+   worth a lock. */
+static void firePct(struct fireArea *a,int pct)
+{int i,y,c,ofs=firePctX>>3;
+ unsigned char t[PCT_CELLS];
+ if (pct<0) pct=0;
+ if (pct>100) pct=100;
+ t[0]=(unsigned char)(pct>=100? 1: 11);         /* 0..9 the digits, 10 '%', 11 a space */
+ t[1]=(unsigned char)(pct>=10? (pct/10)%10: 11);
+ t[2]=(unsigned char)(pct%10);
+ t[3]=10;
+ for (i=0;i<PCT_CELLS;i++)
+    {c=t[i];
+     for (y=0;y<MASK_H;y++)
+	{int k;
+	 for (k=0;k<DIGIT_BYTES;k++)
+	    {a->M[y][ofs+i*DIGIT_BYTES+k]=fireDigits[c][0][y][k];
+	     a->MD[y][ofs+i*DIGIT_BYTES+k]=fireDigits[c][1][y][k];
+	    }
+	}
+    }
 }
 
 /* GCC14: a death load shows NOTHING -- no logo, no fire, not a word (SRUINS.H loadAfterDeath).
@@ -592,6 +604,34 @@ static void fireBlackOnly(struct fireArea *a)
     {volatile unsigned int *v=(volatile unsigned int *)(VRAM_B1+(y<<9));
      for (x=0;x<FIRE_W/4;x++)
 	 v[x]=0;
+    }
+}
+
+/* GCC14: THE WORD, painted by the master straight into the solid rows under the band.  Called
+   once the base is there, and again each time the percentage changes -- 16 rows of 80 longs, a
+   few thousand cycles, on a CPU that is waiting for the disc anyway. */
+static int fireShownPct=-1;
+
+static void fireWord(struct fireArea *a,int pct)
+{int y,x;
+ unsigned int base=FIRE_PIX1(a,LOOK_MAP,FIRE_MAX)*0x01010101u;
+ if (pct<0) pct=0;
+ if (pct>100) pct=100;
+ if (pct==fireShownPct)
+    return;
+ fireShownPct=pct;
+ firePct(a,pct);
+ for (y=0;y<MASK_H;y++)
+    {volatile unsigned int *v=(volatile unsigned int *)(VRAM_B1+((WORD_Y0+y)<<9));
+     const unsigned char *m=a->M[y],*d=a->MD[y];
+     for (x=0;x<FIRE_W/4;x++)
+	{unsigned int w=base,hl=MASKLONG(d,x),mk=MASKLONG(m,x);
+	 if (hl!=0xffffffffu)
+	    w=(w & hl)|(~hl & FIRE_INK);
+	 if (mk!=0xffffffffu)
+	    w=(w & mk)|(~mk & FIRE_ROUGE);
+	 v[x]=w;
+	}
     }
 }
 
@@ -634,8 +674,11 @@ void doom_loadingScreen(int fd)
  memcpy(a->P,b+LB_PLOAD,FIRE_SLOTS);
  memcpy(a->R,b+LB_R,256);
  memcpy(a->U,b+LB_U,256);
- memcpy(a->M,b+LB_MASK,MASK_H*(FIRE_W/8));      /* the body; the ink from the second plane */
- fireHalo(a,b+LB_MASKG);
+ memcpy(a->M,b+LB_MASK,MASK_H*(FIRE_W/8));      /* the body, and the ink already grown */
+ memcpy(a->MD,b+LB_MASKG,MASK_H*(FIRE_W/8));
+ memcpy(fireDigits,b+LB_DIGITS,sizeof(fireDigits));
+ firePctX=*(const short *)(b+LB_PCTX);
+ fireShownPct=-1;
  if (loadAfterDeath)                    /* black, and nothing else: no logo, no fire, no word */
     {if (fireOn)                        /* the title's fire, if it was still burning */
 	{vblankUserHook=NULL;
@@ -649,7 +692,7 @@ void doom_loadingScreen(int fd)
      SCL_DisplayFrame();
      return;
     }
- look=LOOK_MAP|LOOK_LETTERS;
+ look=LOOK_MAP;
  c->pQ8=GP_FIRE_LOAD_Q0;
  c->look=look;
  c->top=0;                              /* b is read out: the whole band burns from here */
@@ -669,6 +712,7 @@ void doom_loadingScreen(int fd)
  t=vtimer;                              /* the first image shows the load's colours and letters */
  while (c->shown!=look && vtimer-t<30)
     ;
+ fireWord(a,0);                         /* the word, over the base the slave just laid */
 }
 
 /* CFG_LOADING_END (SRUINS.C runLevel, before startSlave(wallRenderSlaveMain), which stops the fire

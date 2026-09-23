@@ -143,12 +143,12 @@ unsigned short greyTable[33]=
 
 /* GCC14: the world's ramp, neutral until a level gives the fog a tint, in FOUR BANDS of 32 --
    one per green level (UTIL.H).  Band 0 is the ramp the engine always had. */
-#define WGK(k,c) (16-(((16-(c))*(k))/(WORLDGREEN_NM-1)))        /* the band's tint, /16 */
+#define WGK(k,c) (16-(((16-(c))*(k))/(WORLDTINT_NM-1)))        /* the band's tint, /16 */
 #define WG(k,l)  (((l)==0)? 0x8000: \
-		  RGB((((l)*WGK(k,WORLDGREEN_R))>>4),(l),(((l)*WGK(k,WORLDGREEN_B))>>4)))
+		  RGB((((l)*WGK(k,WORLDTINT_R))>>4),(l),(((l)*WGK(k,WORLDTINT_B))>>4)))
 #define WGFLOOR(k) 0x8000               /* 17..31 of a green band: the fog's underflow, dark */
 #define GT(l)    RGB(l,l,l)             /* 17..31 of band 0: PowerSlave's water, as it was */
-unsigned short worldGrey[WORLDGREEN_NM*32]=
+unsigned short worldGrey[WORLDTINT_NM*32]=
 {
  /* band 0 */
  WG(0,0),WG(0,1),WG(0,2),WG(0,3),WG(0,4),WG(0,5),
@@ -180,6 +180,7 @@ unsigned short worldGrey[WORLDGREEN_NM*32]=
  WGFLOOR(3),WGFLOOR(3)
 };
 
+unsigned char worldTint[3]={WORLDTINT_R,16,WORLDTINT_B};
 unsigned char fogColour[3];
 unsigned short fogFar=RGB(0,0,0);
 unsigned short fogFloorGour;
@@ -193,8 +194,38 @@ static int fogRamp(int i,int c)
  return v;
 }
 
+/* GCC14: bands 1.. of the ramp, from band 0 and `worldTint`.  Called whenever either moves --
+   a level's fog is set, or its own tint arrives with the pools (DOOM_GAME.C). */
+static void buildTintBands(void)
+{int i,k;
+ for (k=1;k<WORLDTINT_NM;k++)
+    {int kr=16-(((16-worldTint[0])*k)/(WORLDTINT_NM-1));
+     int kg=16-(((16-worldTint[1])*k)/(WORLDTINT_NM-1));
+     int kb=16-(((16-worldTint[2])*k)/(WORLDTINT_NM-1));
+     for (i=0;i<32;i++)
+	{unsigned int v=worldGrey[i<=16? i: 0];
+	 worldGrey[(k<<5)+i]=(i<=16)
+	    ? (unsigned short)((v & 0x8000)|
+			       (((((v>>10)&31)*kb)>>4)<<10)|
+			       (((((v>>5)&31)*kg)>>4)<<5)|
+			       ((((v)&31)*kr)>>4))
+	    : (unsigned short)0x8000;
+	}
+    }
+}
+
+void setWorldTint(int r,int g,int b)
+{worldTint[0]=(unsigned char)CLAMP(r,0,16);
+ worldTint[1]=(unsigned char)CLAMP(g,0,16);
+ worldTint[2]=(unsigned char)CLAMP(b,0,16);
+ buildTintBands();
+}
+/* the things' bank follows the tint too, but PIC.C is not linked into every binary this
+   file is: the caller chains buildTintBank (DOOM_GAME.C, the pools record). */
+
 void setFogColour(int r,int g,int b)
 {int i,k;
+ (void)k;
  r=CLAMP(r,0,15);                       /* 16 would be a fog that changes nothing */
  g=CLAMP(g,0,15);
  b=CLAMP(b,0,15);
@@ -205,20 +236,7 @@ void setFogColour(int r,int g,int b)
     worldGrey[i]=RGB(fogRamp(i,r),fogRamp(i,g),fogRamp(i,b));
  for (;i<32;i++)
     worldGrey[i]=greyTable[i];
- /* the green bands follow the fog's own ramp, each held down on red and blue */
- for (k=1;k<WORLDGREEN_NM;k++)
-    {int kr=16-(((16-WORLDGREEN_R)*k)/(WORLDGREEN_NM-1));
-     int kb=16-(((16-WORLDGREEN_B)*k)/(WORLDGREEN_NM-1));
-     for (i=0;i<32;i++)
-	{unsigned int v=worldGrey[i<=16? i: 0];
-	 worldGrey[(k<<5)+i]=(i<=16)
-	    ? (unsigned short)((v & 0x8000)|
-			       (((((v>>10)&31)*kb)>>4)<<10)|
-			       ((((v>>5)&31))<<5)|
-			       ((((v)&31)*kr)>>4))
-	    : (unsigned short)0x8000;
-	}
-    }
+ buildTintBands();                      /* the tinted bands follow the fog's own ramp */
  fogFar=RGB(r,g,b);
  /* the asm clears bit 15 on a vertex it did not clip (wallasm_gnu.s .Lrt_retFromLit), so the
     floor of the ramp reaches the gouraud table as this -- 0 when the fog is black */

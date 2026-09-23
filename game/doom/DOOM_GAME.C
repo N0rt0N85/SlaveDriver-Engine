@@ -1207,11 +1207,19 @@ int game_placeObject(int ot)
 	 int nmPools=suckShort();
 	 int pulse=suckShort();
 	 int amp=suckShort();
-	 short *table=suckParams(nShorts-4);
+	 int tr=suckShort(),tg=suckShort(),tb=suckShort();
+	 short *table=suckParams(nShorts-7);
 	 short *e=table;
 	 int i,k,n;
-	 assert(nmPools>0 && nShorts>4);
+	 assert(nmPools>0 && nShorts>7);
 	 assert(pulse>0 && amp>0 && amp<=4);
+	 assert(tr>=0 && tr<=16 && tg>=0 && tg<=16 && tb>=0 && tb<=16);
+	 /* GCC14: the LEVEL's colour, not the game's -- the converter read it off the special
+	    floor this map is built around (UTIL.H worldTint).  It rebuilds the ramp's tinted
+	    bands and the things' bank, so blood comes out red and lava orange with no other
+	    change anywhere. */
+	 setWorldTint(tr,tg,tb);
+	 buildTintBank(-1);
 	 for (i=0;i<nmPools;i++,e+=DOOM_POOL_HEAD+n)
 	    {n=e[DOOM_POOL_NMLEAF];
 	     assert(e[DOOM_POOL_RADIUS]>=16 && e[DOOM_POOL_RADIUS]<=1024);
@@ -1221,7 +1229,7 @@ int game_placeObject(int ot)
 	     for (k=0;k<n;k++)
 		assert(e[DOOM_POOL_HEAD+k]>=0 && e[DOOM_POOL_HEAD+k]<level_nmSectors);
 	    }
-	 assert(e==table+nShorts-4);
+	 assert(e==table+nShorts-7);
 	 o=(DoomPoolsObject *)getFreeObject(doomPools_func,ot,CLASS_SECTOR);
 	 if (o)
 	    {o->nmPools=(short)nmPools;

@@ -224,7 +224,9 @@ def title_offsets():
     lb["LOGO"] = lb["U"] + 256
     lb["MASK"] = lb["LOGO"] + 8
     lb["MASKG"] = lb["MASK"] + t.MASK_ROWS * t.MASK_BYTES
-    lb["PIXELS"] = lb["MASKG"] + t.MASK_ROWS * t.MASK_BYTES
+    lb["PCTX"] = lb["MASKG"] + t.MASK_ROWS * t.MASK_BYTES
+    lb["DIGITS"] = lb["PCTX"] + 4
+    lb["PIXELS"] = lb["DIGITS"] + len(t.PCT_GLYPHS) * 2 * t.MASK_ROWS * t.DIGIT_BYTES
     assert lb["PIXELS"] == t.LOGO_BLOCK_HEAD, lb
     return lb
 
@@ -268,6 +270,9 @@ def read_logo_block(b, empty_ok=False):
     lw, lh, lx, ly = b.i16(), b.i16(), b.i16(), b.i16()
     mask = b.take(t.MASK_ROWS * t.MASK_BYTES)
     maskg = b.take(t.MASK_ROWS * t.MASK_BYTES)
+    pctx, zero = b.i16(), b.i16()
+    digits = b.take(len(t.PCT_GLYPHS) * 2 * t.MASK_ROWS * t.DIGIT_BYTES)
+    assert zero == 0 and 0 <= pctx <= t.FIRE_W - t.PCT_CELLS * t.DIGIT_W and not (pctx & 7), pctx
     if empty_ok and lw == 0:
         assert (lh, lx, ly) == (0, 0, 0) and not any(mask) and not any(maskg), \
             "bloc logo vide : %s" % ((lh, lx, ly),)
@@ -281,10 +286,20 @@ def read_logo_block(b, empty_ok=False):
         assert all((a & ~b_) == 0 for a, b_ in zip(mask, maskg)), "corps hors du glyphe"
         assert sum(bin(v).count("1") for v in mask) < \
             sum(bin(v).count("1") for v in maskg), "corps == glyphe : lettres pleines"
+        # les douze glyphes du pourcentage : l'espace vide, les onze autres pleins, corps inclus
+        gl = t.MASK_ROWS * t.DIGIT_BYTES
+        for k, ch in enumerate(t.PCT_GLYPHS):
+            corps = digits[k * 2 * gl:k * 2 * gl + gl]
+            gros = digits[k * 2 * gl + gl:(k + 1) * 2 * gl]
+            if ch == " ":
+                assert not any(corps) and not any(gros), "l'espace du pourcentage n'est pas vide"
+            else:
+                assert any(corps) and all((a & ~b_) == 0 for a, b_ in zip(corps, gros)), ch
     pixels = b.take(lw * lh)
     assert lw == 0 or any(pixels)
     assert b.p % 4 == 0 and b.p == t.LOGO_BLOCK_HEAD + lw * lh, "bloc logo : fin %d" % b.p
     return dict(levels=nlev, pal=pal, p_load=p_load, logo=(lx, ly, lw, lh), mask=mask,
+                pctx=pctx, digits=digits,
                 maskg=maskg, pixels=pixels,
                 mask_bits=sum(bin(v).count("1") for v in mask),
                 maskg_bits=sum(bin(v).count("1") for v in maskg))

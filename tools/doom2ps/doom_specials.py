@@ -270,7 +270,7 @@ FX_ENTETE = 9                    # shorts d'une entree avant ses feuilles
 #   0 x  1 hauteur  2 y  3 rayon  4 feuille  5 nombre de feuilles vues, puis les feuilles
 OT_DOOM_LAMPS = 188
 POOL_ENTETE = 10                 # shorts d'une flaque avant ses feuilles
-POOL_TETE = 4                    # shorts d'en-tete de l'enregistrement
+POOL_TETE = 7                    # shorts d'en-tete de l'enregistrement (teinte comprise)
 OT_LONGUEUR_VARIABLE = (OT_DOOM_SECTORFX, OT_DOOM_LAMPS)
 FX_FLASH, FX_STROBE, FX_GLOW, FX_FLICKER = 1, 2, 3, 4
 FX_SYNC = 0x80                   # strobe des speciaux 12/13 : premier compte 1 (P_SpawnStrobeFlash)
@@ -281,10 +281,77 @@ FASTDARK, SLOWDARK = 15, 35
 # non plus, et ATTENTION -- SLIME01 a SLIME12 de Doom 2 sont bien des liquides mais SLIME13 a
 # SLIME16 sont du metal rouille, qu'un simple prefixe ferait briller. D'ou la liste exacte. C'est
 # ici qu'on ajoute ce qu'apportent Doom 2, TNT et Plutonia.
-NUKAGE_FLATS = frozenset(["NUKAGE1", "NUKAGE2", "NUKAGE3",       # Doom et Doom 2
+# LES SOLS SPECIAUX, DEDUITS. Le WAD dit "ce sol n'est pas ordinaire" de deux facons, et deux
+# seulement : le flat appartient a une FAMILLE ANIMEE (p_spec.c P_InitPicAnims -- la table est
+# celle de Doom, pas une liste de gout), ou le secteur qu'il couvre porte un SPECIAL A DEGATS
+# (P_PlayerInSpecialSector). La couleur tranche ensuite : on mesure la saturation de la couleur
+# MOYENNE du flat dans PLAYPAL, et sous SATURATION_MIN on laisse tomber -- un liquide qui ne se
+# distingue pas par la couleur n'a rien a teinter, et un sol brun sature (FLOOR7_1 : 0.61) n'est
+# pas un liquide pour autant, c'est l'animation ou les degats qui le disent.
+# La carte prend la teinte de son sol special le PLUS ETENDU : une seule par niveau, parce que la
+# rampe du monde n'a qu'une famille de bandes (UTIL.H).
+SECTEURS_DEGATS = frozenset((4, 5, 7, 11, 16))
+SATURATION_MIN = 0.35
+TEINTE_ADOUCIT = 0.625   # part du chemin vers le blanc : la couleur BRUTE d'un flat est bien trop
+                         # forte sur un mur (le nukage sort a k = 8, 16, 5 et peint la salle en
+                         # vert pomme -- mesure a l'ecran). Adoucie, elle donne 13, 16, 12, ce
+                         # qui est la teinte reglee a la main et acceptee le 2026-09-23.
+FLATS_ANIMES = frozenset(["NUKAGE1", "NUKAGE2", "NUKAGE3",       # Doom et Doom 2
                           "LAVA1", "LAVA2", "LAVA3", "LAVA4",    # Doom 2
                           "BLOOD1", "BLOOD2", "BLOOD3"]          # Doom 2
-                         + ["SLIME%02d" % i for i in range(1, 13)])   # Doom 2 : 01-12 SEULEMENT
+                         + ["SLIME%02d" % i for i in range(1, 13)]    # Doom 2 : 01-12 SEULEMENT
+                         + ["FWATER%d" % i for i in range(1, 5)]
+                         + ["SWATER%d" % i for i in range(1, 5)]
+                         + ["RROCK%02d" % i for i in range(5, 9)])
+
+
+def _saturation(W, flat):
+    """(saturation, (r, g, b) en seiziemes) de la couleur moyenne d'un flat."""
+    pal = W.playpal(0)
+    acc = [0, 0, 0]
+    try:
+        d = W.lump(flat)
+    except Exception:
+        return 0.0, (16, 16, 16)       # la table animee est celle de DOOM 2 : le WAD peut ne pas
+    for px in d:                       # avoir le flat, et alors il n'est pas special ici
+        c = pal[px]
+        for i in range(3):
+            acc[i] += c[i]
+    m = max(acc)
+    if not m:
+        return 0.0, (16, 16, 16)
+    sat = (m - min(acc)) / float(m)
+    k = [16.0 * v / m for v in acc]
+    return sat, tuple(max(0, min(16, int(round(x + (16.0 - x) * TEINTE_ADOUCIT)))) for x in k)
+
+
+def flats_speciaux(M, W=None):
+    """{nom de flat} : les sols que le WAD signale comme pas ordinaires, et dont la couleur vaut
+    la peine d'etre montree. `W` absent (verif, tests) : la table animee seule."""
+    out = set(FLATS_ANIMES)
+    for s in M["sectors"]:
+        if s.special in SECTEURS_DEGATS:
+            out.add(s.floorpic)
+    if W is None:
+        return out
+    return {f for f in out if _saturation(W, f)[0] >= SATURATION_MIN}
+
+
+def teinte_de_carte(M, conv, W):
+    """(r, g, b) en seiziemes : la teinte du sol special le plus etendu de la carte."""
+    import doom3d
+    best, teinte = 0.0, (WORLDTINT_DEFAUT)
+    aires = defaultdict(float)
+    for si, s in enumerate(M["sectors"]):
+        if s.floorpic in flats_speciaux(M, W):
+            aires[s.floorpic] += abs(doom3d._perimetre_aire(M, si)[1])
+    for f, a in aires.items():
+        if a > best:
+            best, teinte = a, _saturation(W, f)[1]
+    return teinte
+
+
+WORLDTINT_DEFAUT = (13, 16, 11)   # UTIL.H : le vert du nukage, si la carte ne dit rien
 # LE VERT N'EST PAS UNE LUMIERE. Il l'a ete deux disques de suite et c'etait faux les deux fois :
 # une lumiere du moteur est une tache, elle prend un des quinze slots, et il fallait faire bouger
 # son intensite pour que la flaque vive, ce qui se voit comme un scintillement (a l'ecran,
@@ -301,7 +368,7 @@ NUKAGE_FLATS = frozenset(["NUKAGE1", "NUKAGE2", "NUKAGE3",       # Doom et Doom 
 #     joueur est assez pres et peut voir une de ses feuilles (sinon la salle est rendue telle
 #     quelle). Ca varie lentement, globalement, et ca ne scintille pas.
 NUKAGE_PULSE = 24                # tics entre deux pas de la respiration
-NUKAGE_AMP = 1                   # crans (0..16) au-dessus et au-dessous de la lumiere de la salle
+NUKAGE_AMP = 2                   # crans (0..16) au-dessus et au-dessous de la lumiere de la salle
 NUKAGE_FEUILLES = 8              # feuilles au plus par flaque (DOOM_GAME.C DOOM_LAMP_SEEN)
 NUKAGE_BORD = 96                 # u : un voisin du liquide fait partie de la SALLE si son sol
                                  # n'est pas plus haut que ca -- la berge, la passerelle, pas le
@@ -791,7 +858,8 @@ def bassins_nukage(M, conv):
         return conv._flaques
     import doom3d                                 # tardif : doom3d importe ce module
     S, L, SD = M["sectors"], M["linedefs"], M["sidedefs"]
-    liquide = {si for si, s in enumerate(S) if s.floorpic in NUKAGE_FLATS}
+    speciaux = flats_speciaux(M, M.get("wad"))
+    liquide = {si for si, s in enumerate(S) if s.floorpic in speciaux}
     parent = {si: si for si in liquide}
 
     def trouve(a):
@@ -1279,7 +1347,9 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
         graine = (si & 0x3fff) * 2 + 1
         flaques.append([x, h, y, rayon, fl["sect"], base, 0, 0, graine, len(feuilles)] + feuilles)
     if flaques:
-        vals = [POOL_TETE + sum(len(f) for f in flaques), len(flaques), NUKAGE_PULSE, NUKAGE_AMP]
+        teinte = teinte_de_carte(M, conv, M["wad"]) if M.get("wad") else WORLDTINT_DEFAUT
+        vals = [POOL_TETE + sum(len(f) for f in flaques), len(flaques), NUKAGE_PULSE, NUKAGE_AMP,
+                teinte[0], teinte[1], teinte[2]]
         for f in flaques:
             vals.extend(f)
         emit(OT_DOOM_LAMPS, *vals, nshorts=vals[0], kind="pools", n=len(flaques))

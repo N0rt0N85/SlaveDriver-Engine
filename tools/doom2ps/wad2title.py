@@ -21,7 +21,9 @@ logo 0x0 et masque vide, le reste identique.
   936   u8[256]   U : 2e flux (graine 2) -- decroissance U < pQ8 quand pQ8 != 128
   1192  i16 x4    logoW, logoH, logoX, logoY : rectangle du logo dans la bitmap NBG1 (zoom x2)
   1200  u8[16][40] masque "LOADING" CORPS (1 bit/cellule, bit fort a gauche, 1 = cellule claire) :
-  1840  u8[16][40] masque "LOADING" GLYPHE (1 = cellule opaque, contour et trou du O compris) :
+  1840  u8[16][40] masque "LOADING" GLYPHE DILATE (le contour, deja grossi d'une cellule) :
+  2480  i16 colonne du champ du POURCENTAGE (multiple de 8), i16 0 :
+  2484  12 x (corps, glyphe dilate) x 16 x 2 octets : '0'..'9', '%', ' ' a largeur fixe 16 :
                   STCFN x2, centre sur 320 ; pochoir de l'ecran de chargement (lignes de feu 126..141)
   1840  u8[w*h]   M_DOOM, indices PLAYPAL, 0 = transparent (masque du patch)
   1840 + w*h      fin (multiple de 4)
@@ -62,6 +64,11 @@ TITLE_MAGIC, BLOCK_MAGIC = b"DTT1", b"DLG1"
 FIRE_W = 320                                           # DOOM_TITLE.C FIRE_W
 RAMP_SLOTS = 40                                        # u16[40] / u8[40] : 37 + remplissage
 MASK_ROWS, MASK_BYTES = 16, FIRE_W // 8                # "LOADING" : STCFN x2 = 16 lignes
+DIGIT_W, DIGIT_BYTES = 24, 3                           # une case du pourcentage, a largeur fixe
+                                                       # ('%' de STCFN x2 fait 18 px)
+PCT_CELLS = 4                                          # "100%" : trois chiffres et le signe
+PCT_GLYPHS = "0123456789% "                            # dans cet ordre dans le DAT
+PCT_GAP = 16                                           # px entre "LOADING" et le champ
 BITMAP_W, SCREEN_H = 160, 224                          # NBG1 zoom x2 : 320 px -> 160 ; 224 lignes
 LOGO_Y = 6                                             # bitmap -> ecran 12
 SKULL_W, SKULL_H = 24, 19                              # EZ_setChar : largeur multiple de 8
@@ -141,8 +148,9 @@ FIRE_LEVELS = len(FIRE_RGBS)                           # 37 : niveaux 0..36 (DOO
 assert FIRE_LEVELS == 37 and FIRE_LEVELS <= RAMP_SLOTS
 
 LOGO_BLOCK_HEAD = (4 + 4 + 512 + 2 * RAMP_SLOTS + 2 * RAMP_SLOTS + 256 + 256 + 8
-                   + 2 * MASK_ROWS * MASK_BYTES)
-assert LOGO_BLOCK_HEAD == 2480      # DOOM_TITLE.C LB_PIXELS (deux plans de masque)
+                   + 2 * MASK_ROWS * MASK_BYTES + 4
+                   + len(PCT_GLYPHS) * 2 * MASK_ROWS * DIGIT_BYTES)
+assert LOGO_BLOCK_HEAD == 3636      # DOOM_TITLE.C LB_PIXELS (masques, champ, glyphes)
 
 
 # ----------------------------------------------------------------------------- feu
@@ -218,7 +226,8 @@ def loading_mask(big_font):
     clair = [i and lum[i] >= seuil for i in range(16)]
     assert any(clair[1:]) and not all(clair[1:]), "la CLUT de la police ne se coupe pas en deux"
     text = "LOADING"
-    total = sum(widths[ord(c)] for c in text) + 2 * (len(text) - 1)
+    mot = sum(widths[ord(c)] for c in text) + 2 * (len(text) - 1)
+    total = mot + PCT_GAP + PCT_CELLS * DIGIT_W
     x = (FIRE_W - total) // 2
     plans = [[[0] * FIRE_W for _ in range(MASK_ROWS)] for _ in range(2)]
     for c in text:
@@ -229,14 +238,64 @@ def loading_mask(big_font):
                     if clair[q]:
                         plans[0][y][x + i] = 1
         x += widths[ord(c)] + 2
+    # le champ du pourcentage commence sur un octet PLEIN : le moteur y recopie des octets
+    pctx = ((x - 2 + PCT_GAP) + 7) & ~7
+    assert pctx + PCT_CELLS * DIGIT_W <= FIRE_W, pctx
+    return _plans_bytes(_dilater(plans)), pctx
+
+
+def _dilater(plans):
+    """plans[1] (le glyphe entier) grossi d'une cellule dans les huit directions : le contour
+    noir de la lettre, cuit ici plutot qu'a chaque chargement."""
+    h, w = len(plans[1]), len(plans[1][0])
+    gros = [[0] * w for _ in range(h)]
+    for y in range(h):
+        for x in range(w):
+            if not plans[1][y][x]:
+                continue
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    if 0 <= y + dy < h and 0 <= x + dx < w:
+                        gros[y + dy][x + dx] = 1
+    return [plans[0], gros]
+
+
+def _plans_bytes(plans):
     out = bytearray()
     for bits in plans:
         for row in bits:
-            for b in range(0, FIRE_W, 8):
+            for b in range(0, len(row), 8):
                 v = 0
                 for k in range(8):
                     v = (v << 1) | row[b + k]
                 out.append(v)
+    return bytes(out)
+
+
+def digits_mask(big_font):
+    """Les douze glyphes du pourcentage a largeur FIXE (DIGIT_W), corps et glyphe dilate, dans
+    l'ordre de PCT_GLYPHS. Le moteur ecrit "  7%", " 42%", "100%" en recopiant quatre cases."""
+    height, clut, widths, glyphs = wad2font.parse_font(big_font)
+    assert height == MASK_ROWS
+    lum = [0.0] * 16
+    for i, c in enumerate(clut):
+        lum[i] = 0.30 * (c & 31) + 0.59 * ((c >> 5) & 31) + 0.11 * ((c >> 10) & 31)
+    seuil = MASK_CLAIR * max(lum)
+    clair = [i and lum[i] >= seuil for i in range(16)]
+    out = bytearray()
+    for ch in PCT_GLYPHS:
+        plans = [[[0] * DIGIT_W for _ in range(MASK_ROWS)] for _ in range(2)]
+        if ch != " ":
+            w = widths[ord(ch)]
+            assert 0 < w <= DIGIT_W, (ch, w)
+            x0 = (DIGIT_W - w) // 2
+            for y, row in enumerate(glyphs[ord(ch)]):
+                for i, q in enumerate(row):
+                    if q:
+                        plans[1][y][x0 + i] = 1
+                        if clair[q]:
+                            plans[0][y][x0 + i] = 1
+        out += _plans_bytes(_dilater(plans))
     return bytes(out)
 
 
@@ -289,7 +348,13 @@ def logo_block(wad, loading="TITLEPIC"):
     out += bytes(p_load + [0] * (RAMP_SLOTS - FIRE_LEVELS))
     out += rand_bytes(1) + rand_bytes(2)
     out += struct.pack(">hhhh", w, h, x, y)
-    out += bytes(2 * MASK_ROWS * MASK_BYTES) if loading == "black" else loading_mask(mask_font(wad))
+    if loading == "black":
+        out += bytes(2 * MASK_ROWS * MASK_BYTES) + struct.pack(">hh", 0, 0)
+        out += bytes(len(PCT_GLYPHS) * 2 * MASK_ROWS * DIGIT_BYTES)
+    else:
+        mf = mask_font(wad)
+        masque, pctx = loading_mask(mf)
+        out += masque + struct.pack(">hh", pctx, 0) + digits_mask(mf)
     assert len(out) == LOGO_BLOCK_HEAD
     out += pixels
     assert not (w & 3) and len(out) % 4 == 0      # doom_loadingScreen lit w*h octets, sans remplissage

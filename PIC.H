@@ -54,7 +54,9 @@ int createMippedPics(void);
 
 /* GCC14: CRAM banks of the object palette (UTIL.H NMOBJECTPALLETES) */
 extern int nmObjectFogBanks;                    /* banks 0..n-1 carry the things' fog */
-extern int spectreBank;                         /* bank n: grey and dark, SPRITEFLAG_MESH */
+extern int spectreBank;
+extern int tintBank;                    /* GCC14: SECFLAG_TINT_CORE (PIC.C) */
+void buildTintBank(int bank);           /* < 0 = the bank already chosen (UTIL.C setWorldTint) */                         /* bank n: grey and dark, SPRITEFLAG_MESH */
 void buildObjectFogBanks(int n);                /* rebuild 1..n-1 from bank 0, and n for the spectre */
 void buildRemappedBank(int bank,const unsigned char *remap);   /* bank = bank 0 through remap[] */
 void buildTintedBank(int bank,int tr,int tg,int tb);            /* bank = bank 0 under a colour filter, 0..31 a channel */

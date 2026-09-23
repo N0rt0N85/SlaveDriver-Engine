@@ -11,6 +11,8 @@
 #include "grenpal.h"
 #include "manpal.h"
 #include "mplayer.h"
+#include "sruins.h"                      /* GCC14: camera, for the gun's tint */
+#include "level.h"
 extern int viewXmin,viewXmax,viewYmin,viewYmax,viewCx,viewCy;   /* WALLS.C: the view being drawn */
 
 
@@ -304,7 +306,12 @@ int advanceWeaponSequence(int xbase,int ybase,int hack)
 	    }
 	 else if (getPicClass(c->tile)==TILEVDP)
 	    {unsigned short *colorRam=(unsigned short *)SCL_COLRAM_ADDR;
-	     SCL_SET_N0CAOS(0);
+	     /* GCC14: in the heart of a nukage room the gun goes green like everything else
+		(SECFLAG_TINT_CORE, PIC.C buildTintBank).  Solo, the gun is a VDP2 PLANE, so
+		this is one register: the plane reads the green bank instead of bank 0, and not
+		a pixel is paid for it. */
+	     SCL_SET_N0CAOS((camera && (level_sector[camera->s].flags & SECFLAG_TINT_CORE))?
+			    tintBank: 0);
 	     if (sequence>=30 && sequence<35)
 		{if (loadedPal!=1)
 		    {for (j=0;j<256;j++)

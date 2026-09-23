@@ -1909,8 +1909,9 @@ def _dist2_segment(x, y, z, p, q):
 SECFLAG_NUKAGE = 0x40       # SLEVEL.H : la feuille appartient a une salle a nukage
 VERT_NM = 4                 # UTIL.H WORLDGREEN_NM : bandes de vert de la rampe du monde
 VERT_SH = 5                 # UTIL.H WORLDGREEN_SH : leur place dans l'octet de lumiere
-VERT_COEUR = 0.35           # rayons de flaque : plein vert jusque-la
-VERT_PORTEE = 1.2           # rayons de flaque : au-dela, plus de vert du tout
+VERT_COEUR = 64             # u depuis le BORD du nukage : plein vert jusque-la
+VERT_PORTEE = 448           # u depuis le bord : au-dela, plus de vert du tout
+SECFLAG_NUKAGE_CORE = 0x80  # SLEVEL.H : la feuille est dans le coeur vert (things teintes)
 
 
 def marquer_nukage(em, M, conv, stats):
@@ -1932,37 +1933,55 @@ def marquer_nukage(em, M, conv, stats):
     stats["nukage_salles"] = len(salles)
 
 
+def _aretes_nukage(M, flaques):
+    """Les segments du BORD du nukage : toute arete d'un secteur de liquide, en (x, hauteur, z).
+
+    C'est la bonne reference et pas le centre : une flaque n'est pas un disque, et deux murs a la
+    meme distance du centre n'etaient pas au meme niveau de vert si elle s'etirait vers l'un
+    d'eux (vu a l'ecran, 2026-09-23). La hauteur est celle du liquide, pas celle du sommet :
+    un plafond haut prend moins de vert qu'un mur bas, ce qui est le bon sens."""
+    V, L, SD, S = M["vertices"], M["linedefs"], M["sidedefs"], M["sectors"]
+    liquide = set()
+    for fl in flaques:
+        liquide |= fl["liquide"]
+    out = []
+    for ld in L:
+        secs = {SD[sd].sector for sd in (ld.right, ld.left) if sd >= 0}
+        if not (secs & liquide):
+            continue
+        h = min(S[si].floorh for si in (secs & liquide))
+        a, b = V[ld.v1], V[ld.v2]
+        out.append(((a[0], h, a[1]), (b[0], h, b[1])))
+    return out
+
+
 def cuire_vert_nukage(em, M, conv, stats):
     """Ecrit le NIVEAU DE VERT de chaque sommet dans les bits 5-6 de son octet de lumiere.
 
-    Un sommet d'un mur ou d'un PLAFOND d'une salle a nukage prend VERT_NM-1 au bord de la flaque
-    et 0 a VERT_PORTEE rayons ; les SOLS n'en prennent pas (normale +Y, geom3d.py) -- la passerelle
-    qui traverse une salle verte reste grise, et c'est ce qui dit qu'elle est seche. Le moteur ne
-    teste rien : sa rampe a une bande par niveau, et l'octet la designe tout seul."""
+    Un sommet d'un mur ou d'un PLAFOND d'une salle a nukage prend VERT_NM-1 jusqu'a VERT_COEUR
+    unites du BORD du liquide, puis s'eteint a VERT_PORTEE ; les SOLS n'en prennent pas
+    (normale +Y, geom3d.py) -- la passerelle qui traverse une salle verte reste grise, et c'est
+    ce qui dit qu'elle est seche. Le moteur ne teste rien : sa rampe a une bande par niveau, et
+    l'octet la designe tout seul.
+    La feuille dont un sommet atteint le plein vert prend SECFLAG_NUKAGE_CORE : c'est la que le
+    moteur teinte aussi les THINGS (WALLS.C drawSprites)."""
     import doom_specials                           # tardif : doom_specials importe ce module
     flaques = doom_specials.bassins_nukage(M, conv)
     if not flaques:
         return
     salles = doom_specials.salles_nukage(M, conv)
-    # Le rayon d'une flaque est celui de la SALLE (il couvre le bassin fondu, jusqu'a 448 u) :
-    # prendre le plein vert jusqu'a ce rayon-la peignait toute la piece d'un seul niveau. Le
-    # coeur est donc une fraction du rayon, et l'extinction court jusqu'a VERT_PORTEE rayons --
-    # ce qui laisse un vrai degrade EN TRAVERS de la salle, pas au-dela de ses murs.
-    pts = [(fl["x"], M["sectors"][fl["si"]].floorh + 16, fl["y"], float(fl["rayon"]))
-           for fl in flaques]
+    segs = _aretes_nukage(M, flaques)
+    if not segs:
+        return
     V = em.vertices
 
     def niveau(x, y, z):
-        best = 0
-        for px, py, pz, r in pts:
-            d = math.sqrt((x - px) ** 2 + (y - py) ** 2 + (z - pz) ** 2)
-            if d >= r * VERT_PORTEE:
-                continue
-            t = 0.0 if d <= r * VERT_COEUR else                 (d - r * VERT_COEUR) / (r * (VERT_PORTEE - VERT_COEUR))
-            k = int(round((VERT_NM - 1) * (1.0 - t)))
-            if k > best:
-                best = k
-        return best
+        d2 = min(_dist2_segment(x, y, z, p, q) for p, q in segs)
+        if d2 >= VERT_PORTEE * VERT_PORTEE:
+            return 0
+        d = math.sqrt(d2)
+        t = 0.0 if d <= VERT_COEUR else (d - VERT_COEUR) / float(VERT_PORTEE - VERT_COEUR)
+        return int(round((VERT_NM - 1) * (1.0 - t)))
 
     n = 0
     for i, sec in enumerate(em.sectors):
@@ -1972,6 +1991,7 @@ def cuire_vert_nukage(em, M, conv, stats):
             w = em.walls[wi]
             if w["normal"][1] > 0:                 # un sol : jamais de vert
                 continue
+            fort = 0
             if w["flags"] & 0x01:                  # parallelogramme : sommets de GRILLE
                 tl, th, base = w["tileLength"], w["tileHeight"], w["firstLight"]
                 v0, v1, v2, v3 = (V[k] for k in w["v"])
@@ -1989,6 +2009,7 @@ def cuire_vert_nukage(em, M, conv, stats):
                         if k:
                             j = base + rr * (tl + 1) + cc
                             em.vertexLight[j] |= k << VERT_SH
+                            fort = max(fort, k)
                             n += 1
             elif w["firstVertex"] != 65535:        # mur a faces : ses sommets propres
                 for vi in range(w["firstVertex"], w["lastVertex"] + 1):
@@ -1996,6 +2017,7 @@ def cuire_vert_nukage(em, M, conv, stats):
                     k = niveau(v["x"], v["y"], v["z"])
                     if k:
                         v["light"] |= k << VERT_SH
+                        fort = max(fort, k)
                         n += 1
             else:                                  # mur plein : ses quatre coins
                 for vi in w["v"]:
@@ -2003,8 +2025,12 @@ def cuire_vert_nukage(em, M, conv, stats):
                     k = niveau(v["x"], v["y"], v["z"])
                     if k:
                         v["light"] |= k << VERT_SH
+                        fort = max(fort, k)
                         n += 1
+            if fort >= VERT_NM - 1:
+                sec["flags"] |= SECFLAG_NUKAGE_CORE
     stats["nukage_sommets_verts"] = n
+    stats["nukage_feuilles_coeur"] = sum(1 for x in em.sectors if x["flags"] & SECFLAG_NUKAGE_CORE)
 
 
 def _sources_nukage(src, M, conv, stats):

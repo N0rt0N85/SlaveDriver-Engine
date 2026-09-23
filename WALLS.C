@@ -860,10 +860,11 @@ unsigned short getLight(char vlight,
     and the lights are added AFTER it, with their own colour: a lamp over nukage must wash the
     green out, not be washed green by it. */
  r=g=b=((unsigned char)vlight)&31;
- {int k=((unsigned char)vlight)>>WORLDGREEN_SH;
+ {int k=((unsigned char)vlight)>>WORLDTINT_SH;
   if (k)
-     {r=(r*(16-(((16-WORLDGREEN_R)*k)/(WORLDGREEN_NM-1))))>>4;
-      b=(b*(16-(((16-WORLDGREEN_B)*k)/(WORLDGREEN_NM-1))))>>4;
+     {r=(r*(16-(((16-worldTint[0])*k)/(WORLDTINT_NM-1))))>>4;
+      g=(g*(16-(((16-worldTint[1])*k)/(WORLDTINT_NM-1))))>>4;
+      b=(b*(16-(((16-worldTint[2])*k)/(WORLDTINT_NM-1))))>>4;
      }
  }
  for (i=0;i<nmWallLights;i++)
@@ -889,10 +890,11 @@ unsigned short sgetLight(char vlight,
  if (!snmWallLights)
     return worldGrey[(int)(unsigned char)vlight];
  r=g=b=((unsigned char)vlight)&31;
- {int k=((unsigned char)vlight)>>WORLDGREEN_SH;   /* the green band: see getLight */
+ {int k=((unsigned char)vlight)>>WORLDTINT_SH;   /* the green band: see getLight */
   if (k)
-     {r=(r*(16-(((16-WORLDGREEN_R)*k)/(WORLDGREEN_NM-1))))>>4;
-      b=(b*(16-(((16-WORLDGREEN_B)*k)/(WORLDGREEN_NM-1))))>>4;
+     {r=(r*(16-(((16-worldTint[0])*k)/(WORLDTINT_NM-1))))>>4;
+      g=(g*(16-(((16-worldTint[1])*k)/(WORLDTINT_NM-1))))>>4;
+      b=(b*(16-(((16-worldTint[2])*k)/(WORLDTINT_NM-1))))>>4;
      }
  }
  for (i=0;i<snmWallLights;i++)
@@ -3316,6 +3318,7 @@ CompoPlan shadowPlan,spectrePlan;
 void compoPlanOf(CompoPlan *p,int mode)
 {p->nm=1;
  p->jit=0;
+ p->clip=0;
  p->f[0]=p->f[1]=p->f[2]=COMPO_REP;
  switch (mode)
     {case CFG_COMPO_MESH:   p->f[0]=DRAW_MESH; break;
@@ -3329,7 +3332,8 @@ void compoPlanOf(CompoPlan *p,int mode)
 			    p->f[0]=COMPO_SHADOW;
 			    p->f[1]=DRAW_MESH; break;      /* replace, in its grey bank */
      case CFG_COMPO_FUZZ:   p->nm=3;
-			    p->jit=6;           /* passes 1 and 2 are DISPLACED */
+			    p->jit=6;           /* passes 1 and 2 are DISPLACED ... */
+			    p->clip=6;          /* ... and CUT to a piece of the sprite */
 			    p->f[0]=p->f[1]=p->f[2]=COMPO_SHADOW; break;
      default:               break;
     }
@@ -3343,16 +3347,36 @@ void compoPlanOf(CompoPlan *p,int mode)
    itself: the part all three cover takes three shadows, the crescents one or two, and the whole
    thing is redrawn every image.  Doom's own fuzz is a displacement too (r_draw.c fuzzoffset). */
 #define FUZZ_SHIFT 5
+/* A cut pass is made of FUZZ_PIECES rectangles, each between a quarter and a half of the
+   sprite in each axis and placed at random.  ONE big rectangle a pass left two flat halves --
+   the thing looked like three sheets laid over one another, which is a shadow, not a fuzz. */
+#define FUZZ_PIECES 3
+#define FUZZ_MIN   2            /* the smallest piece: the sprite over this, in each axis */
+#define FUZZ_SPAN  4            /* ... and at most the sprite over this, plus the minimum */
 static unsigned int fuzzSeed=0x13579bdfu;
-static int fuzzNext(void)
+static int fuzzMod(int n)
 {fuzzSeed=fuzzSeed*1103515245u+12345u;
- return (int)(((fuzzSeed>>17)%(2*FUZZ_SHIFT+1))-FUZZ_SHIFT);
+ return n>0? (int)((fuzzSeed>>17)%(unsigned)n): 0;
+}
+static int fuzzNext(void)
+{return fuzzMod(2*FUZZ_SHIFT+1)-FUZZ_SHIFT;
 }
 
-/* the plan, drawn: `pos` is the quad (pos[0] its corner), restored on the way out */
+/* the plan, drawn: `pos` is the quad (pos[0] its corner, pos[1] its size), restored on the way
+   out.  `tl` says pos[0] is the TOP-LEFT (ZOOM_TL) rather than the centre (ZOOM_MM), which is
+   what a CUT pass needs to know to build its rectangle.
+   A cut pass draws the WHOLE sprite through a user clip that keeps only a piece of it: three
+   passes laid over one another darkened the monster evenly, which is a shadow, not a fuzz.  Cut
+   -- and displaced -- they leave patches at one, two and three shadows, redrawn every image. */
 static void compoDraw(const CompoPlan *p,int zoom,int md,int bk,int pic,XyInt *pos,
-		      struct gourTable *g)
-{int i,dx,dy;
+		      struct gourTable *g,int tl)
+{int i,dx,dy,x0,y0,w,h,cw,ch;
+ XyInt cl[2];
+ if (tl)
+    {x0=pos[0].x; y0=pos[0].y;}
+ else
+    {x0=pos[0].x-(pos[1].x>>1); y0=pos[0].y-(pos[1].y>>1);}
+ w=pos[1].x; h=pos[1].y;
  for (i=0;i<p->nm;i++)
     {dx=dy=0;
      if (p->jit & (1<<i))
@@ -3361,9 +3385,36 @@ static void compoDraw(const CompoPlan *p,int zoom,int md,int bk,int pic,XyInt *p
 	 pos[0].x+=dx;
 	 pos[0].y+=dy;
 	}
-     EZ_scaleSpr(zoom,md|p->f[i],bk,pic,pos,g);
+     if (p->clip & (1<<i))
+	{int k;
+	 for (k=0;k<FUZZ_PIECES;k++)
+	    {cw=(w/FUZZ_MIN)-fuzzMod(w/FUZZ_SPAN+1);   /* a size of its own, every piece */
+	     ch=(h/FUZZ_MIN)-fuzzMod(h/FUZZ_SPAN+1);
+	     if (cw<1) cw=1;
+	     if (ch<1) ch=1;
+	     cl[0].x=x0+fuzzMod(w-cw+1)+viewCx;
+	     cl[0].y=y0+fuzzMod(h-ch+1)+viewCy;
+	     cl[1].x=cl[0].x+cw;
+	     cl[1].y=cl[0].y+ch;
+	     if (cl[0].x<0) cl[0].x=0;
+	     if (cl[0].y<0) cl[0].y=0;
+	     if (cl[1].x>319) cl[1].x=319;
+	     if (cl[1].y>239) cl[1].y=239;
+	     if (cl[1].x<=cl[0].x || cl[1].y<=cl[0].y)
+		continue;
+	     EZ_userClip(cl);
+	     EZ_scaleSpr(zoom,md|p->f[i],bk,pic,pos,g);
+	    }
+	}
+     else
+	EZ_scaleSpr(zoom,md|p->f[i],bk,pic,pos,g);
      pos[0].x-=dx;
      pos[0].y-=dy;
+    }
+ if (p->clip)                           /* the view's own clip back, for everything after */
+    {cl[0].x=XMIN+viewCx; cl[0].y=YMIN+viewCy;
+     cl[1].x=XMAX+viewCx; cl[1].y=YMAX+viewCy;
+     EZ_userClip(cl);
     }
 }
 
@@ -4356,6 +4407,10 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
       spriteBank=(spriteFog*(nmObjectFogBanks-1))/SPRITEFOGMAX;
       if (spriteBank>nmObjectFogBanks-1)
 	 spriteBank=nmObjectFogBanks-1;
+      /* GCC14: in the heart of a nukage room a thing takes the green too (PIC.C buildTintBank,
+	 SECFLAG_TINT_CORE).  No distance fog on it then -- the bank IS its colour. */
+      if (level_sector[o->s].flags & SECFLAG_TINT_CORE)
+	 spriteBank=tintBank;
       /* another player's body wears its own colours (MPLAYER.C mpSetBanks): one bank, no fog */
       if (mpPlayers>1)
 	 {int k=mpIndexOfSprite(o);
@@ -4432,7 +4487,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		     abs(pos[0].x)+(pos[1].x>>1)<=VDP1LIM &&
 		     abs(pos[0].y)+(pos[1].y>>1)<=VDP1LIM &&
 		     (sh=mapSpritePic(0,PIC_ALWAYS))>=0)
-		    compoDraw(&shadowPlan,ZOOM_MM,UCLPIN_ENABLE|COLOR_4,0,sh,pos,NULL);
+		    compoDraw(&shadowPlan,ZOOM_MM,UCLPIN_ENABLE|COLOR_4,0,sh,pos,NULL,0);
 		}
 	    }
 	}
@@ -4510,7 +4565,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	      if (sprRect(pos) && (pic=mapSpritePic(ch[chunk].tile,width64))>=0)
 		 {int md=UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|DRAW_GOURAU;
 		  if (o->flags & SPRITEFLAG_MESH)
-		     compoDraw(&spectrePlan,ZOOM_TL|flip,md,0,pic,pos,&gtable);
+		     compoDraw(&spectrePlan,ZOOM_TL|flip,md,0,pic,pos,&gtable,1);
 		  else
 		     EZ_scaleSpr(ZOOM_TL|flip,md,0,pic,pos,&gtable);
 		 }
@@ -4524,7 +4579,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		 {int md=UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE;
 		  int bk=(light? light: spriteBank)<<8;     /* light = muzzle flash */
 		  if (o->flags & SPRITEFLAG_MESH)
-		     compoDraw(&spectrePlan,ZOOM_TL|flip,md,bk,pic,pos,NULL);
+		     compoDraw(&spectrePlan,ZOOM_TL|flip,md,bk,pic,pos,NULL,1);
 		  else
 		     EZ_scaleSpr(ZOOM_TL | flip,md,bk,pic,pos,NULL);
 		 }

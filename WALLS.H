@@ -34,7 +34,8 @@ extern int shadowMode,spectreMode,shadowPct,shadowSpan;
 #define COMPO_MAXPASS 3
 typedef struct
 {unsigned char nm;                       /* passes, 1..COMPO_MAXPASS                          */
- unsigned char jit;                      /* bit p: pass p takes a random one-pixel offset     */
+ unsigned char jit;                      /* bit p: pass p is displaced by a random offset     */
+ unsigned char clip;                     /* bit p: pass p is cut to a random piece of the quad */
  unsigned short f[COMPO_MAXPASS];        /* the VDP1 draw-mode bits of each pass              */
 } CompoPlan;
 extern CompoPlan shadowPlan,spectrePlan;

@@ -1074,11 +1074,35 @@ static int fogBankChan(int v,int sub,int c)
  return v;
 }
 
+/* GCC14: the level's own bank -- bank 0 under the level's tint (UTIL.H worldTint).  A thing in
+   the heart of a tinted room is drawn in it (SECFLAG_TINT_CORE, WALLS.C drawSprites), and so is
+   the gun (SEQUENCE.C), so what wades in the stuff takes its colour like the walls around it.
+   One bank, off the fog's top.  `bank` < 0 = the one already chosen: UTIL.C setWorldTint calls
+   back here when a level hands over its colour. */
+int tintBank=NMOBJECTPALLETES-2;
+
+void buildTintBank(int bank)
+{unsigned short *colorRam=(unsigned short *)SCL_COLRAM_ADDR;
+ int c,r,g,b;
+ if (bank<0)
+    bank=tintBank;
+ assert(bank>0 && bank<NMOBJECTPALLETES);
+ tintBank=bank;
+ for (c=0;c<256;c++)
+    {unsigned short v=colorRam[c];
+     r=((v & 0x1f)*worldTint[0])>>4;
+     g=(((v>>5) & 0x1f)*worldTint[1])>>4;
+     b=((((v>>10) & 0x1f))*worldTint[2])>>4;
+     colorRam[bank*256+c]=RGB(r,g,b);
+    }
+}
+
 void buildObjectFogBanks(int n)
 {unsigned short *colorRam=(unsigned short *)SCL_COLRAM_ADDR;
  int i,c,r,g,b,sub;
  assert(n>=3 && n<=NMOBJECTPALLETES);
  n--;                           /* the top one goes to the spectre, below */
+ n--;                           /* and the one under it to the nukage's green */
  nmObjectFogBanks=n;
  for (i=1;i<n;i++)
     {sub=(SPRITEFOGMAX*i)/(n-1);
@@ -1091,6 +1115,7 @@ void buildObjectFogBanks(int n)
 	}
     }
  buildSpectreBank(n);
+ buildTintBank(n+1);
 }
 
 /* GCC14: bank `bank` = bank 0 under a colour filter, for a game whose palette carries no ramp

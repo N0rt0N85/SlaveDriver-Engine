@@ -72,7 +72,7 @@ extern unsigned short greyTable[];
    WALLS.C, and _worldGrey in wallasm_gnu.s), so that the fog can have a COLOUR of its own. */
 extern unsigned short worldGrey[];
 /* GCC14: THE RAMP HAS FOUR BANDS OF 32.  A vertex's light byte carries its light in bits 0-4 and
-   its GREEN level in bits 5-6 (WORLDGREEN_NM levels), so `worldGrey[light]` reads the right band
+   its GREEN level in bits 5-6 (WORLDTINT_NM levels), so `worldGrey[light]` reads the right band
    without anyone testing anything -- the renderer's assembler indexes this table with the byte as
    it stands (wallasm_gnu.s .Lrt_grey), and gouraud smooths the levels between two vertices.  The
    converter bakes the level from the distance to the pool of nukage (doom3d.cuire_vert_nukage).
@@ -81,13 +81,19 @@ extern unsigned short worldGrey[];
    indexes, so a vertex the fog swallows falls into the top of the band below, and must come out
    dark.  Band 0 keeps the bright greyTable there instead -- that is where PowerSlave's water
    reads, and PowerSlave has no green. */
-#define WORLDGREEN_NM 4                 /* bands: 0 = no green, 3 = the most */
-#define WORLDGREEN_SH 5                 /* the band's bit position in a light byte */
+#define WORLDTINT_NM 4                 /* bands: 0 = no tint, 3 = the most */
+#define WORLDTINT_SH 5                 /* the band's bit position in a light byte */
+/* The tint itself, k per channel over 16 (16 = that channel untouched).  It is the LEVEL's, not
+   the game's: the converter reads it off the special floor the map is built around -- green for
+   nukage, red for blood, orange for lava -- and the pools object hands it over at load
+   (setWorldTint).  The default is the nukage green, which is what an untouched level gets. */
+extern unsigned char worldTint[3];
+void setWorldTint(int r,int g,int b);   /* rebuilds bands 1.. of worldGrey, and the things' bank */
 /* how much RED and BLUE the LAST band keeps, in sixteenths; the green is the light itself.
    NOT a params/ value: util.h is read before gameparams.h, so a GP_ default written here would
    silently win over the file. */
-#define WORLDGREEN_R 13
-#define WORLDGREEN_B 11
+#define WORLDTINT_R 13
+#define WORLDTINT_B 11
 /* GCC14: the colour the fog fades TO, 0..31 a channel, in gouraud units (16 = the surface's own
    colour).  (0,0,0) is the original fog -- black -- and rebuilds greyTable byte for byte.
    worldGrey[] then runs from that colour at no light to neutral at 16, so a surface does not go
