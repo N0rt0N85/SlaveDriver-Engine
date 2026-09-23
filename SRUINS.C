@@ -2910,11 +2910,22 @@ int runLevel(char *filename,int levelNm)
      /* LEGEND  polys : cells emitted (walls+floors+ceilings, sprites excluded), total /
 			 slave's share.  The second divides SLAVECMDS of the tree to give
 			 the cost of one record.  (lod is on the fps line, -60)
-		 pipe  : spins at the join of the traversal started in the tail
-			 of the previous frame.  0 = it fit entirely in the tail;
-			 -1 = nothing was in flight, the master traversed (earthquake,
-			 or WALLPIPE at 0). */
-     drawStringf(-158,-70,1,"polys:%d/%d pipe:%d",nmPolys+nmSlavePolys,nmSlavePolys,pipeSpin);
+		 slv   : the slave's spare time, in the same hblank lines as `time:` (one line
+			 is about 63 us, and a 60 Hz frame is 262 of them), as idle/trav/slack.
+			 The slave has exactly two jobs -- its share of the wall draw, and the
+			 NEXT image's traversal, started in the tail:
+			   idle  from the line it finished its share on to the line the
+				 traversal was kicked on.  It does nothing at all in there
+				 while the master runs Slave Cmds, Weapon, HUD, Overlay and
+				 waits for the VDP1: THIS is the window another job would use.
+			   trav  what that traversal then cost it.
+			   slack tail still free once the traversal was done.  NEGATIVE means
+				 the master waited for it -- the tail is already full, and the
+				 idle window is the only room left.
+			 (this replaced `pipe`, the spin count at the join, which said only
+			 whether slack was negative and not by how much) */
+     drawStringf(-158,-70,1,"polys:%d/%d slv:%d/%d/%d",nmPolys+nmSlavePolys,nmSlavePolys,
+		 slaveIdle,slaveTrav,slaveSlack);
 
      /* LEGEND  obj : objects of the pool in use / its size (OBJECT.C MAXOBJECTS).  Everything
 	       the level places takes one, and so does every shot, puff and drop of blood.

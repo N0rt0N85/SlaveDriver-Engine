@@ -172,6 +172,7 @@ void doom_playerInit(void)
  doomPlayer.attackDown=0;
  doomPlayer.muzzleTics=0;              /* lightInit() already emptied the engine list */
  doom_missileLightsReset();
+ doom_sightShareReset();               /* the filed answers name leaves of the level just left */
  doomPlayer.damageCount=0;
  doomPlayer.bonusCount=0;
  for (i=0;i<DOOM_NUMPSPRITES;i++)
@@ -461,8 +462,12 @@ void doom_useRefused(void)
       L+R+DOWN   (A+C+X)   invulnerability
       L+R+LEFT   (B+C+X)   no clipping
    L and R together cancel out; pad bits are active low. */
+/* GCC14: the chainsaw, which the shareware WAD draws (SAWG, four lumps, converted) and E1M2
+   hides in a secret, was missing -- and the plasma was granted although the shareware WAD holds
+   not one of its lumps (no PLSG/PLSF for the gun, no PLSS/PLSE for the bolt): doomWeaponSelectable
+   refuses it for that reason, so the cheat only lit its number in the HUD. */
 #define DOOM_CHEAT_WEAPONS ((1<<wp_fist)|(1<<wp_pistol)|(1<<wp_shotgun)|\
-			    (1<<wp_chaingun)|(1<<wp_missile)|(1<<wp_plasma))
+			    (1<<wp_chaingun)|(1<<wp_missile)|(1<<wp_chainsaw))
 static char doomCheatGod;
 
 /* True once per press of `chord` or `alt`; `held` latches until release. */

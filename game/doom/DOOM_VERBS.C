@@ -104,12 +104,60 @@ const DoomAction doomActions[DOOM_NUMACTIONS]=
 
 /* --- A_Chase helpers (SPEC_RUNTIME sections 3, 3.2) ----------------------------------------- */
 
+/* GCC14: one line of sight, shared by the leaf.  canSee walks the ray leaf by leaf and tests every
+   wall of each one twice, so what it costs is WHICH leaves the ray crosses -- and that is the same
+   corridor for every monster of one leaf looking at one marine.  The answer is filed under (leaf of
+   the looker, which marine, leaf of the marine) and kept GP_MONSTER_SIGHT_SHARE tics: the look
+   phases are drawn at random when the level is placed (DOOM_GAME.C), so two monsters of a leaf
+   almost never ask on the same tic and a file kept for less than a look period would never be read.
+   Direct mapped -- a collision simply traces again.  Only a marine is filed: monster-to-monster
+   sight (the noise target) is rare and its second leaf would not fit the key. */
+#if GP_MONSTER_SIGHT_SHARE
+#define DOOM_SIGHT_MEMO 32
+typedef struct
+{short look;                            /* leaf the looker stands in                            */
+ short seen;                            /* leaf the marine stands in                            */
+ unsigned short tic;                    /* doomLevelTime when it was traced                     */
+ signed char k;                         /* which marine, -1 = free                              */
+ signed char ans;                       /* what canSee answered                                 */
+} DoomSightMemo;
+static DoomSightMemo sightMemo[DOOM_SIGHT_MEMO];
+#endif
+
+void doom_sightShareReset(void)
+{
+#if GP_MONSTER_SIGHT_SHARE
+ int i;
+ for (i=0;i<DOOM_SIGHT_MEMO;i++)
+    sightMemo[i].k=-1;
+#endif
+}
+
 /* GCC14: canSee, timed as Sight in the L+R+Y tree (under Run Objects) */
 static int doomSee(Sprite *a,Sprite *b)
 {int r;
+#if GP_MONSTER_SIGHT_SHARE
+ DoomSightMemo *m=NULL;
+ int k=mpIndexOfSprite(b);
+ if (k>=0)
+    {m=sightMemo+(((a->s<<2)+k)&(DOOM_SIGHT_MEMO-1));
+     if (m->k==(signed char)k && m->look==(short)a->s && m->seen==(short)b->s &&
+	 (unsigned short)(doomLevelTime-m->tic)<=(unsigned short)GP_MONSTER_SIGHT_SHARE)
+	return m->ans;
+    }
+#endif
  CFG_PROF("Sight");
  r=canSee(a,b);
  CFG_PROF_END();
+#if GP_MONSTER_SIGHT_SHARE
+ if (m)
+    {m->look=(short)a->s;
+     m->seen=(short)b->s;
+     m->tic=(unsigned short)doomLevelTime;
+     m->k=(signed char)k;
+     m->ans=(signed char)r;
+    }
+#endif
  return r;
 }
 
@@ -139,6 +187,18 @@ int doom_lookForPlayer(DoomActor *this,int allaround)
 		continue;                       /* behind back */
 	    }
 	}
+     /* GCC14: a sleeper far from this marine traces every other look.  The sector's noise target is
+	read before this (A_Look), so a shot still wakes it on the spot; what this costs is up to one
+	look period -- 0.29 s -- before it notices a marine in silence, and d32xr looks every 5 tics
+	at 15 Hz, which is slower than that already.  allaround is the awake caller: never delayed. */
+#if GP_MONSTER_FAR_LOOK
+     if (!allaround &&
+	 doom_approxDist2(p->pos.x-s->pos.x,p->pos.z-s->pos.z)>F(GP_MONSTER_FAR_LOOK))
+	{this->lookSkip^=1;
+	 if (this->lookSkip)
+	    continue;                           /* its turn to skip the trace */
+	}
+#endif
      if (!doomSee(s,p))
 	continue;                               /* out of sight */
      this->lastlook=(short)k;

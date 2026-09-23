@@ -68,7 +68,8 @@ typedef struct
  messHandler func;                      /* game_actor_func / doom_item_func                        */
  struct __sprite *sprite;
  unsigned short *sequenceMap;           /* unused (sequence computed by doom_seq), kept for prefix */
- short state,pad1;                      /* state = doom_statenum_t                                 */
+ short state;                           /* state = doom_statenum_t                                 */
+ short lookSkip;                        /* A_Look's parity when far and asleep (GP_MONSTER_FAR_LOOK) */
 
  short mt;                              /* doom_mobjtype_t                                         */
  short tics;                            /* -1 = forever (terminal states)                          */
@@ -171,7 +172,8 @@ Object     *doom_spawnPlayerMissile(int mt,int angle,int pitch);   /* P_SpawnPla
 void        doom_spawnPuff(MthXyz *pos,int sector,int melee);
 void        doom_spawnBlood(MthXyz *pos,int sector,int damage);
 int         doom_lineAttack(DoomActor *src,int yaw,int damage);   /* returns the hitScan code    */
-void        doom_missileLightsReset(void);     /* every level: forget the lit plasma bolt */
+void        doom_missileLightsReset(void);     /* every level: forget the missiles carrying a light */
+void        doom_sightShareReset(void);        /* every level: empty the shared sight answers */
 void        doom_actorLevelInit(void);         /* level start: sound targets, nmSpawnFail       */
 Sprite     *doom_targetSprite(Object *t);      /* player -> camera, DoomActor -> sprite, else NULL */
 int         doom_targetAlive(Object *t);       /* player: currentState.health; actor: health && DF_SHOOTABLE */

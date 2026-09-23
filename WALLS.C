@@ -742,11 +742,8 @@ void updateLights(void)
    out of line it was a call per vertex with r,g,b through the stack.  The products are >= 0
    (u > 0, sv <= 256), so the shifts are unsigned: signed ones by 8, 12 or 16 are libgcc calls. */
 static inline __attribute__((always_inline))
-void lightApply(int i,MthXyz *pos,int *r,int *g,int *b)
-{int dx=f(pos->x-tLightPos[i].x);
- int dy=f(pos->y-tLightPos[i].y);
- int dz=f(pos->z-tLightPos[i].z);
- int rad=lRad[i];
+void lightApplyD(int i,int dx,int dy,int dz,int *r,int *g,int *b)
+{int rad=lRad[i];
  int u;
  if (dx>rad || dx<-rad || dy>rad || dy<-rad || dz>rad || dz<-rad)
     return;
@@ -771,6 +768,22 @@ void lightApply(int i,MthXyz *pos,int *r,int *g,int *b)
      if (u-lColor[i][2]>0)
 	*b+=u-lColor[i][2];
     }
+}
+
+/* The light at a point of the VIEW: what every wall vertex asks for. */
+static inline __attribute__((always_inline))
+void lightApply(int i,MthXyz *pos,int *r,int *g,int *b)
+{lightApplyD(i,f(pos->x-tLightPos[i].x),f(pos->y-tLightPos[i].y),f(pos->z-tLightPos[i].z),r,g,b);
+}
+
+/* GCC14: and the same light at a point of the WORLD.  The view transform is a rotation and a
+   translation, so the three distances above are the ones this one works out -- the answer is the
+   same, to the unit the two roundings differ by, and it no longer belongs to one camera.  That is
+   what lets a thing's light be found once per image instead of once per view (drawSprites). */
+static inline __attribute__((always_inline))
+void lightApplyW(int i,MthXyz *pos,int *r,int *g,int *b)
+{lightApplyD(i,f(pos->x)-wLightPos[i][0],f(pos->y)-wLightPos[i][1],f(pos->z)-wLightPos[i][2],
+	     r,g,b);
 }
 
 
@@ -3146,6 +3159,19 @@ static int kickLine;
 static volatile int slaveDone;
 #define SLAVEDONE (*(volatile int *)((int)&slaveDone|0x20000000))
 #define HTIMER    (*(volatile int *)((int)&htimer|0x20000000))
+/* GCC14: the probe of the slave's spare time (overlay row "slv:", STATUSTEXT only), in the same
+   hblank lines as `time:`.  The slave has exactly two jobs -- its share of the wall draw, and the
+   NEXT image's traversal, started in the tail.  Between the two it does nothing at all while the
+   master runs Slave Cmds, Weapon, HUD, Overlay and waits for the VDP1.  Three numbers, because a
+   playsim batch moved to the slave would have to fit in the first and leave the third alone:
+     idle   from the line the slave finished its share on to the line the traversal was kicked on
+     trav   what that traversal then cost the slave
+     slack  from the end of the traversal to the master's join -- tail the slave still has free
+   A negative slack means the master waited for the traversal (pipe: says the same in spins). */
+static volatile int travDoneLine;
+#define TRAVDONELINE (*(volatile int *)((int)&travDoneLine|0x20000000))
+static int pipeKickLine;
+int slaveIdle,slaveTrav,slaveSlack;
 static MthMatrix pipeMatrix;   /* copie stable : viewTransform sera depile entre-temps */
 static int pipeInFlight;
 static int pipeDone;
@@ -3278,7 +3304,9 @@ void wallRenderSlaveMain(void)
      job=slaveJob;
      SLAVESTEP=0x10|job;
      if (job==1)
-	wallsTraverse(&pipeMatrix,1);
+	{wallsTraverse(&pipeMatrix,1);
+	 TRAVDONELINE=HTIMER;   /* the probe's `trav` and `slack`, wallsPipeJoin */
+	}
      else
 	{slaveDraw();
 	 SLAVEDONE=HTIMER;      /* the servo's gap, drawWallsFinish */
@@ -3828,6 +3856,8 @@ void wallsPipeKick(MthMatrix *view)
  pipeDone=0;
  slaveJob=1;
  pipeInFlight=1;
+ slaveIdle=(int)htimer-slaveDone;  /* it has done nothing since it finished its share of the draw */
+ pipeKickLine=(int)htimer;
  *(Uint16 volatile *)0x21000000=0xffff;
 #endif
 }
@@ -3879,6 +3909,8 @@ void wallsPipeJoin(void)
  pipeInFlight=0;
  slaveJob=0;
  pipeSpin=i;               /* 0 = the traversal fit entirely in the tail */
+ slaveTrav=TRAVDONELINE-pipeKickLine;    /* what the traversal cost the slave */
+ slaveSlack=(int)htimer-TRAVDONELINE;    /* tail left over once it was done */
 #if WALLPIPE>=2
  pipeDone=1;
 #endif
@@ -3889,6 +3921,9 @@ void wallsPipeJoin(void)
 /* GCC14: the things' share of Master Draw in the L+R+Y tree -- one pointer, since pushProfile
    finds a child by its id's address */
 static char thingsProf[]="Things";
+
+/* GCC14: defined with drawSprites, which follows drawWalls -- the image's file of thing light */
+static void thingFrameStart(void);
 
 /* --- GCC14: DRAW half ----------------------------------------------------------------
    Everything that emits VDP1 commands or touches the tile cache stays here, on the
@@ -3955,7 +3990,9 @@ void drawWalls(int k,MthMatrix *view)
 	wallsTraverse(view,0);
     }
  if (k==0)
-    pipeDone=0;
+    {pipeDone=0;
+     thingFrameStart();                 /* a new image: the things' light is worked out once */
+    }
  /* draw from the set just made */
  sectorDraw=tr->sd;
  updateList=tr->ul;
@@ -4173,6 +4210,62 @@ static int sprRect(XyInt *pos)
  return 1;
 }
 
+/* GCC14: what a thing's light is made of does not depend on the camera -- the darkness of the leaf
+   it stands in, and the dynamic lights that reach its feet.  In split screen the master worked both
+   out again for every view that drew the thing, three times over in 4 players.  They are found once
+   per IMAGE here and filed under the sprite, direct mapped: a collision simply works them out
+   again, and the stamp empties the whole file when the image changes (drawWalls, view 0).  Solo has
+   one view, so nothing is filed and nothing is read. */
+#define DOOM_LIT_MEMO 64
+typedef struct
+{unsigned short stamp;
+ short spr;
+ short dark;                            /* leafDark, -1 = not worked out this image              */
+ short best;                            /* strongest channel of the dynamic lights, -1 = idem    */
+} DoomLitMemo;
+static DoomLitMemo litMemo[DOOM_LIT_MEMO];
+static unsigned short litStamp;
+
+static void thingFrameStart(void)       /* drawWalls, before view 0: a new image */
+{if (!++litStamp)
+    litStamp=1;                         /* 0 is the empty file */
+}
+
+static DoomLitMemo *litMemoFor(Sprite *o)
+{DoomLitMemo *m;
+ if (mpPlayers<2)
+    return NULL;                        /* one view: it would be written and never read */
+ m=litMemo+((o-sprites)&(DOOM_LIT_MEMO-1));
+ if (m->stamp!=litStamp || m->spr!=(short)(o-sprites))
+    {m->stamp=litStamp;
+     m->spr=(short)(o-sprites);
+     m->dark=-1;
+     m->best=-1;
+    }
+ return m;
+}
+
+/* The strongest channel the dynamic lights give this thing at its feet, measured in world space
+   (lightApplyW) so every view of the image shares the one answer. */
+static int thingLit(Sprite *o,MthXyz *feet)
+{DoomLitMemo *m=litMemoFor(o);
+ int li,lr,lg,lb,best=0;
+ if (m && m->best>=0)
+    return m->best;
+ for (li=0;li<nmLights;li++)
+    {if (!level_maySee(lightLeaf[li],o->s))
+	continue;                       /* as the walls: it would only shine through a wall */
+     lr=lg=lb=0;
+     lightApplyW(li,feet,&lr,&lg,&lb);
+     if (lr>best) best=lr;
+     if (lg>best) best=lg;
+     if (lb>best) best=lb;
+    }
+ if (m)
+    m->best=(short)best;
+ return best;
+}
+
 #if CFG_THING_LEAFLIGHT
 /* GCC14: how much darker than full light (16) leaf s is, 0..16, in the walls' 5-bit units -- what
    its walls carry.  doom2ps gives every wall of a leaf its sector's light and setSectorBrightness
@@ -4197,6 +4290,18 @@ static int leafDark(int s)
      return 16-l;
     }
  return 0;
+}
+
+/* leafDark, kept for the image (litMemo): the leaf's walls do not move between two views. */
+static int thingDark(Sprite *o)
+{DoomLitMemo *m=litMemoFor(o);
+ int d;
+ if (m && m->dark>=0)
+    return m->dark;
+ d=leafDark(o->s);
+ if (m)
+    m->dark=(short)d;
+ return d;
 }
 #endif
 
@@ -4380,7 +4485,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	 lights below still lift it.  A FULLBRIGHT frame keeps the distance's share only, as Doom
 	 gives it colormap 0. */
       if (!(o->flags & SPRITEFLAG_FULLBRIGHT))
-	 spriteFog+=leafDark(o->s);
+	 spriteFog+=thingDark(o);
       if (spriteFog>SPRITEFOGMAX)
 	 spriteFog=SPRITEFOGMAX;
 #endif
@@ -4390,17 +4495,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
       /* GCC14: a dynamic light reduces the fog before the bank is chosen (strongest channel,
 	 same maths as the walls).  Measured at the feet; bank 0 is the ceiling. */
       if (nmLights)
-	 {int li,lr,lg,lb,best=0;
-	  for (li=0;li<nmLights;li++)
-	     {if (!level_maySee(lightLeaf[li],o->s))
-		 continue;              /* as the walls: it would only shine through a wall */
-	      lr=lg=lb=0;
-	      lightApply(li,&tformed,&lr,&lg,&lb);
-	      if (lr>best) best=lr;
-	      if (lg>best) best=lg;
-	      if (lb>best) best=lb;
-	     }
-	  spriteFog-=best;
+	 {spriteFog-=thingLit(o,&feetPos);
 	  if (spriteFog<0)
 	     spriteFog=0;
 	 }

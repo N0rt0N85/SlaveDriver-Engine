@@ -22,9 +22,12 @@
 #include "mplayer.h"
 #include "doom_lights.h"
 
-/* The plasma bolt carrying the stream's light, or NULL (doomLightMissile).  Declared here
-   because game_actor_func clears it when that bolt dies. */
-static Sprite *doomPlasmaLight;
+/* The missile carrying the light of its kind, or NULL (doomLightMissile): one entry per kind of
+   missile that lights.  Declared here because game_actor_func clears an entry when its carrier
+   dies. */
+#define DOOM_NMLIT 5
+static Sprite *doomLitMissile[DOOM_NMLIT];
+static void doomMissileLightGone(Sprite *s);
 
 #define DOOM_MISSILERANGE F(2048)      /* p_local.h:55 */
 
@@ -358,8 +361,7 @@ void game_actor_func(Object *_this,int message,int param1,int param2)
      case SIGNAL_OBJECTDESTROYED:
 	if ((Object *)param1==_this)
 	   {if (this->sprite)
-	       {if (this->sprite==doomPlasmaLight)
-		   doomPlasmaLight=NULL;     /* the lit bolt dies: the next one takes the light */
+	       {doomMissileLightGone(this->sprite);  /* a carrier dies: the next one takes the light */
 		removeLight(this->sprite);   /* no-op without a light; else the list keeps a freed sprite */
 		freeSprite(this->sprite);
 	       }
@@ -468,7 +470,7 @@ DoomActor *doom_spawn(int mt,int sector,MthXyz *pos,int angle,int thingFlags)
  this->sprite->scale=65536;                  /* 1 texel per unit (contract section 2) */
  this->sequenceMap=NULL;
  this->state=0;
- this->pad1=0;
+ this->lookSkip=0;
  this->mt=(short)mt;
  this->tics=0;
  this->health=info->spawnhealth;
@@ -770,8 +772,7 @@ static void doomExplodeMissile(DoomActor *this)
  this->sprite->vel.y=0;
  this->sprite->vel.z=0;
  removeLight(this->sprite);
- if (this->sprite==doomPlasmaLight)
-    doomPlasmaLight=NULL;
+ doomMissileLightGone(this->sprite);
  this->sprite->flags|=SPRITEFLAG_ZONLY;         /* it stays where it hit, touching nothing */
  doom_setState(this,info->deathstate);
  if (this->type==OT_DEAD)
@@ -846,17 +847,57 @@ static void doomMissileHit(DoomActor *this,int collide)
 
 /* --- dynamic lights (what each effect asks for, and the tuner: DOOM_LIGHTS.C) ---------------- */
 
-/* Every level: the old level's sprites are freed, so is the lit bolt. */
+/* Every level: the old level's sprites are freed, so are the carriers. */
 void doom_missileLightsReset(void)
-{doomPlasmaLight=NULL;
+{int i;
+ for (i=0;i<DOOM_NMLIT;i++)
+    doomLitMissile[i]=NULL;
 }
 
-/* Flight light of a new missile.  Only ONE plasma bolt is lit, the oldest alive: bolts fly
-   75 u apart against a 160 u reach, so one pool covers the next, and the list has 15 slots. */
+/* A carrier died: the next missile of its kind lights again. */
+static void doomMissileLightGone(Sprite *s)
+{int i;
+ for (i=0;i<DOOM_NMLIT;i++)
+    if (doomLitMissile[i]==s)
+       doomLitMissile[i]=NULL;
+}
+
+/* GCC14: one light for a volley.  Two missiles of the same kind flying closer to each other than
+   GP_LIGHT_VOLLEY_DIST are inside one another's pool (reach 160 u), so the second is spawned with
+   no light of its own -- what the engine already did for the plasma stream, whose bolts fly 75 u
+   apart.  Plasma keeps its own unconditional rule: ONE bolt lit, the oldest alive, whatever the
+   distance -- with a distance test the third bolt of a stream would light again.
+   The carrier is forgotten when it dies, so the next one fired carries the light. */
+static int doomLitKind(int mt)
+{switch (mt)
+    {case MT_TROOPSHOT:   return 0;
+     case MT_HEADSHOT:    return 1;
+     case MT_BRUISERSHOT: return 2;
+     case MT_ROCKET:      return 3;
+     case MT_PLASMA:      return 4;
+    }
+ return -1;
+}
+
 static void doomLightMissile(DoomActor *th,int mt)
-{assert(th);
+{int k;
+ Sprite *c;
+ assert(th);
  if (!th->sprite)
     return;
+ k=doomLitKind(mt);
+ if (k<0)
+    return;
+ c=doomLitMissile[k];
+ if (c)
+    {if (mt==MT_PLASMA)
+	return;                          /* the stream's one bolt is already lit */
+     if (GP_LIGHT_VOLLEY_DIST &&
+	 doom_approxDist2(c->pos.x-th->sprite->pos.x,c->pos.z-th->sprite->pos.z)<
+	 F(GP_LIGHT_VOLLEY_DIST))
+	return;                          /* already standing in the carrier's pool */
+    }
+ doomLitMissile[k]=th->sprite;
  switch (mt)
     {case MT_TROOPSHOT:
 	doom_lightAdd(th->sprite,DLF_IMP);
@@ -871,9 +912,6 @@ static void doomLightMissile(DoomActor *th,int mt)
 	doom_lightAdd(th->sprite,DLF_ROCKET);
 	break;
      case MT_PLASMA:
-	if (doomPlasmaLight)
-	   break;
-	doomPlasmaLight=th->sprite;
 	doom_lightAdd(th->sprite,DLF_PLASMA);
 	break;
     }

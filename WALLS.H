@@ -14,6 +14,10 @@ void wallsPipeKick(MthMatrix *view);
 void wallsPipeJoin(void);
 void wallsPipeDiscard(void);  /* join then discard: the camera will move, or the level go */
 extern int pipeSpin;          /* spins at the join; -1 = nothing in flight */
+/* GCC14: the slave's spare time in hblank lines, overlay row "slv:" (SRUINS.C has the legend):
+   idle between its share of the draw and the traversal kick, what the traversal cost, and the
+   tail left after it (negative = the master waited for the traversal) */
+extern int slaveIdle,slaveTrav,slaveSlack;
 
 /* GCC14: depth fog: 256-byte table indexed by z>>24, read by the asm.  setFog(d): a fully
    lit sector reaches black at d units.  4096 gives the original behaviour (no fog). */
