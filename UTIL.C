@@ -194,6 +194,20 @@ static int fogRamp(int i,int c)
  return v;
 }
 
+/* GCC14: THE LANDING ZONE OF AN UNDERFLOW, and the light that came out of the brume.
+   The wall assembler subtracts the fog from the whole light BYTE and clamps at zero -- band
+   bits and all (wallasm_gnu.s .Lrt_9).  So a vertex in band k that the fog takes below its own
+   floor does not land on that floor: it lands on entries 17..31 of band k-1.  Bands 1.. hold
+   their opaque black there, which is why they come out dark.  BAND 0 DOES NOT -- its 17..31 are
+   the bright greyTable, where PowerSlave's water reads.  A green vertex fading into the brume
+   therefore walked out of band 1 and LIT UP instead of going out (photo, E1M1 outside,
+   2026-09-23): a light source in the fog that no light makes.
+   So as soon as a level hands a tint over (setWorldTint -- Doom does, PowerSlave never), band
+   0's 17..31 become the ramp's floor: a surface the fog has swallowed is the fog, tint and all.
+   It also puts those vertices back on `fogFloorGour`, so the LOD can weld them like any other.
+   PowerSlave keeps its bright floor, water and all. */
+static int tintInUse;
+
 /* GCC14: bands 1.. of the ramp, from band 0 and `worldTint`.  Called whenever either moves --
    a level's fog is set, or its own tint arrives with the pools (DOOM_GAME.C). */
 static void buildTintBands(void)
@@ -204,18 +218,27 @@ static void buildTintBands(void)
      int kb=16-(((16-worldTint[2])*k)/(WORLDTINT_NM-1));
      for (i=0;i<32;i++)
 	{unsigned int v=worldGrey[i<=16? i: 0];
+	 int g=(((v>>5)&31)*kg)>>4;
+	 g+=((31-g)*k*WORLDTINT_GLOW)/((WORLDTINT_NM-1)*16);   /* the pool LIGHTS the room: the
+	    darker the wall, the more of its headroom the glow takes (UTIL.H WORLDTINT_GLOW) */
+	 if (g>31)
+	    g=31;
 	 worldGrey[(k<<5)+i]=(i<=16)
 	    ? (unsigned short)((v & 0x8000)|
 			       (((((v>>10)&31)*kb)>>4)<<10)|
-			       (((((v>>5)&31)*kg)>>4)<<5)|
+			       (g<<5)|
 			       ((((v)&31)*kr)>>4))
 	    : (unsigned short)0x8000;
 	}
     }
+ if (tintInUse)
+    for (i=17;i<32;i++)                 /* where band 1 lands when the fog takes it under */
+       worldGrey[i]=worldGrey[0];
 }
 
 void setWorldTint(int r,int g,int b)
-{worldTint[0]=(unsigned char)CLAMP(r,0,16);
+{tintInUse=1;
+ worldTint[0]=(unsigned char)CLAMP(r,0,16);
  worldTint[1]=(unsigned char)CLAMP(g,0,16);
  worldTint[2]=(unsigned char)CLAMP(b,0,16);
  buildTintBands();

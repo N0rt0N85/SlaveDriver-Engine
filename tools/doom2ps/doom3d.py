@@ -1909,8 +1909,12 @@ def _dist2_segment(x, y, z, p, q):
 SECFLAG_NUKAGE = 0x40       # SLEVEL.H : la feuille appartient a une salle a nukage
 VERT_NM = 4                 # UTIL.H WORLDGREEN_NM : bandes de vert de la rampe du monde
 VERT_SH = 5                 # UTIL.H WORLDGREEN_SH : leur place dans l'octet de lumiere
-VERT_COEUR = 64             # u depuis le BORD du nukage : plein vert jusque-la
-VERT_PORTEE = 448           # u depuis le bord : au-dela, plus de vert du tout
+# Mesure du 2026-09-23 : avec 64/448 le vert touchait 38 % des sommets d'E1M1, 54 % d'E1M3 et 76 %
+# d'E1M5 -- le mur du fond de la cour d'E1M1 en prenait, a trois salles du liquide. 48/256 ramene
+# ca a 20/38/50 % et fait commencer la premiere bande vers 220 u du bord, trois largeurs de
+# joueur : « pres du nukage » veut alors dire quelque chose.
+VERT_COEUR = 48             # u depuis le BORD du nukage : plein vert jusque-la
+VERT_PORTEE = 256           # u depuis le bord : au-dela, plus de vert du tout
 SECFLAG_NUKAGE_CORE = 0x80  # SLEVEL.H : la feuille est dans le coeur vert (things teintes)
 
 
@@ -1975,11 +1979,26 @@ def cuire_vert_nukage(em, M, conv, stats):
         return
     V = em.vertices
 
-    def niveau(x, y, z):
-        d2 = min(_dist2_segment(x, y, z, p, q) for p, q in segs)
-        if d2 >= VERT_PORTEE * VERT_PORTEE:
+    def niveau(x, y, z, nx=0.0, nz=0.0):
+        """Le niveau de vert en (x, y, z). nx, nz : la normale XZ de la FACE, quand elle en a une.
+
+        Seuls les bords du liquide places DEVANT elle comptent. Une face tourne le dos au
+        liquide : ce qu'on en voit n'est pas eclaire par lui, et le mur du fond d'une salle a
+        nukage ressortait vert vu de l'autre cote (vu a l'ecran, E1M1 dehors, 2026-09-23). La
+        normale du moteur pointe VERS L'INTERIEUR de la feuille (SPRITE.C bumpWall : planeDist
+        est positif pour un sprite dedans), donc "devant" est bien le cote qu'on regarde.
+        Les PLAFONDS gardent leur vert : leur normale est (0,-1,0), il n'y a pas de cote."""
+        best = None
+        for p, q in segs:
+            if nx or nz:
+                if ((p[0] + q[0]) * 0.5 - x) * nx + ((p[2] + q[2]) * 0.5 - z) * nz <= 0.0:
+                    continue
+            d2 = _dist2_segment(x, y, z, p, q)
+            if best is None or d2 < best:
+                best = d2
+        if best is None or best >= VERT_PORTEE * VERT_PORTEE:
             return 0
-        d = math.sqrt(d2)
+        d = math.sqrt(best)
         t = 0.0 if d <= VERT_COEUR else (d - VERT_COEUR) / float(VERT_PORTEE - VERT_COEUR)
         return int(round((VERT_NM - 1) * (1.0 - t)))
 
@@ -1991,6 +2010,9 @@ def cuire_vert_nukage(em, M, conv, stats):
             w = em.walls[wi]
             if w["normal"][1] > 0:                 # un sol : jamais de vert
                 continue
+            nx = nz = 0.0
+            if w["normal"][1] == 0:                # un vrai mur : il a un devant et un derriere
+                nx, nz = w["normal"][0] / 65536.0, w["normal"][2] / 65536.0
             fort = 0
             if w["flags"] & 0x01:                  # parallelogramme : sommets de GRILLE
                 tl, th, base = w["tileLength"], w["tileHeight"], w["firstLight"]
@@ -2005,7 +2027,7 @@ def cuire_vert_nukage(em, M, conv, stats):
                             (v3["y"] + (v2["y"] - v3["y"]) * fc) * fr
                         z = (v0["z"] + (v1["z"] - v0["z"]) * fc) * (1 - fr) + \
                             (v3["z"] + (v2["z"] - v3["z"]) * fc) * fr
-                        k = niveau(x, y, z)
+                        k = niveau(x, y, z, nx, nz)
                         if k:
                             j = base + rr * (tl + 1) + cc
                             em.vertexLight[j] |= k << VERT_SH
@@ -2014,19 +2036,19 @@ def cuire_vert_nukage(em, M, conv, stats):
             elif w["firstVertex"] != 65535:        # mur a faces : ses sommets propres
                 for vi in range(w["firstVertex"], w["lastVertex"] + 1):
                     v = V[vi]
-                    k = niveau(v["x"], v["y"], v["z"])
+                    k = niveau(v["x"], v["y"], v["z"], nx, nz)
                     if k:
                         v["light"] |= k << VERT_SH
                         fort = max(fort, k)
                         n += 1
-            else:                                  # mur plein : ses quatre coins
-                for vi in w["v"]:
-                    v = V[vi]
-                    k = niveau(v["x"], v["y"], v["z"])
-                    if k:
-                        v["light"] |= k << VERT_SH
-                        fort = max(fort, k)
-                        n += 1
+            else:
+                # Un PORTAIL INVISIBLE (ni parallelogramme, ni faces : firstVertex 0xffff). Il ne
+                # montre rien, et ses quatre coins sont des sommets PARTAGES du niveau, que les
+                # murs a faces d'a cote lisent : le teinter ne peignait que les autres, et c'est
+                # comme ca que le vert passait de l'autre cote d'une salle a nukage (vu a
+                # l'ecran, E1M1 dehors, 2026-09-23). Les deux branches au-dessus ecrivent chacune
+                # dans SA propre lumiere -- grille du mur, ou plage de sommets de la face.
+                continue
             if fort >= VERT_NM - 1:
                 sec["flags"] |= SECFLAG_NUKAGE_CORE
     stats["nukage_sommets_verts"] = n
