@@ -1,0 +1,554 @@
+{
+ "CAVERN": {
+  "cellules": 17948,
+  "cone": [
+   136,
+   1087,
+   2156,
+   3636
+  ],
+  "faces": 15290,
+  "murs": 3619,
+  "positions": 1137,
+  "residence": 1336392,
+  "secteur_max": 1147,
+  "secteurs": 415,
+  "taille_fichier": 1617500,
+  "tour": [
+   141,
+   1624,
+   3200,
+   4710
+  ],
+  "tuiles": 489
+ },
+ "CHAOS": {
+  "cellules": 16634,
+  "cone": [
+   30,
+   698,
+   1193,
+   2025
+  ],
+  "faces": 11590,
+  "murs": 2094,
+  "positions": 1465,
+  "residence": 1247920,
+  "secteur_max": 266,
+  "secteurs": 294,
+  "taille_fichier": 1577796,
+  "tour": [
+   30,
+   1034,
+   1770,
+   2790
+  ],
+  "tuiles": 549
+ },
+ "COLONY": {
+  "cellules": 14378,
+  "cone": [
+   63,
+   920,
+   1764,
+   2636
+  ],
+  "faces": 12167,
+  "murs": 3378,
+  "positions": 1713,
+  "residence": 1220028,
+  "secteur_max": 439,
+  "secteurs": 432,
+  "taille_fichier": 1454415,
+  "tour": [
+   75,
+   1389,
+   3015,
+   3546
+  ],
+  "tuiles": 409
+ },
+ "GORGE": {
+  "cellules": 15374,
+  "cone": [
+   42,
+   497,
+   1218,
+   2157
+  ],
+  "faces": 8617,
+  "murs": 2929,
+  "positions": 1596,
+  "residence": 1163708,
+  "secteur_max": 308,
+  "secteurs": 358,
+  "taille_fichier": 1465282,
+  "tour": [
+   42,
+   723,
+   1822,
+   3007
+  ],
+  "tuiles": 507
+ },
+ "KARNAK": {
+  "cellules": 14876,
+  "cone": [
+   49,
+   598,
+   916,
+   1735
+  ],
+  "faces": 10329,
+  "murs": 3184,
+  "positions": 2294,
+  "residence": 1303664,
+  "secteur_max": 448,
+  "secteurs": 425,
+  "taille_fichier": 1620769,
+  "tour": [
+   49,
+   902,
+   1410,
+   2053
+  ],
+  "tuiles": 525
+ },
+ "KILARENA": {
+  "cellules": 5830,
+  "cone": [
+   109,
+   935,
+   1474,
+   2356
+  ],
+  "faces": 4872,
+  "murs": 2917,
+  "positions": 1541,
+  "residence": 1276000,
+  "secteur_max": 376,
+  "secteurs": 376,
+  "taille_fichier": 1586164,
+  "tour": [
+   109,
+   1350,
+   1912,
+   2950
+  ],
+  "tuiles": 652
+ },
+ "KILENTRY": {
+  "cellules": 4137,
+  "cone": [
+   189,
+   1018,
+   1291,
+   1692
+  ],
+  "faces": 2915,
+  "murs": 1171,
+  "positions": 644,
+  "residence": 496336,
+  "secteur_max": 166,
+  "secteurs": 145,
+  "taille_fichier": 673815,
+  "tour": [
+   250,
+   1422,
+   1490,
+   1883
+  ],
+  "tuiles": 226
+ },
+ "MAGMA": {
+  "cellules": 18961,
+  "cone": [
+   74,
+   1220,
+   2022,
+   3274
+  ],
+  "faces": 14212,
+  "murs": 3171,
+  "positions": 1646,
+  "residence": 1257232,
+  "secteur_max": 471,
+  "secteurs": 424,
+  "taille_fichier": 1593047,
+  "tour": [
+   128,
+   1851,
+   3013,
+   3817
+  ],
+  "tuiles": 407
+ },
+ "MARSH": {
+  "cellules": 14466,
+  "cone": [
+   8,
+   825,
+   1578,
+   2211
+  ],
+  "faces": 10582,
+  "murs": 2524,
+  "positions": 1783,
+  "residence": 1181900,
+  "secteur_max": 297,
+  "secteurs": 340,
+  "taille_fichier": 1505581,
+  "tour": [
+   8,
+   1271,
+   2376,
+   3195
+  ],
+  "tuiles": 522
+ },
+ "MINES": {
+  "cellules": 15164,
+  "cone": [
+   38,
+   696,
+   1272,
+   1946
+  ],
+  "faces": 11836,
+  "murs": 4147,
+  "positions": 1389,
+  "residence": 1309636,
+  "secteur_max": 336,
+  "secteurs": 566,
+  "taille_fichier": 1633266,
+  "tour": [
+   38,
+   958,
+   1989,
+   2577
+  ],
+  "tuiles": 482
+ },
+ "PASS": {
+  "cellules": 13816,
+  "cone": [
+   43,
+   991,
+   1537,
+   2261
+  ],
+  "faces": 11586,
+  "murs": 2845,
+  "positions": 1165,
+  "residence": 973452,
+  "secteur_max": 214,
+  "secteurs": 337,
+  "taille_fichier": 1249287,
+  "tour": [
+   43,
+   1662,
+   2671,
+   4874
+  ],
+  "tuiles": 353
+ },
+ "PEAK": {
+  "cellules": 18482,
+  "cone": [
+   155,
+   1312,
+   1878,
+   2672
+  ],
+  "faces": 16913,
+  "murs": 3271,
+  "positions": 1339,
+  "residence": 1267588,
+  "secteur_max": 293,
+  "secteurs": 375,
+  "taille_fichier": 1497182,
+  "tour": [
+   155,
+   2125,
+   3058,
+   4274
+  ],
+  "tuiles": 345
+ },
+ "SANCTUAR": {
+  "cellules": 10395,
+  "cone": [
+   64,
+   747,
+   1064,
+   1559
+  ],
+  "faces": 6581,
+  "murs": 2438,
+  "positions": 1569,
+  "residence": 1127028,
+  "secteur_max": 302,
+  "secteurs": 307,
+  "taille_fichier": 1416356,
+  "tour": [
+   64,
+   1172,
+   1666,
+   2197
+  ],
+  "tuiles": 484
+ },
+ "SELBUROW": {
+  "cellules": 8920,
+  "cone": [
+   47,
+   721,
+   1417,
+   2087
+  ],
+  "faces": 8341,
+  "murs": 2240,
+  "positions": 905,
+  "residence": 1009188,
+  "secteur_max": 308,
+  "secteurs": 278,
+  "taille_fichier": 1321898,
+  "tour": [
+   47,
+   1152,
+   1914,
+   3055
+  ],
+  "tuiles": 412
+ },
+ "SELPATH": {
+  "cellules": 14824,
+  "cone": [
+   80,
+   993,
+   1398,
+   1953
+  ],
+  "faces": 11263,
+  "murs": 2534,
+  "positions": 1620,
+  "residence": 1108452,
+  "secteur_max": 426,
+  "secteurs": 341,
+  "taille_fichier": 1401464,
+  "tour": [
+   116,
+   1355,
+   2305,
+   2866
+  ],
+  "tuiles": 504
+ },
+ "SETARENA": {
+  "cellules": 8420,
+  "cone": [
+   69,
+   1441,
+   1906,
+   2393
+  ],
+  "faces": 5012,
+  "murs": 1632,
+  "positions": 1234,
+  "residence": 1012996,
+  "secteur_max": 306,
+  "secteurs": 206,
+  "taille_fichier": 1307096,
+  "tour": [
+   125,
+   2227,
+   2806,
+   2933
+  ],
+  "tuiles": 495
+ },
+ "SETPALAC": {
+  "cellules": 12199,
+  "cone": [
+   52,
+   1115,
+   1558,
+   3211
+  ],
+  "faces": 6220,
+  "murs": 1902,
+  "positions": 2303,
+  "residence": 888688,
+  "secteur_max": 330,
+  "secteurs": 242,
+  "taille_fichier": 1184011,
+  "tour": [
+   52,
+   1797,
+   2431,
+   3296
+  ],
+  "tuiles": 422
+ },
+ "SHRINE": {
+  "cellules": 15046,
+  "cone": [
+   126,
+   1005,
+   1576,
+   2668
+  ],
+  "faces": 11505,
+  "murs": 3404,
+  "positions": 1706,
+  "residence": 1341632,
+  "secteur_max": 214,
+  "secteurs": 411,
+  "taille_fichier": 1641467,
+  "tour": [
+   126,
+   1592,
+   2640,
+   3628
+  ],
+  "tuiles": 492
+ },
+ "SLAVCAMP": {
+  "cellules": 13796,
+  "cone": [
+   28,
+   712,
+   1513,
+   2391
+  ],
+  "faces": 10299,
+  "murs": 3395,
+  "positions": 1410,
+  "residence": 1232792,
+  "secteur_max": 292,
+  "secteurs": 413,
+  "taille_fichier": 1543900,
+  "tour": [
+   28,
+   1046,
+   2260,
+   3883
+  ],
+  "tuiles": 484
+ },
+ "SUNKEN": {
+  "cellules": 16598,
+  "cone": [
+   131,
+   689,
+   1293,
+   2108
+  ],
+  "faces": 14204,
+  "murs": 4939,
+  "positions": 1095,
+  "residence": 1220920,
+  "secteur_max": 306,
+  "secteurs": 570,
+  "taille_fichier": 1444286,
+  "tour": [
+   168,
+   1064,
+   2004,
+   3238
+  ],
+  "tuiles": 323
+ },
+ "TEST": {
+  "cellules": 10395,
+  "cone": [
+   64,
+   747,
+   1064,
+   1559
+  ],
+  "faces": 6581,
+  "murs": 2438,
+  "positions": 1569,
+  "residence": 1127028,
+  "secteur_max": 302,
+  "secteurs": 307,
+  "taille_fichier": 1416356,
+  "tour": [
+   64,
+   1172,
+   1666,
+   2197
+  ],
+  "tuiles": 484
+ },
+ "THOTH": {
+  "cellules": 12475,
+  "cone": [
+   57,
+   954,
+   1395,
+   2088
+  ],
+  "faces": 10459,
+  "murs": 3764,
+  "positions": 1284,
+  "residence": 1306752,
+  "secteur_max": 221,
+  "secteurs": 488,
+  "taille_fichier": 1579383,
+  "tour": [
+   57,
+   1595,
+   2061,
+   2782
+  ],
+  "tuiles": 455
+ },
+ "TOMB": {
+  "cellules": 8485,
+  "cone": [
+   40,
+   894,
+   1520,
+   2150
+  ],
+  "faces": 7015,
+  "murs": 1555,
+  "positions": 1319,
+  "residence": 1141628,
+  "secteur_max": 254,
+  "secteurs": 197,
+  "taille_fichier": 1390564,
+  "tour": [
+   40,
+   1344,
+   2424,
+   3372
+  ],
+  "tuiles": 526
+ },
+ "TOMBEND": {
+  "cellules": 6212,
+  "cone": [
+   150,
+   452,
+   785,
+   1335
+  ],
+  "faces": 5491,
+  "murs": 1390,
+  "positions": 650,
+  "residence": 1099940,
+  "secteur_max": 256,
+  "secteurs": 161,
+  "taille_fichier": 1305382,
+  "tour": [
+   180,
+   643,
+   1376,
+   1462
+  ],
+  "tuiles": 498
+ }
+}
