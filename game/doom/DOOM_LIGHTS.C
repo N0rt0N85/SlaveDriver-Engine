@@ -35,7 +35,8 @@ DoomLightFx doomLightFx[DLF_NM]=
     {GP_LIGHT_PLASMA,0},
     {GP_LIGHT_EXPLODE,GP_LIGHT_EXPLODE_TICS},
     {GP_LIGHT_MUZZLE_PLAYER,GP_LIGHT_MUZZLE_TICS},
-    {GP_LIGHT_MUZZLE_MONSTER,GP_LIGHT_MUZZLE_TICS}};
+    {GP_LIGHT_MUZZLE_MONSTER,GP_LIGHT_MUZZLE_TICS},
+    {GP_LIGHT_TELEPORT,0}};             /* the teleport fog: lit as long as the fog lives */
 
 /* --- what the effects ask the engine --------------------------------------------------------- */
 
@@ -49,6 +50,8 @@ static int doomLightPrio(int fx)
 	return DOOM_LIGHTPRIO_EXPLODE;
      case DLF_MUZZLE_MONSTER:
 	return DOOM_LIGHTPRIO_MUZZLE;
+     case DLF_TELEPORT:
+	return DOOM_LIGHTPRIO_EXPLODE;
      default:
 	return DOOM_LIGHTPRIO_MISSILE;
     }

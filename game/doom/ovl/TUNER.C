@@ -28,11 +28,12 @@ static const DoomLightFx lightDef[DLF_NM]=
     {GP_LIGHT_PLASMA,0},
     {GP_LIGHT_EXPLODE,GP_LIGHT_EXPLODE_TICS},
     {GP_LIGHT_MUZZLE_PLAYER,GP_LIGHT_MUZZLE_TICS},
-    {GP_LIGHT_MUZZLE_MONSTER,GP_LIGHT_MUZZLE_TICS}};
+    {GP_LIGHT_MUZZLE_MONSTER,GP_LIGHT_MUZZLE_TICS},
+    {GP_LIGHT_TELEPORT,0}};
 
 static const char *const lightFxName[DLF_NM+1]=
    {"ALL","IMP FIREBALL","CACODEMON SHOT","BARON SHOT","ROCKET","PLASMA BOLT","EXPLOSION",
-    "MY MUZZLE FLASH","MONSTER MUZZLE"};
+    "MY MUZZLE FLASH","MONSTER MUZZLE","TELEPORT FLASH"};
 static int lightSel=0;                  /* 0 = ALL (the player's settings), else the effect + 1 */
 int lightRow=LR_EFFECT;                 /* defined, not tentative: a COMMON would look for MAIN's */
 

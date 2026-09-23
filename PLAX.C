@@ -67,6 +67,7 @@ void enablePlax(int setting)
 static unsigned short plaxPal[256];
 static int plaxFade=16;   /* 16 = palette as stored on the disc */
 
+
 /* GCC14: DARKEN THE SKY.  The plax is an 8 bpp bitmap on RBG0 with its OWN CRAM bank (bank 7,
    SCL_SET_R0CAOS(7) below): rewriting those 256 entries touches no other plane, not the VDP1,
    nor colour offset A (shared by damage and the death screen).  Cost: 256 CRAM writes when

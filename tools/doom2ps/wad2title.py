@@ -20,7 +20,8 @@ logo 0x0 et masque vide, le reste identique.
   680   u8[256]   R : octets aleatoires (LCG, graine 1) -- derive (R & 3) et, a pQ8 = 128, decroissance
   936   u8[256]   U : 2e flux (graine 2) -- decroissance U < pQ8 quand pQ8 != 128
   1192  i16 x4    logoW, logoH, logoX, logoY : rectangle du logo dans la bitmap NBG1 (zoom x2)
-  1200  u8[16][40] masque "LOADING" (1 bit par cellule de feu, bit fort = a gauche, 1 = lettre) :
+  1200  u8[16][40] masque "LOADING" CORPS (1 bit/cellule, bit fort a gauche, 1 = cellule claire) :
+  1840  u8[16][40] masque "LOADING" GLYPHE (1 = cellule opaque, contour et trou du O compris) :
                   STCFN x2, centre sur 320 ; pochoir de l'ecran de chargement (lignes de feu 126..141)
   1840  u8[w*h]   M_DOOM, indices PLAYPAL, 0 = transparent (masque du patch)
   1840 + w*h      fin (multiple de 4)
@@ -139,8 +140,9 @@ FIRE_RGBS = [
 FIRE_LEVELS = len(FIRE_RGBS)                           # 37 : niveaux 0..36 (DOOM_TITLE.C FIRE_MAX 36)
 assert FIRE_LEVELS == 37 and FIRE_LEVELS <= RAMP_SLOTS
 
-LOGO_BLOCK_HEAD = 4 + 4 + 512 + 2 * RAMP_SLOTS + 2 * RAMP_SLOTS + 256 + 256 + 8 + MASK_ROWS * MASK_BYTES
-assert LOGO_BLOCK_HEAD == 1840
+LOGO_BLOCK_HEAD = (4 + 4 + 512 + 2 * RAMP_SLOTS + 2 * RAMP_SLOTS + 256 + 256 + 8
+                   + 2 * MASK_ROWS * MASK_BYTES)
+assert LOGO_BLOCK_HEAD == 2480      # DOOM_TITLE.C LB_PIXELS (deux plans de masque)
 
 
 # ----------------------------------------------------------------------------- feu
@@ -192,27 +194,49 @@ def logo(wad, lump="M_DOOM"):
     return x, LOGO_Y, ww, h, bytes(out)
 
 
+MASK_CLAIR = 0.35           # part de la luminance MAXIMALE a partir de laquelle une couleur
+                            # de la police est du CORPS et non du contour
+
+
 def loading_mask(big_font):
-    """16 x 320 bits : "LOADING" en STCFN x2 (mask_font), centre ; 1 = lettre."""
-    height, _clut, widths, glyphs = wad2font.parse_font(big_font)
+    """2 x 16 x 320 bits : "LOADING" en STCFN x2 (mask_font), centre. Plan 1 = les cellules
+    CLAIRES (le corps lisible de la lettre), plan 2 = toutes les cellules OPAQUES.
+
+    Un glyphe de STCFN n'est pas une silhouette : son corps est en rouge clair (indices 177..186)
+    et son CONTOUR -- y compris le trou du O et les contre-formes du A et du D -- en rouge tres
+    sombre (191, soit (67, 0, 0)). Un masque bati sur l'opacite prend les trois et donne un pate :
+    "LOADING" etait illisible a l'ecran. La CLUT de la police est triee par luminance croissante
+    (wad2font.font_table), il suffit donc de couper dedans : sous MASK_CLAIR du maximum, la
+    cellule est du contour. Le moteur peint le plan 2 dilate d'une cellule en noir opaque, puis
+    le plan 1 par-dessus dans le blanc du feu -- la lettre garde ses trous."""
+    height, clut, widths, glyphs = wad2font.parse_font(big_font)
     assert height == MASK_ROWS
+    lum = [0.0] * 16
+    for i, c in enumerate(clut):
+        lum[i] = 0.30 * (c & 31) + 0.59 * ((c >> 5) & 31) + 0.11 * ((c >> 10) & 31)
+    seuil = MASK_CLAIR * max(lum)
+    clair = [i and lum[i] >= seuil for i in range(16)]
+    assert any(clair[1:]) and not all(clair[1:]), "la CLUT de la police ne se coupe pas en deux"
     text = "LOADING"
     total = sum(widths[ord(c)] for c in text) + 2 * (len(text) - 1)
     x = (FIRE_W - total) // 2
-    bits = [[0] * FIRE_W for _ in range(MASK_ROWS)]
+    plans = [[[0] * FIRE_W for _ in range(MASK_ROWS)] for _ in range(2)]
     for c in text:
         for y, row in enumerate(glyphs[ord(c)]):
             for i, q in enumerate(row):
                 if q:
-                    bits[y][x + i] = 1
+                    plans[1][y][x + i] = 1
+                    if clair[q]:
+                        plans[0][y][x + i] = 1
         x += widths[ord(c)] + 2
     out = bytearray()
-    for row in bits:
-        for b in range(0, FIRE_W, 8):
-            v = 0
-            for k in range(8):
-                v = (v << 1) | row[b + k]
-            out.append(v)
+    for bits in plans:
+        for row in bits:
+            for b in range(0, FIRE_W, 8):
+                v = 0
+                for k in range(8):
+                    v = (v << 1) | row[b + k]
+                out.append(v)
     return bytes(out)
 
 
@@ -265,7 +289,7 @@ def logo_block(wad, loading="TITLEPIC"):
     out += bytes(p_load + [0] * (RAMP_SLOTS - FIRE_LEVELS))
     out += rand_bytes(1) + rand_bytes(2)
     out += struct.pack(">hhhh", w, h, x, y)
-    out += bytes(MASK_ROWS * MASK_BYTES) if loading == "black" else loading_mask(mask_font(wad))
+    out += bytes(2 * MASK_ROWS * MASK_BYTES) if loading == "black" else loading_mask(mask_font(wad))
     assert len(out) == LOGO_BLOCK_HEAD
     out += pixels
     assert not (w & 3) and len(out) % 4 == 0      # doom_loadingScreen lit w*h octets, sans remplissage

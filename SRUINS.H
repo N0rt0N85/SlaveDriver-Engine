@@ -19,6 +19,10 @@ void playerDYChange(Fixed32 dvel);
 int playerGetObject(int objectType);
 void playerGetCamel(int toLevel);
 void playerHitTeleport(int toLevel);
+/* GCC14: 1 = the load that follows a death: no logo, no fire, a black screen (DOOM_TITLE.C) */
+extern int loadAfterDeath;
+/* GCC14: 1 = the next load follows a death.  A game's loading screen shows neither its logo nor
+   its fire then; its own CFG_LOADING_END clears it. */
 void switchPlayerMotion(int state);
 void setEarthQuake(int richter);
 void stunPlayer(int ticks);

@@ -26,6 +26,20 @@ void setFog(int dist);
    asks for is the game's (game/doom/DOOM_LIGHTS.C, the tuner that edits both). */
 extern int fogCap;
 extern int lightOn,lightPeakPct,lightRadPct,lightAddR,lightAddG,lightAddB;
+/* GCC14: the blob under a thing and the spectre, live (the pause's OPTIONS -> SHADOWS).  mode =
+   CFG_COMPO_*, flags = what the VDP1 is given for it, span = the blob's width in chunk pixels
+   (48 = the engine's own, THING_SHADOW_SIZE per cent of it). */
+extern int shadowMode,spectreMode,shadowPct,shadowSpan;
+/* GCC14: one composition mode = up to three VDP1 passes over the same quad (WALLS.C) */
+#define COMPO_MAXPASS 3
+typedef struct
+{unsigned char nm;                       /* passes, 1..COMPO_MAXPASS                          */
+ unsigned char jit;                      /* bit p: pass p takes a random one-pixel offset     */
+ unsigned short f[COMPO_MAXPASS];        /* the VDP1 draw-mode bits of each pass              */
+} CompoPlan;
+extern CompoPlan shadowPlan,spectrePlan;
+void compoPlanOf(CompoPlan *p,int mode); /* CFG_COMPO_* -> the plan */
+void setShadowPct(int pct);              /* recomputes shadowSpan */
 extern const short fogLevels[4];
 int fogLevel(void);                     /* fogCap's index in fogLevels */
 

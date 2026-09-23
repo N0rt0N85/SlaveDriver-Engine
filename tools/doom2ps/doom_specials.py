@@ -40,6 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 import adjacency                                       # noqa: E402
+import gridparts                                       # noqa: E402
 
 # -- types d'objets (SLEVEL.H:22-81 ; 176-179 = DOOM_ABI §1, gravés dans game/doom/DOOM.H) -------
 OT_PLAYER = 13
@@ -244,21 +245,179 @@ OT_DOOM_LAMP = 186
 # ENREGISTREMENTS DE LONGUEUR VARIABLE (un par carte au plus, emis en DERNIER : effets puis lampes).
 # Regle unique : leur 1er short est leur propre longueur en shorts, en-tete compris (nShorts) ;
 # le moteur les lit en place (OBJECT.C suckParams), verif les relit sans extras.
-OT_DOOM_SECTORFX = 187           # animations de lumiere des secteurs (p_lights.c) -- pas encore emis
-OT_DOOM_LAMPS = 188              # lampes v2, un gestionnaire par carte -- pas encore emis
+# ANIMATIONS DE LUMIERE DES SECTEURS (p_lights.c) : UN SEUL enregistrement par carte, de longueur
+# variable. Un objet par feuille etait le reflexe -- Doom donne un penseur a chaque secteur -- mais
+# E1M6 a 161 feuilles animees pour 4 objets de marge dans sa reserve (544 slots pour les monstres,
+# les ramassables et les speciaux d'une carte). Le moteur parcourt donc l'enregistrement une fois
+# par tic et y ECRIT l'etat de chaque effet, la ou il est (level_objectParams).
+#   [0] nShorts (l'enregistrement entier), [1] nmFx, puis par effet 9 shorts + ses feuilles :
+#   0 genre (FX_*)  1 sombre  2 clair (0..16)  3 temps sombre du strobe   <- le convertisseur
+#   4 compte (= la phase)  5 niveau (= clair)  6 sens (= -1)  7 graine     <- l'etat, ecrit par
+#   8 nombre de feuilles, puis les feuilles                                   le moteur
+# Les feuilles d'un meme secteur Doom sont dans la MEME entree : elles ne peuvent pas se
+# desynchroniser. Niveaux : `clair` = la lumiere du secteur, `sombre` = P_FindMinSurroundingLight
+# (le plus sombre des voisins, borne par la sienne) ; le strobe met sombre a 0 quand les deux sont
+# egales, le feu (17) ajoute 16 au sombre. Tout passe par doom3d.light_of.
+OT_DOOM_SECTORFX = 187
+FX_ENTETE = 9                    # shorts d'une entree avant ses feuilles
+# LES FLAQUES (OT_DOOM_LAMPS) : UN gestionnaire par carte, qui porte UNE lumiere verte suivant la
+# flaque la plus proche que le joueur peut voir. Une lampe par bassin etait la premiere idee : E1M6,
+# la carte qui a le plus de nukage, n'a que 3 objets de marge sur les 541 du moteur, et huit lampes
+# l'ont fait deborder. Un gestionnaire coute UN objet et UN emplacement de lumiere, quel que soit le
+# nombre de flaques.
+#   [0] nShorts  [1] nmPools  [2..4] r, g, b  [5] intensite  [6] battement en tics
+#   puis par flaque 6 shorts + ses feuilles vues :
+#   0 x  1 hauteur  2 y  3 rayon  4 feuille  5 nombre de feuilles vues, puis les feuilles
+OT_DOOM_LAMPS = 188
+POOL_ENTETE = 10                 # shorts d'une flaque avant ses feuilles
+POOL_TETE = 4                    # shorts d'en-tete de l'enregistrement
 OT_LONGUEUR_VARIABLE = (OT_DOOM_SECTORFX, OT_DOOM_LAMPS)
 FX_FLASH, FX_STROBE, FX_GLOW, FX_FLICKER = 1, 2, 3, 4
 FX_SYNC = 0x80                   # strobe des speciaux 12/13 : premier compte 1 (P_SpawnStrobeFlash)
 FASTDARK, SLOWDARK = 15, 35
 # special de secteur Doom -> (genre | FX_SYNC, temps sombre du strobe) ; P_SpawnSpecials
+# LES FLAQUES qui recoivent un glow (voir special_objects). Ce sont les flats ANIMES de liquide
+# de p_spec.c animdefs[], et rien d'autre : l'eau (FWATER, SWATER) ne brille pas, la roche (RROCK)
+# non plus, et ATTENTION -- SLIME01 a SLIME12 de Doom 2 sont bien des liquides mais SLIME13 a
+# SLIME16 sont du metal rouille, qu'un simple prefixe ferait briller. D'ou la liste exacte. C'est
+# ici qu'on ajoute ce qu'apportent Doom 2, TNT et Plutonia.
+NUKAGE_FLATS = frozenset(["NUKAGE1", "NUKAGE2", "NUKAGE3",       # Doom et Doom 2
+                          "LAVA1", "LAVA2", "LAVA3", "LAVA4",    # Doom 2
+                          "BLOOD1", "BLOOD2", "BLOOD3"]          # Doom 2
+                         + ["SLIME%02d" % i for i in range(1, 13)])   # Doom 2 : 01-12 SEULEMENT
+# LE VERT N'EST PAS UNE LUMIERE. Il l'a ete deux disques de suite et c'etait faux les deux fois :
+# une lumiere du moteur est une tache, elle prend un des quinze slots, et il fallait faire bouger
+# son intensite pour que la flaque vive, ce qui se voit comme un scintillement (a l'ecran,
+# 2026-09-23). On CUIT donc le vert dans le niveau :
+#   - la SALLE de chaque flaque (salle_de_flaque : le liquide et ce qui le borde) porte
+#     SECFLAG_NUKAGE, et le moteur fait lire a ses MURS et a ses PLAFONDS -- pas a ses sols -- la
+#     rampe VERTE du monde au lieu de la neutre (WALLS.C getLight, UTIL.C worldGreen). C'est la
+#     seule facon d'avoir une couleur : la lumiere d'un sommet est un scalaire, c'est la RAMPE
+#     qu'il traverse qui en fait un mot de couleur. Cout a l'execution : nul.
+#   - une SOURCE au centre de chaque flaque eclaircit la lumiere des sommets autour d'elle
+#     (doom3d.cuire_nukage, NUKAGE_CIBLE crans) : le relief, cuit lui aussi.
+#   - il ne reste au gestionnaire qu'a faire RESPIRER la salle : tous les NUKAGE_PULSE tics un pas
+#     d'un cran vers une cible a +/- NUKAGE_AMP de la lumiere de la salle, et seulement tant qu'un
+#     joueur est assez pres et peut voir une de ses feuilles (sinon la salle est rendue telle
+#     quelle). Ca varie lentement, globalement, et ca ne scintille pas.
+NUKAGE_PULSE = 24                # tics entre deux pas de la respiration
+NUKAGE_AMP = 1                   # crans (0..16) au-dessus et au-dessous de la lumiere de la salle
+NUKAGE_FEUILLES = 8              # feuilles au plus par flaque (DOOM_GAME.C DOOM_LAMP_SEEN)
+NUKAGE_BORD = 96                 # u : un voisin du liquide fait partie de la SALLE si son sol
+                                 # n'est pas plus haut que ca -- la berge, la passerelle, pas le
+                                 # couloir qui remonte
+NUKAGE_CIBLE = 3                 # crans ajoutes a la lumiere des sommets au centre de la flaque
+NUKAGE_RAYON = (128, 320)        # rayon minimum et maximum
+NUKAGE_AIRE_MIN = 4096           # u2 : sous une dalle de 64x64, pas de lumiere
+NUKAGE_MAX = 8                   # flaques par carte, les plus grandes d'abord
+# FUSION DES BASSINS. Un bassin, c'est des secteurs de liquide qui se TOUCHENT -- et un chemin qui
+# traverse une salle coupe sa flaque en deux bassins qui ne se touchent plus. Le gestionnaire
+# n'allumant que la plus proche, une moitie de la salle restait noire (vu a l'ecran, 2026-09-23).
+# On fond donc les bassins dont les BORDS sont a moins de NUKAGE_FUSION l'un de l'autre : la salle
+# redevient UNE flaque, la lumiere se pose sur son centre et son rayon couvre les deux.
+NUKAGE_FUSION = 256             # u entre deux bords : au-dela ce sont deux salles
+NUKAGE_RAYON_MAX = 448          # u : plafond du rayon d'une flaque fondue
 SECTOR_FX = {1: (FX_FLASH, 0), 2: (FX_STROBE, FASTDARK), 3: (FX_STROBE, SLOWDARK),
              4: (FX_STROBE, FASTDARK), 8: (FX_GLOW, 0), 12: (FX_STROBE | FX_SYNC, SLOWDARK),
              13: (FX_STROBE | FX_SYNC, FASTDARK), 17: (FX_FLICKER, 0)}
 LAMPE_VUS_MAX = 8                 # DOOM_GAME.C DoomLampObject.seen
-LAMPES = {
-    "E1M3": [dict(x=-264, y=-628, hauteur=136, secteur=29, canal=11, teinte=(16, 11, 6),
-                  rayon=176, intensite=24, montee=38)],
-}
+# LAMPES DERIVEES. Il n'y a plus de liste ecrite a la main : la lampe se DEDUIT de la carte, par
+# une regle etroite -- un PLACARD LUMINEUX, c'est-a-dire un secteur dont le plafond porte une dalle
+# lumineuse (doom3d.LIGHT_FLATS), dont la lumiere est haute, et dont la seule entree est une PORTE
+# A CANAL. Pourquoi cette regle et pas une autre : une dalle lumineuse qu'on voit depuis toujours
+# n'a pas besoin d'une lumiere du moteur, `cuire_lumieres` lui cuit son halo une fois pour toutes ;
+# ce que la cuisson ne sait pas faire, c'est APPARAITRE quand la porte s'ouvre. La lampe ne sert
+# donc qu'a ca, et le canal qui l'allume est celui de la porte -- pas avant, car une lumiere du
+# moteur traverse les murs (buildLightList ne teste que le plan du mur) et peindrait le sol devant
+# une porte encore fermee. La montee suit la porte : sa course a VDOORSPEED (2 u par tic).
+# E1M3 est la carte de l'episode 1 qui rentre dans la regle : la salle de la clef bleue s'eteint
+# (lignes 1017-1019, tag 13) pendant que le placard aux imps, secteur 29, garde sa lumiere 160 et
+# son plafond TLITE6_5, et s'ouvre par la porte 30 sur le canal 11. C'est exactement la lampe qui
+# etait ecrite ici a la main jusqu'au 2026-09-23 : (-264, -628), hauteur 136, teinte (16, 11, 6),
+# rayon 176, intensite 24, montee 38 tics -- la derivation doit la retrouver.
+LAMPE_LUM_MIN = 144               # lumiere Doom du placard : en-dessous, ce n'est pas une lampe
+LAMPE_ADOUCIT = 0.4               # part du chemin vers le blanc : la dalle TLITE6_5 est un rouge
+                                  # pur (k = 16, 7, 7), trop rouge a l'ecran (Ymir, 22-09)
+LAMPE_RAYON = (128, 320)          # bornes du rayon deduit de la taille du secteur
+LAMPE_INTENSITE = 24              # sur 31, au centre
+LAMPE_MAX = 2                     # lampes par carte : on reste avare
+VDOORSPEED = 2                    # u par tic (p_doors.c)
+
+
+def _teinte_de_dalle(W, flat):
+    """k 0..16 par canal pour une dalle de plafond : sa couleur moyenne, normalisee sur son canal
+    le plus fort, puis tiree de LAMPE_ADOUCIT vers le blanc -- sauf son canal le plus FAIBLE, qui
+    reste ou il est. Une lampe qu'on adoucit partout devient blanche ; c'est son canal froid qui
+    lui garde sa couleur, et a egalite c'est le plus BLEU qui reste bas : une lampe est chaude.
+    TLITE6_5 donne (16, 11, 7), la teinte reglee a la main etait (16, 11, 6)."""
+    pal = W.playpal(0)
+    d = W.lump(flat)
+    acc = [0, 0, 0]
+    for px in d:
+        c = pal[px]
+        for i in range(3):
+            acc[i] += c[i]
+    m = max(acc) or 1
+    k = [max(0, min(16, int(round(16.0 * v / m)))) for v in acc]
+    bas = 2 - k[::-1].index(min(k))       # a egalite, le plus bleu
+    out = [max(0, min(16, int(round(v + (16 - v) * LAMPE_ADOUCIT)))) for v in k]
+    out[bas] = k[bas]
+    return tuple(out)
+
+
+def lampes_derivees(M, conv, specials, W):
+    """Les placards lumineux de la carte -> les dict que l'emission attend (voir LAMPES_DERIVEES)."""
+    import doom3d                                 # tardif : doom3d importe ce module
+    S, SD = M["sectors"], M["sidedefs"]
+    porte_de = {}
+    for d in specials.doors:
+        if d["channel"] >= 0:
+            porte_de[d["sector"]] = d
+    out = []
+    for si, sec in enumerate(S):
+        if sec.ceilpic not in doom3d.LIGHT_FLATS or sec.light < LAMPE_LUM_MIN:
+            continue
+        voisins = set()
+        for ld in M["linedefs"]:
+            if ld.right < 0 or ld.left < 0:
+                continue
+            a, b = SD[ld.right].sector, SD[ld.left].sector
+            if a == si:
+                voisins.add(b)
+            elif b == si:
+                voisins.add(a)
+        if not voisins or not all(v in porte_de for v in voisins):
+            continue                              # on n'y entre pas QUE par des portes a canal
+        d = porte_de[min(voisins)]
+        cr = doom3d._centre_rayon(M, si)
+        if cr is None:
+            continue
+        _cx, _cy, r = cr
+        # la lampe se pose au centre du plus grand MORCEAU du secteur, pas au centre du secteur :
+        # un secteur en L a son centre dehors, et DOOM_GAME.C exige la feuille qu'on annonce
+        # (E1M4 : (1733, 1661) tombait dans le secteur 80, pas dans le 78)
+        best = None
+        for lf in leaves_of_sector(conv, si):
+            ring = conv.polys[lf]
+            a_ = abs(gridparts.area2(ring)) / 2.0
+            if best is None or a_ > best[0]:
+                best = (a_, lf, sum(p[0] for p in ring) / len(ring),
+                        sum(p[1] for p in ring) / len(ring))
+        if best is None:
+            continue
+        cx, cy = best[2], best[3]
+        if conv.leaf_at(cx, cy) != best[1]:
+            continue                              # centre hors de son propre morceau : tant pis
+        depart = max(S[d["sector"]].ceilh, d["lower"] + DOOR_SLIT)
+        out.append(dict(x=int(round(cx)), y=int(round(cy)),
+                        hauteur=(sec.floorh + sec.ceilh) // 2, secteur=si,
+                        canal=d["channel"], teinte=_teinte_de_dalle(W, sec.ceilpic),
+                        rayon=max(LAMPE_RAYON[0], min(LAMPE_RAYON[1], int(r) + 96)),
+                        intensite=LAMPE_INTENSITE,
+                        montee=max(0, (d["upper"] - depart) // VDOORSPEED),
+                        aire=r * r))
+    out.sort(key=lambda lp: -lp["aire"])
+    return out[:LAMPE_MAX]
 
 # Tous les objets emis ici qui ne sont PAS des mobjs positionnes (things2objects.object_positions,
 # verif_doom) -- le joueur et les mobjs portent `sector, x, y, z`, eux non.
@@ -441,6 +600,8 @@ def specials_of(M):
         if s.special in SECTOR_DAMAGE:
             damage.append(dict(sector=si, hp=SECTOR_DAMAGE[s.special], special=s.special,
                                exit=s.special in SECTOR_EXIT))
+        elif s.special in SECTOR_FX:
+            pass                       # anime : emis par special_objects (OT_DOOM_SECTORFX)
         elif s.special:
             ignored["secteur %d" % s.special] += 1
     door_by_sector = {}
@@ -616,6 +777,135 @@ def mobile_sectors(sp):
 def leaves_of_sector(conv, sector):
     """Feuilles gardées (index .LEV) du secteur Doom `sector`."""
     return [conv.remap[li] for li in conv.keep if conv.leaf_sector[li] == sector]
+
+
+def bassins_nukage(M, conv):
+    """Les flaques en BASSINS : les secteurs de liquide qui partagent une ligne n'en font qu'un.
+
+    Rend une liste de dict(aire, feuille, secteur_moteur, x, y, rayon, secteur_doom, liquide)
+    du plus grand au plus petit ; `liquide` est l'ensemble des secteurs Doom de liquide du bassin.
+    Le point est le centre du plus grand MORCEAU du bassin, pas celui du bassin : un morceau est
+    convexe, donc son centre est dedans, et DOOM_GAME.C exige que la feuille qui contient le point
+    soit bien celle qu'on annonce."""
+    if getattr(conv, "_flaques", None) is not None:
+        return conv._flaques
+    import doom3d                                 # tardif : doom3d importe ce module
+    S, L, SD = M["sectors"], M["linedefs"], M["sidedefs"]
+    liquide = {si for si, s in enumerate(S) if s.floorpic in NUKAGE_FLATS}
+    parent = {si: si for si in liquide}
+
+    def trouve(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for ld in L:
+        if ld.right < 0 or ld.left < 0:
+            continue
+        a, b = SD[ld.right].sector, SD[ld.left].sector
+        if a in liquide and b in liquide:
+            ra, rb = trouve(a), trouve(b)
+            if ra != rb:
+                parent[ra] = rb
+    groupes = defaultdict(list)
+    for si in liquide:
+        groupes[trouve(si)].append(si)
+    out = []
+    for g in groupes.values():
+        aire = sum(abs(doom3d._perimetre_aire(M, si)[1]) for si in g)
+        if aire < NUKAGE_AIRE_MIN:
+            continue
+        # le plus grand morceau du bassin, parmi ceux que la conversion garde
+        best = None
+        for si in g:
+            for li in conv.keep:
+                if conv.leaf_sector[li] != si:
+                    continue
+                ring = conv.polys[li]
+                a_ = abs(gridparts.area2(ring)) / 2.0
+                if best is None or a_ > best[0]:
+                    best = (a_, li, si)
+        if best is None:
+            continue
+        _a, li, si = best
+        ring = conv.polys[li]
+        cx = sum(p[0] for p in ring) / len(ring)
+        cy = sum(p[1] for p in ring) / len(ring)
+        if conv.leaf_at(cx, cy) != li:
+            continue                              # centre hors de son propre morceau : on passe
+        rayon = max(NUKAGE_RAYON[0], min(NUKAGE_RAYON[1], int(math.sqrt(aire / math.pi)) + 96))
+        out.append(dict(aire=aire, feuille=li, sect=conv.remap[li], x=int(round(cx)),
+                        y=int(round(cy)), rayon=rayon, si=si, liquide=frozenset(g)))
+    # FUSION : les bassins dont les bords se touchent presque ne font qu'une flaque
+    fondu = list(range(len(out)))
+
+    def trouve2(a):
+        while fondu[a] != a:
+            fondu[a] = fondu[fondu[a]]
+            a = fondu[a]
+        return a
+
+    for i in range(len(out)):
+        for j in range(i + 1, len(out)):
+            d = math.dist((out[i]["x"], out[i]["y"]), (out[j]["x"], out[j]["y"]))
+            if d - out[i]["rayon"] - out[j]["rayon"] <= NUKAGE_FUSION:
+                a, b = trouve2(i), trouve2(j)
+                if a != b:
+                    fondu[a] = b
+    paquets = defaultdict(list)
+    for i in range(len(out)):
+        paquets[trouve2(i)].append(out[i])
+    fusion = []
+    for g in paquets.values():
+        if len(g) == 1:
+            fusion.append(g[0])
+            continue
+        aire = sum(e["aire"] for e in g)
+        cx = sum(e["aire"] * e["x"] for e in g) / aire   # centre pondere par les aires
+        cy = sum(e["aire"] * e["y"] for e in g) / aire
+        rayon = int(max(math.dist((cx, cy), (e["x"], e["y"])) + e["rayon"] for e in g))
+        rayon = max(NUKAGE_RAYON[0], min(NUKAGE_RAYON_MAX, rayon))
+        gros = max(g, key=lambda e: e["aire"])           # de qui la flaque tient sa hauteur
+        lf = conv.leaf_at(cx, cy)
+        if lf not in conv.remap:                         # le centre tombe hors de la carte gardee
+            lf = gros["feuille"]
+            cx, cy = gros["x"], gros["y"]
+        # le secteur est celui de la FEUILLE ou la flaque se pose, pas celui du plus gros bassin :
+        # le centre d'une salle fondue tombe souvent sur le chemin, dont le sol est plus haut
+        fusion.append(dict(aire=aire, feuille=lf, sect=conv.remap[lf], x=int(round(cx)),
+                           y=int(round(cy)), rayon=rayon, si=conv.leaf_sector[lf],
+                           liquide=frozenset().union(*[e["liquide"] for e in g])))
+    fusion.sort(key=lambda e: -e["aire"])
+    conv._flaques = fusion[:NUKAGE_MAX]
+    return conv._flaques
+
+
+def salle_de_flaque(M, flaque):
+    """Les secteurs Doom de la SALLE d'une flaque : son liquide, et tout ce qui le borde par une
+    ligne a deux faces sans remonter de plus de NUKAGE_BORD -- la berge et la passerelle, pas le
+    couloir qui s'en va. Ce sont eux qui portent SECFLAG_NUKAGE, donc eux dont les murs et les
+    PLAFONDS liront la rampe verte (WALLS.C getLight)."""
+    S, SD = M["sectors"], M["sidedefs"]
+    liquide = flaque["liquide"]
+    bas = min(S[si].floorh for si in liquide)
+    salle = set(liquide)
+    for ld in M["linedefs"]:
+        if ld.right < 0 or ld.left < 0:
+            continue
+        a, b = SD[ld.right].sector, SD[ld.left].sector
+        for x, y in ((a, b), (b, a)):
+            if x in liquide and y not in liquide and S[y].floorh - bas <= NUKAGE_BORD:
+                salle.add(y)
+    return salle
+
+
+def salles_nukage(M, conv):
+    """{secteur Doom} de toutes les salles a nukage de la carte (doom3d.cuire_nukage)."""
+    out = set()
+    for fl in bassins_nukage(M, conv):
+        out |= salle_de_flaque(M, fl)
+    return out
 
 
 def secteurs_eclaires(M, x, y, rayon, pas=16):
@@ -898,13 +1188,47 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
         for s in leaves_of_sector(conv, dm["sector"]):
             emit(OT_DOOM_DAMAGE, s, dm["hp"] | (DAMAGE_EXIT if dm.get("exit") else 0),
                  sector_doom=dm["sector"], kind="damage")
+    # lumieres animees des secteurs (p_lights.c) : un seul enregistrement, une entree par secteur
+    voisins = _neighbours(M)
+    fx = []
+    for si, sec in enumerate(M["sectors"]):
+        if sec.special not in SECTOR_FX:
+            continue
+        feuilles = leaves_of_sector(conv, si)
+        if not feuilles:
+            notes["secteur anime sans feuille (%s)" % sec.special] += 1
+            continue
+        genre, noir = SECTOR_FX[sec.special]
+        clair_d = sec.light
+        sombre_d = min([M["sectors"][v].light for v in voisins.get(si, ())] + [clair_d])
+        if (genre & ~FX_SYNC) == FX_STROBE and sombre_d == clair_d:
+            sombre_d = 0                          # P_SpawnStrobeFlash : minlight == maxlight -> 0
+        if (genre & ~FX_SYNC) == FX_FLICKER:
+            sombre_d = min(255, sombre_d + 16)    # P_SpawnFireFlicker
+        clair, sombre = doom3d.light_of(clair_d), doom3d.light_of(sombre_d)
+        if sombre > clair:
+            sombre = clair
+        base = genre & ~FX_SYNC
+        # Phase et graine : deterministes, par secteur (Doom tire P_Random au chargement). La
+        # graine IDENTIFIE le secteur -- impaire et unique -- pour que la verif puisse exiger une
+        # seule regle par graine ; le generateur du moteur (LCG) separe deux graines voisines des
+        # le premier pas.
+        phase = 1 if (genre & FX_SYNC) else ((si * 7 + 3) & 7) + 1
+        graine = (si & 0x3fff) * 2 + 1
+        fx.append([base, sombre, clair, noir, phase, clair, -1, graine, len(feuilles)]
+                  + list(feuilles))
+    if fx:
+        vals = [2 + sum(len(e) for e in fx), len(fx)]
+        for e in fx:
+            vals.extend(e)
+        emit(OT_DOOM_SECTORFX, *vals, nshorts=vals[0], kind="sectorfx")
     # murs secrets : un par mur DOORWALL d'une ligne ML_SECRET
     for w in sorted(int(x) for x in (secret_walls or ())):
         emit(OT_DOOM_SECRETWALL, w, kind="secretwall")
-    # lampes de la carte (LAMPES) : la feuille qui contient (x, y), du secteur annonce, et une
-    # feuille par secteur qu'elle eclaire, la sienne d'abord ; au-dela de LAMPE_VUS_MAX, aucune :
-    # la lampe reste alors candidate partout, comme sans le test
-    for lp in LAMPES.get(M.get("name"), ()):
+    # lampes DERIVEES (lampes_derivees : les placards lumineux a porte) : la feuille qui contient
+    # (x, y), du secteur deduit, et une feuille par secteur qu'elle eclaire, la sienne d'abord ;
+    # au-dela de LAMPE_VUS_MAX, aucune : la lampe reste alors candidate partout, comme sans le test
+    for lp in (lampes_derivees(M, conv, specials, M["wad"]) if M.get("wad") else ()):
         lf = conv.leaf_at(lp["x"], lp["y"])
         si = conv.leaf_sector[lf] if lf in conv.remap else None
         if si != lp["secteur"]:
@@ -926,6 +1250,39 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
              *lp["teinte"], lp["rayon"], lp["intensite"], lp["montee"],
              len(vus), *(vus + [-1] * (LAMPE_VUS_MAX - len(vus))),
              sector_doom=si, kind="lamp", vus=vus)
+    # les flaques : UN gestionnaire, une entree par bassin.  Ses feuilles sont celles de la SALLE
+    # qui sont au MEME niveau de lumiere que le liquide : respirer avec elles garde les alcoves
+    # plus claires et les recoins plus sombres la ou le WAD les a mis.
+    import doom3d as _d3
+    flaques = []
+    for fl in bassins_nukage(M, conv):
+        si, x, y, rayon = fl["si"], fl["x"], fl["y"], fl["rayon"]
+        sec = M["sectors"][si]
+        h = sec.floorh + 16
+        if not sec.floorh < h < sec.ceilh:
+            notes["bassin trop plat (secteur %d)" % si] += 1
+            continue
+        liq = max(fl["liquide"], key=lambda s_: abs(_d3._perimetre_aire(M, s_)[1]))
+        base = _d3.light_of(M["sectors"][liq].light)
+        salle = salle_de_flaque(M, fl)
+        feuilles = []
+        for s_ in sorted(salle, key=lambda s_: (s_ not in fl["liquide"], s_)):
+            if _d3.light_of(M["sectors"][s_].light) != base:
+                continue
+            for lf in leaves_of_sector(conv, s_):
+                if lf not in feuilles:
+                    feuilles.append(lf)
+        feuilles = feuilles[:NUKAGE_FEUILLES]
+        if not feuilles:
+            notes["flaque sans feuille a son niveau (secteur %d)" % si] += 1
+            continue
+        graine = (si & 0x3fff) * 2 + 1
+        flaques.append([x, h, y, rayon, fl["sect"], base, 0, 0, graine, len(feuilles)] + feuilles)
+    if flaques:
+        vals = [POOL_TETE + sum(len(f) for f in flaques), len(flaques), NUKAGE_PULSE, NUKAGE_AMP]
+        for f in flaques:
+            vals.extend(f)
+        emit(OT_DOOM_LAMPS, *vals, nshorts=vals[0], kind="pools", n=len(flaques))
     return objects, params, dict(notes)
 
 

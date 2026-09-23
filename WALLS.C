@@ -35,6 +35,7 @@
 
 short plaxBBymax,plaxBBxmax,
    plaxBBymin,plaxBBxmin;
+
 static short slave_plaxBBymax,slave_plaxBBxmax,
    slave_plaxBBymin,slave_plaxBBxmin;
 
@@ -819,6 +820,10 @@ static int lightListFor(sWallType *wall,int sector,signed char *idx)
 
 int nmWallLights;
 static signed char wallLightIdx[MAXNMLIGHTSOURCES];
+/* GCC14: the nukage's green is not tested here any more -- it is CUT INTO THE LIGHT BYTE of
+   each vertex, bits 5-6, and the world's ramp has one band per level (UTIL.H).  The renderer's
+   assembler indexes the ramp with that byte untouched, so a green wall costs nothing and keeps
+   its LODs; only the lit path below has to take the byte apart. */
 static void buildLightList(sWallType *wall,int sector)
 {nmWallLights=nmLights? lightListFor(wall,sector,wallLightIdx): 0;
 }
@@ -850,8 +855,17 @@ unsigned short getLight(char vlight,
 	wavyIndex++;
     }
  if (!nmWallLights)
-    return worldGrey[(int)vlight];
- r=g=b=vlight;
+    return worldGrey[(int)(unsigned char)vlight];
+ /* GCC14: the byte carries the green band in bits 5-6.  The TINT goes on the vertex's own light
+    and the lights are added AFTER it, with their own colour: a lamp over nukage must wash the
+    green out, not be washed green by it. */
+ r=g=b=((unsigned char)vlight)&31;
+ {int k=((unsigned char)vlight)>>WORLDGREEN_SH;
+  if (k)
+     {r=(r*(16-(((16-WORLDGREEN_R)*k)/(WORLDGREEN_NM-1))))>>4;
+      b=(b*(16-(((16-WORLDGREEN_B)*k)/(WORLDGREEN_NM-1))))>>4;
+     }
+ }
  for (i=0;i<nmWallLights;i++)
     lightApply(wallLightIdx[i],pos,&r,&g,&b);
  if (r>31) r=31;
@@ -873,8 +887,14 @@ unsigned short sgetLight(char vlight,
 	sWavyIndex++;
     }
  if (!snmWallLights)
-    return worldGrey[(int)vlight];
- r=g=b=vlight;
+    return worldGrey[(int)(unsigned char)vlight];
+ r=g=b=((unsigned char)vlight)&31;
+ {int k=((unsigned char)vlight)>>WORLDGREEN_SH;   /* the green band: see getLight */
+  if (k)
+     {r=(r*(16-(((16-WORLDGREEN_R)*k)/(WORLDGREEN_NM-1))))>>4;
+      b=(b*(16-(((16-WORLDGREEN_B)*k)/(WORLDGREEN_NM-1))))>>4;
+     }
+ }
  for (i=0;i<snmWallLights;i++)
     lightApply(swallLightIdx[i],pos,&r,&g,&b);
  if (r>31) r=31;
@@ -2082,7 +2102,10 @@ void drawWaterSurface(sWallType *wall,MthMatrix *view,SectorDrawRecord *s)
  assert(wall->lastVertex-wall->firstVertex<MAXVPERWALL);
  for (i=wall->firstVertex;i<=wall->lastVertex;i++)
     {getVertex(i,&original);
-     vCalc[v].light=worldGrey[GETWATERBRIGHT(original.x,original.z)];
+     {int wb=GETWATERBRIGHT(original.x,original.z);      /* GCC14: band 0 stops at 31 */
+      if (wb>31) wb=31;
+      vCalc[v].light=worldGrey[wb];
+     }
 #if WAVYWATER
      /* wavy water */
      original.y+=F(GETWATERBRIGHT(original.x,original.z)-16);
@@ -3275,6 +3298,82 @@ void wallRenderSlaveMain(void)
     }
 }
 
+/* GCC14: the blob under a thing and the spectre, both live: params/doom.cfg gives the first
+   value and the pause's OPTIONS -> SHADOWS changes it with the level running.  The flags are
+   kept beside the mode so the draw loop reads a word instead of branching per thing. */
+int shadowMode=CFG_SHADOW_MODE;
+int spectreMode=CFG_SPECTRE_MODE;
+int shadowPct=GP_THING_SHADOW_SIZE;
+int shadowSpan=(48*GP_THING_SHADOW_SIZE)/100;
+CompoPlan shadowPlan,spectrePlan;
+
+/* GCC14: a composition mode is a PLAN of one to three VDP1 passes over the same quad.  One pass
+   is all the hardware offers per command -- the colour calculation has no strength parameter --
+   so everything beyond a plain half comes from drawing again (VDP1 p.95: "To make the luminance
+   one fourth, set the same command table in VRAM twice").  `jit` says a pass takes a random
+   one-pixel offset: the mesh is a checkerboard on the FRAMEBUFFER, not on the sprite, so moving
+   the quad by one pixel hands the pass the other half of its pixels. */
+void compoPlanOf(CompoPlan *p,int mode)
+{p->nm=1;
+ p->jit=0;
+ p->f[0]=p->f[1]=p->f[2]=COMPO_REP;
+ switch (mode)
+    {case CFG_COMPO_MESH:   p->f[0]=DRAW_MESH; break;
+     case CFG_COMPO_SHADOW: p->f[0]=COMPO_SHADOW; break;
+     case CFG_COMPO_GRAIN:  p->f[0]=COMPO_SHADOW|DRAW_MESH; break;
+     case CFG_COMPO_TRANS:  p->f[0]=COMPO_TRANS; break;
+     case CFG_COMPO_TGRAIN: p->f[0]=COMPO_TRANS|DRAW_MESH; break;
+     case CFG_COMPO_DARK:   p->nm=2;
+			    p->f[0]=p->f[1]=COMPO_SHADOW; break;
+     case CFG_COMPO_TBW:    p->nm=2;
+			    p->f[0]=COMPO_SHADOW;
+			    p->f[1]=DRAW_MESH; break;      /* replace, in its grey bank */
+     case CFG_COMPO_FUZZ:   p->nm=3;
+			    p->jit=6;           /* passes 1 and 2 are DISPLACED */
+			    p->f[0]=p->f[1]=p->f[2]=COMPO_SHADOW; break;
+     default:               break;
+    }
+}
+
+/* GCC14: the fuzz's own generator.  NOT the game's (getNextRand): the renderer must not consume
+   a number the playsim counts on -- the two CPUs and the network read that one.
+   FUZZ_SHIFT is how far a displaced pass moves.  One pixel, over the VDP1's mesh, only gave the
+   other half of a CHECKERBOARD -- a grid, which is not what a fuzz looks like.  Several pixels,
+   on the WHOLE silhouette, makes the three passes overlap in patches shaped like the monster
+   itself: the part all three cover takes three shadows, the crescents one or two, and the whole
+   thing is redrawn every image.  Doom's own fuzz is a displacement too (r_draw.c fuzzoffset). */
+#define FUZZ_SHIFT 5
+static unsigned int fuzzSeed=0x13579bdfu;
+static int fuzzNext(void)
+{fuzzSeed=fuzzSeed*1103515245u+12345u;
+ return (int)(((fuzzSeed>>17)%(2*FUZZ_SHIFT+1))-FUZZ_SHIFT);
+}
+
+/* the plan, drawn: `pos` is the quad (pos[0] its corner), restored on the way out */
+static void compoDraw(const CompoPlan *p,int zoom,int md,int bk,int pic,XyInt *pos,
+		      struct gourTable *g)
+{int i,dx,dy;
+ for (i=0;i<p->nm;i++)
+    {dx=dy=0;
+     if (p->jit & (1<<i))
+	{dx=fuzzNext();
+	 dy=fuzzNext();
+	 pos[0].x+=dx;
+	 pos[0].y+=dy;
+	}
+     EZ_scaleSpr(zoom,md|p->f[i],bk,pic,pos,g);
+     pos[0].x-=dx;
+     pos[0].y-=dy;
+    }
+}
+
+void setShadowPct(int pct)
+{if (pct<10) pct=10;
+ if (pct>200) pct=200;
+ shadowPct=pct;
+ shadowSpan=(48*pct)/100;
+}
+
 /* GCC14: doorwayCache for another slave program while no level runs (Doom's title fire) */
 void *slaveScratch(int *size)
 {if (size)
@@ -4294,8 +4393,10 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	}
      /* draw shadow -- GCC14: not under a thing the tile cache's bar leaves out (PIC.H
 	mapSpritePic): alone, it would mark a monster that is not drawn */
-     if (!(o->flags & SPRITEFLAG_NOSHADOW) && width64>=picSpriteLod &&
-	 tformed.z<=CFG_SHADOW_DIST)
+     /* GCC14: a see-through thing casts none.  A spectre is not a body, and the engine's blob
+	under one read as a solid disc under something you can see through. */
+     if (!(o->flags & (SPRITEFLAG_NOSHADOW|SPRITEFLAG_MESH)) && shadowMode!=CFG_COMPO_NONE &&
+	 width64>=picSpriteLod && tformed.z<=CFG_SHADOW_DIST)
 	{Fixed32 shadowHeight;
 	 Fixed32 shadowWidth;
 	 Fixed32 shadowScale;
@@ -4311,8 +4412,8 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	     if (tformed.z>F(32) && tformed.z<FARCLIP)
 		{project_point(&tformed,&shadowScreenPos);
 		 shadowScale=MTH_Mul(shadowScale,scale);
-		 shadowWidth=48*shadowScale;
-		 shadowHeight=48*shadowScale;
+		 shadowWidth=shadowSpan*shadowScale;
+		 shadowHeight=shadowSpan*shadowScale;
 
 		 shadowHeight=MTH_Mul(shadowHeight,
 				      MTH_Div(abs(shadowPos.y-playerPos->y),
@@ -4331,8 +4432,7 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		     abs(pos[0].x)+(pos[1].x>>1)<=VDP1LIM &&
 		     abs(pos[0].y)+(pos[1].y>>1)<=VDP1LIM &&
 		     (sh=mapSpritePic(0,PIC_ALWAYS))>=0)
-		    EZ_scaleSpr(ZOOM_MM,UCLPIN_ENABLE|COLOR_4|CFG_SHADOW_MODE,
-				0,sh,pos,NULL);
+		    compoDraw(&shadowPlan,ZOOM_MM,UCLPIN_ENABLE|COLOR_4,0,sh,pos,NULL);
 		}
 	    }
 	}
@@ -4408,11 +4508,12 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 	      gtable.entry[2]=gtable.entry[0];
 	      gtable.entry[3]=gtable.entry[0];
 	      if (sprRect(pos) && (pic=mapSpritePic(ch[chunk].tile,width64))>=0)
-		 EZ_scaleSpr(ZOOM_TL|flip,
-			     UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|
-			     DRAW_GOURAU|
-			     ((o->flags & SPRITEFLAG_MESH)? DRAW_MESH: 0),
-			     0,pic,pos,&gtable);
+		 {int md=UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|DRAW_GOURAU;
+		  if (o->flags & SPRITEFLAG_MESH)
+		     compoDraw(&spectrePlan,ZOOM_TL|flip,md,0,pic,pos,&gtable);
+		  else
+		     EZ_scaleSpr(ZOOM_TL|flip,md,0,pic,pos,&gtable);
+		 }
 	     }
 	  else
 	     {if (i==TILESMALL8BPP)
@@ -4420,11 +4521,13 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 		  pos[1].y>>=1;
 		 }
 	      if (sprRect(pos) && (pic=mapSpritePic(ch[chunk].tile,width64))>=0)
-		 EZ_scaleSpr(ZOOM_TL | flip,
-			     UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE|
-			     ((o->flags & SPRITEFLAG_MESH)? DRAW_MESH: 0),
-			     (light? light: spriteBank)<<8,pic,pos,  /* light = muzzle flash */
-			     NULL);
+		 {int md=UCLPIN_ENABLE|COLOR_4|HSS_ENABLE|ECD_DISABLE;
+		  int bk=(light? light: spriteBank)<<8;     /* light = muzzle flash */
+		  if (o->flags & SPRITEFLAG_MESH)
+		     compoDraw(&spectrePlan,ZOOM_TL|flip,md,bk,pic,pos,NULL);
+		  else
+		     EZ_scaleSpr(ZOOM_TL | flip,md,bk,pic,pos,NULL);
+		 }
 	     }
 	 }
 
@@ -4444,7 +4547,10 @@ void drawSprites(MthXyz *playerPos,MthMatrix *view,int sector)
 
 
 void initWallRenderer(void)
-{lightInit();
+{compoPlanOf(&shadowPlan,shadowMode);   /* GCC14: the two live composition modes */
+ compoPlanOf(&spectrePlan,spectreMode);
+ setShadowPct(shadowPct);
+ lightInit();
 }
 
 #ifdef GP_GAME_DOOM
@@ -4553,7 +4659,8 @@ static int doomSprBox(Sprite *o,DoomView *v,DoomSprBox *b)
  b->up=-y0*o->scale;
  dn=y1*o->scale;
  top=b->up;
- if (!(o->flags & SPRITEFLAG_NOSHADOW) && t.z<=CFG_SHADOW_DIST)   /* GCC14: the one drawSprites draws */
+ if (!(o->flags & (SPRITEFLAG_NOSHADOW|SPRITEFLAG_MESH)) && shadowMode!=CFG_COMPO_NONE &&
+     t.z<=CFG_SHADOW_DIST)              /* GCC14: the one drawSprites draws */
     {/* drawSprites' shadow: centred on the floor under the feet, at most 48 chunk pixels wide,
 	and as tall as that width times dy/z, dy from the camera's pos to that floor.  Its width
 	joins the billboard's (a row at the feet); its height only the screen box: flat on the
@@ -4563,7 +4670,7 @@ static int doomSprBox(Sprite *o,DoomView *v,DoomSprBox *b)
      if (abs(fd)<F(128))
 	{if (abs(fd)>F(1))
 	    return -1;                  /* the shadow is not at the feet */
-	 sh=24*o->scale;
+	 sh=(shadowSpan>>1)*o->scale;
 	 if (b->lo<sh) b->lo=sh;
 	 if (b->rw<sh) b->rw=sh;
 	 sh=MTH_Mul(sh,MTH_Div(abs(b->feet.y-fd-tr->pos.y),t.z))+abs(fd);  /* + its centre's

@@ -141,15 +141,43 @@ unsigned short greyTable[33]=
  0x8000|(31<<10)|(31<<5)|31
  };
 
-/* GCC14: the world's ramp, neutral until a level gives the fog a tint (UTIL.H). */
-unsigned short worldGrey[33]=
-{0x8000,
- RGB( 1, 1, 1),RGB( 2, 2, 2),RGB( 3, 3, 3),RGB( 4, 4, 4),RGB( 5, 5, 5),RGB( 6, 6, 6),
- RGB( 7, 7, 7),RGB( 8, 8, 8),RGB( 9, 9, 9),RGB(10,10,10),RGB(11,11,11),RGB(12,12,12),
- RGB(13,13,13),RGB(14,14,14),RGB(15,15,15),RGB(16,16,16),RGB(17,17,17),RGB(18,18,18),
- RGB(19,19,19),RGB(20,20,20),RGB(21,21,21),RGB(22,22,22),RGB(23,23,23),RGB(24,24,24),
- RGB(25,25,25),RGB(26,26,26),RGB(27,27,27),RGB(28,28,28),RGB(29,29,29),RGB(30,30,30),
- RGB(31,31,31),RGB(31,31,31)
+/* GCC14: the world's ramp, neutral until a level gives the fog a tint, in FOUR BANDS of 32 --
+   one per green level (UTIL.H).  Band 0 is the ramp the engine always had. */
+#define WGK(k,c) (16-(((16-(c))*(k))/(WORLDGREEN_NM-1)))        /* the band's tint, /16 */
+#define WG(k,l)  (((l)==0)? 0x8000: \
+		  RGB((((l)*WGK(k,WORLDGREEN_R))>>4),(l),(((l)*WGK(k,WORLDGREEN_B))>>4)))
+#define WGFLOOR(k) 0x8000               /* 17..31 of a green band: the fog's underflow, dark */
+#define GT(l)    RGB(l,l,l)             /* 17..31 of band 0: PowerSlave's water, as it was */
+unsigned short worldGrey[WORLDGREEN_NM*32]=
+{
+ /* band 0 */
+ WG(0,0),WG(0,1),WG(0,2),WG(0,3),WG(0,4),WG(0,5),
+ WG(0,6),WG(0,7),WG(0,8),WG(0,9),WG(0,10),WG(0,11),
+ WG(0,12),WG(0,13),WG(0,14),WG(0,15),WG(0,16),GT(17),
+ GT(18),GT(19),GT(20),GT(21),GT(22),GT(23),
+ GT(24),GT(25),GT(26),GT(27),GT(28),GT(29),
+ GT(30),GT(31),
+ /* band 1 */
+ WG(1,0),WG(1,1),WG(1,2),WG(1,3),WG(1,4),WG(1,5),
+ WG(1,6),WG(1,7),WG(1,8),WG(1,9),WG(1,10),WG(1,11),
+ WG(1,12),WG(1,13),WG(1,14),WG(1,15),WG(1,16),WGFLOOR(1),
+ WGFLOOR(1),WGFLOOR(1),WGFLOOR(1),WGFLOOR(1),WGFLOOR(1),WGFLOOR(1),
+ WGFLOOR(1),WGFLOOR(1),WGFLOOR(1),WGFLOOR(1),WGFLOOR(1),WGFLOOR(1),
+ WGFLOOR(1),WGFLOOR(1),
+ /* band 2 */
+ WG(2,0),WG(2,1),WG(2,2),WG(2,3),WG(2,4),WG(2,5),
+ WG(2,6),WG(2,7),WG(2,8),WG(2,9),WG(2,10),WG(2,11),
+ WG(2,12),WG(2,13),WG(2,14),WG(2,15),WG(2,16),WGFLOOR(2),
+ WGFLOOR(2),WGFLOOR(2),WGFLOOR(2),WGFLOOR(2),WGFLOOR(2),WGFLOOR(2),
+ WGFLOOR(2),WGFLOOR(2),WGFLOOR(2),WGFLOOR(2),WGFLOOR(2),WGFLOOR(2),
+ WGFLOOR(2),WGFLOOR(2),
+ /* band 3 */
+ WG(3,0),WG(3,1),WG(3,2),WG(3,3),WG(3,4),WG(3,5),
+ WG(3,6),WG(3,7),WG(3,8),WG(3,9),WG(3,10),WG(3,11),
+ WG(3,12),WG(3,13),WG(3,14),WG(3,15),WG(3,16),WGFLOOR(3),
+ WGFLOOR(3),WGFLOOR(3),WGFLOOR(3),WGFLOOR(3),WGFLOOR(3),WGFLOOR(3),
+ WGFLOOR(3),WGFLOOR(3),WGFLOOR(3),WGFLOOR(3),WGFLOOR(3),WGFLOOR(3),
+ WGFLOOR(3),WGFLOOR(3)
 };
 
 unsigned char fogColour[3];
@@ -166,7 +194,7 @@ static int fogRamp(int i,int c)
 }
 
 void setFogColour(int r,int g,int b)
-{int i;
+{int i,k;
  r=CLAMP(r,0,15);                       /* 16 would be a fog that changes nothing */
  g=CLAMP(g,0,15);
  b=CLAMP(b,0,15);
@@ -175,8 +203,22 @@ void setFogColour(int r,int g,int b)
  fogColour[2]=(unsigned char)b;
  for (i=0;i<=16;i++)
     worldGrey[i]=RGB(fogRamp(i,r),fogRamp(i,g),fogRamp(i,b));
- for (;i<33;i++)
+ for (;i<32;i++)
     worldGrey[i]=greyTable[i];
+ /* the green bands follow the fog's own ramp, each held down on red and blue */
+ for (k=1;k<WORLDGREEN_NM;k++)
+    {int kr=16-(((16-WORLDGREEN_R)*k)/(WORLDGREEN_NM-1));
+     int kb=16-(((16-WORLDGREEN_B)*k)/(WORLDGREEN_NM-1));
+     for (i=0;i<32;i++)
+	{unsigned int v=worldGrey[i<=16? i: 0];
+	 worldGrey[(k<<5)+i]=(i<=16)
+	    ? (unsigned short)((v & 0x8000)|
+			       (((((v>>10)&31)*kb)>>4)<<10)|
+			       ((((v>>5)&31))<<5)|
+			       ((((v)&31)*kr)>>4))
+	    : (unsigned short)0x8000;
+	}
+    }
  fogFar=RGB(r,g,b);
  /* the asm clears bit 15 on a vertex it did not clip (wallasm_gnu.s .Lrt_retFromLit), so the
     floor of the ramp reaches the gouraud table as this -- 0 when the fog is black */

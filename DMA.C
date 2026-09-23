@@ -54,6 +54,14 @@ void qDMA(void *from,void *to,int size)
 
 #define BASE 0x25fe0000
 
+/* GCC14: no SCU-DMA while the other CPU writes the B-bus.  Doom's title and loading screens run
+   the fire on the slave, which writes the VDP2 bitmap straight, and PIC.C uploads its tiles to
+   VDP1 VRAM -- the same bus.  The manual forbids the pair (SCU restriction 08: while the SCU-DMA
+   drives the A- and B-buses, CPU access to them is on standby) and it hangs: the loading fire
+   showed one image and stopped.  While this is set the same transfers are plain copies, which
+   cost about the same to VDP VRAM (Mimas, hardware: DMA 10,3 ms against 10,0 ms for the CPU). */
+int dmaNoScu;
+
 void startNextDma(void)
 {if (qTail==qHead)
     return;
@@ -61,6 +69,7 @@ void startNextDma(void)
 #if DISABLEDMA
      1 ||
 #endif
+     dmaNoScu ||
      dmaQ[qTail].from<0x06000000 ||
      dmaQ[qTail].from>0x06100000)
     {qmemcpy((void *)dmaQ[qTail].to,(void *)dmaQ[qTail].from,
@@ -86,6 +95,7 @@ void dmaMemCpy(void *from,void *to,int size)
 #if DISABLEDMA
      1 ||
 #endif
+     dmaNoScu ||
      from<(void *)0x06000000 || from>(void *)0x06100000 ||
      (to>=(void *)0x00200000 && to<=(void *)0x00300000))
     {qmemcpy((void *)to,from,size);

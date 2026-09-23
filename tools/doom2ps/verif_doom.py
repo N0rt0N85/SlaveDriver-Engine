@@ -1036,6 +1036,33 @@ def main(argv=None):
             all(0 <= l_[0] < len(S) and 0 <= l_[2] <= 16 for l_ in lig),
             f"{len(lig)} feuilles, canaux {sorted({l_[1] for l_ in lig})}, "
             f"lumieres {sorted({l_[2] for l_ in lig})}")
+    # lumieres animees : DOOM_GAME.C asserte feuille, niveaux 0..16 avec sombre <= clair, phase et
+    # graine > 0 ; et toutes les feuilles d'un meme secteur Doom doivent porter la MEME phase et la
+    # MEME graine, sinon la piece clignote en morceaux
+    rec = [o for o in obj if o["type"] == sp.OT_DOOM_SECTORFX]
+    if rec:
+        # l'enregistrement se PARCOURT : le moteur le lit et l'ecrit en place, ses entrees doivent
+        # donc se chainer exactement jusqu'a nShorts, sans octet en trop ni en moins
+        t = _sh(rec[0], sp.longueur_variable(rec[0], p))
+        nsh, nmfx, i, ok, genres, niveaux, feuilles = t[0], t[1], 2, True, set(), set(), 0
+        for _k in range(nmfx):
+            if i + sp.FX_ENTETE > len(t):
+                ok = False
+                break
+            g, so, cl, nt, co, lv, _di, gr = t[i:i + 8]
+            n = t[i + 8]
+            genres.add(g)
+            niveaux.add((so, cl))
+            feuilles += n
+            ok = ok and 1 <= g <= 4 and 0 <= so <= cl <= 16 and nt >= 0 and co > 0 and gr != 0
+            ok = ok and lv == cl and n > 0
+            ok = ok and all(0 <= f_ < len(S) for f_ in t[i + sp.FX_ENTETE:i + sp.FX_ENTETE + n])
+            i += sp.FX_ENTETE + n
+        put("OT_DOOM_SECTORFX : un enregistrement, ses entrees chainees jusqu'a nShorts, "
+            "feuilles dans les bornes, niveaux 0..16 (sombre <= clair), compte > 0",
+            len(rec) == 1 and ok and i == nsh == len(t),
+            f"{nmfx} effets, {feuilles} feuilles, {nsh} shorts, genres {sorted(genres)}, "
+            f"niveaux {sorted(niveaux)}")
     # lampes (doom_specials.LAMPES) : les bornes que DOOM_GAME.C asserte, la hauteur au-dessus du
     # sol de sa feuille, et ses feuilles vues : n <= LAMPE_VUS_MAX dans les bornes, -1 ensuite
     nv = sp.LAMPE_VUS_MAX
@@ -1050,6 +1077,40 @@ def main(argv=None):
                 and all(v_ == -1 for v_ in l_[12 + l_[11]:]) for l_ in lam),
             f"{len(lam)} lampes, feuilles {[l_[0] for l_ in lam]}, canaux {[l_[4] for l_ in lam]}, "
             f"vues {[list(l_[12:12 + l_[11]]) for l_ in lam]}")
+    # les flaques : un seul enregistrement, ses entrees chainees jusqu'a nShorts
+    pl = [o for o in obj if o["type"] == sp.OT_DOOM_LAMPS]
+    if pl:
+        t = _sh(pl[0], sp.longueur_variable(pl[0], p))
+        nsh, npo, i, ok, rayons = t[0], t[1], sp.POOL_TETE, True, []
+        bases, verts, nfe = [], 0, 0
+        ok = ok and t[2] > 0 and 1 <= t[3] <= 4
+        for _k in range(npo):
+            if i + sp.POOL_ENTETE > len(t):
+                ok = False
+                break
+            x, h, y, rayon, feuille, base, cur, cible, graine, nvu = t[i:i + sp.POOL_ENTETE]
+            rayons.append(rayon)
+            bases.append(base)
+            ok = ok and 16 <= rayon <= 1024 and 0 <= feuille < len(S) and 0 < nvu <= nv
+            ok = ok and 0 <= base <= 16 and cur == 0 and cible == 0 and (graine & 1)
+            ok = ok and h > S[feuille]["floorLevel"]
+            feuilles = t[i + sp.POOL_ENTETE:i + sp.POOL_ENTETE + nvu]
+            ok = ok and all(0 <= v_ < len(S) for v_ in feuilles)
+            # les feuilles qui respirent portent le drapeau de leur salle : sans lui le moteur
+            # ferait bouger une lumiere GRISE, ce qui est exactement l'effet qu'on a retire
+            nfe += len(feuilles)
+            verts += sum(1 for v_ in feuilles
+                         if 0 <= v_ < len(S) and (S[v_]["flags"] & 0x40))
+            i += sp.POOL_ENTETE + nvu
+        put("OT_DOOM_LAMPS : un enregistrement, ses flaques chainees jusqu'a nShorts, feuilles "
+            "dans les bornes, au-dessus de leur sol, rayons 16..1024, etat de depart a zero",
+            len(pl) == 1 and ok and i == nsh == len(t),
+            f"{npo} flaques, rayons {sorted(set(rayons))}, niveaux {sorted(set(bases))}, "
+            f"pas {t[2]} tics, amplitude {t[3]}, {verts} feuilles marquees nukage")
+        nuk = sum(1 for s_ in S if s_["flags"] & 0x40)
+        put("SECFLAG_NUKAGE : toute feuille qui respire est dans une salle marquee",
+            verts == nfe and nuk >= verts and nuk > 0,
+            f"{nuk} feuilles marquees sur {len(S)}, dont {verts}/{nfe} qui respirent")
 
     # 17-21. CONTRAT « Verifications PC » (DOOM_ABI, SPEC_CONVERTER 7) : tuiles, sequences
     #        atteignables, sons, barils, tailles. Tout est relu dans le FICHIER par lev_io (le

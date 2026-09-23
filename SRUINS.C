@@ -108,6 +108,15 @@ static int nmFullBowls=0;
 int keyMask=0;
 
 static int playerIsDead;
+/* GCC14: the death screen holds.  0 = the view is still on the corpse and nothing fades; then
+   the player presses fire or use and this counts the tics of the fade that follows, which is
+   what ends the level (colorOffset reaching -255, below).  It MUST be reset wherever
+   playerIsDead is, or the level ends on its first image for ever after the first death. */
+static int deathFade;
+/* GCC14: 1 = the load that follows is the one after a death.  The game's loading screen shows
+   neither its logo nor its fire then -- dying is not the moment for the title (DOOM_TITLE.C);
+   doom_loadingEnd clears it. */
+int loadAfterDeath;
 static int playerMotionEnable;
 static int hitCamel,hitPyramid,hitTeleport;
 static int stunCounter=0;
@@ -905,16 +914,34 @@ void movePlayer(int inputEnd,int nmFrames)
 	    stunCounter--;
 	 if (playerIsDead)
 	    {playerIsDead++;
-	     i=15-((playerIsDead-120)>>2);
-	     if (i<0) i=0;
-	     if (i>15)i=15;
-	     if (mpPlayers==1)          /* the master volume is everybody's */
-		setMasterVolume(i);
-	     else if (playerIsDead>60 &&
-		      (pushed & (IMASK(ACTION_FIRE)|IMASK(ACTION_PUSH))))
-		mvRespawn=1;            /* Doom co-op: use or fire brings you back */
+	     if (mpPlayers>1)
+		{if (playerIsDead>60 &&
+		     (pushed & (IMASK(ACTION_FIRE)|IMASK(ACTION_PUSH))))
+		    mvRespawn=1;        /* Doom co-op: use or fire brings you back */
+		}
+	     /* GCC14: CFG_DEATH_HOLD -- the view STAYS on the corpse, at full brightness and full
+		volume, as Doom's does.  Fire or use asks to go on; the screen and the sound fade
+		out only from there, and the level ends when the fade is done.  PowerSlave has its
+		own death, which fades on its own: CFG_DEATH_HOLD is 0 there and the count below is
+		the original one, tics since the death. */
+	     else if (CFG_DEATH_HOLD && !deathFade)
+		{if (playerIsDead>60 &&
+		     (pushed & (IMASK(ACTION_FIRE)|IMASK(ACTION_PUSH))))
+		    {deathFade=1;
+		     colorCenter[0]=-255;
+		     colorCenter[1]=-255;
+		     colorCenter[2]=-255;
+		    }
+		}
+	     else
+		{i=15-((CFG_DEATH_HOLD? deathFade++: playerIsDead-120)>>2);
+		 if (i<0) i=0;
+		 if (i>15)i=15;
+		 setMasterVolume(i);    /* the master volume is everybody's */
+		}
 	     currentState.health=0;
 	     weaponSetVel(0,F(4));
+	     CFG_DEATH_LOOK();          /* GCC14: the view swings towards the killer */
 	     if (playerAngle.pitch<CFG_DEATH_PITCH)
 		{xavel+=1<<12;
 		 playerAngle.pitch += xavel;
@@ -983,7 +1010,9 @@ void movePlayer(int inputEnd,int nmFrames)
 	   }
 	 if (currentState.health<=0)
 	    {playerIsDead=1;
-	     if (mpPlayers==1)          /* the VDP2 colour offset fades every view: solo only */
+	     deathFade=0;               /* CFG_DEATH_HOLD: the fade waits for fire (above) */
+	     if (!CFG_DEATH_HOLD || mpPlayers>1)  /* the VDP2 colour offset fades every view: split
+					   screen cannot fade one player out, so it fades at once */
 		{colorCenter[0]=-255;
 		 colorCenter[1]=-255;
 		 colorCenter[2]=-255;
@@ -1988,7 +2017,7 @@ static int mpPlaceFar(Sprite *s,int k)
 /* The per-player part of the level start, the same calls in the same order as for player 1. */
 static void mpPlayerLevelInit(void)
 {autoTarget=NULL;               /* a carried slot holds last level's pointer */
- playerIsDead=0; mvRespawn=0; deathTimer=0; stunCounter=0;
+ playerIsDead=0; deathFade=0; mvRespawn=0; deathTimer=0; stunCounter=0;
  xavel=0; yavel=0;
  playerHeightOffset=0; playerHeightVel=0;
  ouchTime=0; ltHurtTime=0;
@@ -2294,6 +2323,10 @@ int runLevel(char *filename,int levelNm)
  dPrint("C!\n");
  SCL_SetFrameInterval(0xfffe);
 
+ /* Three empty frames: in frame mode 3 each change erases the other buffer, so after them both
+    are black -- and they are also what makes the VDP1 finish the list the last level left it.
+    A death load tried skipping them, to keep the corpse on screen under the loading fire, and
+    froze on the first draw of the loading screen (CFG_DEATH_WAIT, SPRITE.H). */
  for (i=0;i<3;i++)
     {EZ_openCommand();
      EZ_sysClip();
@@ -2433,6 +2466,7 @@ int runLevel(char *filename,int levelNm)
  monsterMoveCounter=0;
  initWeapon(); CFG_LEVEL_PLAYER_INIT();
  playerIsDead=0;
+ deathFade=0;                   /* GCC14: with playerIsDead, or the next death ends at once */
  hitCamel=0;
  hitPyramid=0;
  hitTeleport=0;
@@ -3082,6 +3116,18 @@ int runLevel(char *filename,int levelNm)
 	     plaxBBxmax=160;
 	     plaxBBymax=90;
 	    }
+	 /* GCC14: CFG_SKY_FULLWINDOW -- the sky's window over the WHOLE 3D view, whenever any sky
+	    wall was seen at all.  The window used to be the BOX of the sky walls, and on Doom that
+	    box does not cover everything that shows sky: the sky came out cut along a line that
+	    moved with the view (proved on screen, 2026-09-23).  Outside the window RBG0 shows
+	    nothing and the back screen is black, hence the band.  An empty box still closes the
+	    window, or RBG0 would show through every crack of a level with no sky in it. */
+	 else if (CFG_SKY_FULLWINDOW && plaxBBxmin<=plaxBBxmax && plaxBBymin<=plaxBBymax)
+	    {plaxBBxmin=-160;
+	     plaxBBymin=CFG_YMIN;
+	     plaxBBxmax=160;
+	     plaxBBymax=CFG_YMAX;
+	    }
 	 SCL_SetWindow(SCL_W1,0,SCL_RBG0,0xfffffff,
 		       plaxBBxmin+160,plaxBBymin+CFG_YCENTER,
 		       plaxBBxmax+160,plaxBBymax+CFG_YCENTER);
@@ -3327,7 +3373,8 @@ void main(void)
 		  INV_SANDALS|INV_MASK|INV_SHAWL|INV_ANKLET|
 		     INV_SCEPTER|INV_FEATHER;
 	    break;
-	 case 1: /* restart level */
+	 case 1: /* restart level: the load shows neither logo nor fire (DOOM_TITLE.C) */
+	    loadAfterDeath=1;
 	    currentState=levStart;
 	    break;
 	 case 2: /* quit */

@@ -585,6 +585,35 @@ void doom_playerDamage(int damage,Object *source)
     doom_playerSound(sfx_plpain);               /* S_PLAY_PAIN -> A_Pain */
 }
 
+/* GCC14: P_DeathThink's turn (p_user.c).  Dead, the view swings towards whatever killed you,
+   DOOM_DEATH_TURN a tic, and stops on it.  `attacker` is the SOURCE of the damage, not the
+   inflictor (doom_playerDamage), so a fireball turns you towards the imp that threw it; a death
+   the world dealt -- nukage, a fall -- leaves the view where it was.
+   The engine's forward is (-sin yaw, cos yaw) (SRUINS.C:400) and getAngle(dx, dz) is the angle
+   whose (cos, sin) is (dx, dz), so the yaw that faces (dx, dz) is getAngle(dz, -dx). */
+#define DOOM_DEATH_TURN F(5)
+void doom_deathLook(void)
+{Sprite *a;
+ int want,d;
+ if (!camera)
+    return;
+ a=doom_targetSprite(doomPlayer.attacker);
+ if (!a || a==camera)
+    return;
+ want=normalizeAngle(getAngle(a->pos.z-camera->pos.z,camera->pos.x-a->pos.x));
+ d=normalizeAngle(want-playerAngle.yaw);
+ if (d>F(180))
+    d-=F(360);
+ if (d>-DOOM_DEATH_TURN && d<DOOM_DEATH_TURN)
+    playerAngle.yaw=want;
+ else
+    playerAngle.yaw+=(d>0)? DOOM_DEATH_TURN: -DOOM_DEATH_TURN;
+ playerAngle.yaw=normalizeAngle(playerAngle.yaw);
+ if (playerAngle.yaw>F(180))
+    playerAngle.yaw-=F(360);
+ camera->angle=playerAngle.yaw;
+}
+
 /* P_DamageMobj thrust (p_inter.c) on the player, called by doom_damage BEFORE the armour maths:
    mass 100 => damage/8 u/tic away from the inflictor (engine frame: getAngle(dx,dz), vel =
    (cos,sin), as doom_spawnMissile); the knock-down variant (damage < 40 and lethal, inflictor's

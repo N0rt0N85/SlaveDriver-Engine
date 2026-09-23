@@ -156,6 +156,50 @@ void suckSpriteParams(Sprite *s);
    engine's original expression.  The tic clock: monsterMoveCounter accumulates vtimer (60 Hz
    vblanks) and the loop consumes CFG_TIC_UNIT per tic -- x7 / 12 gives 60*7/12 = 35 Hz exactly,
    CFG_TIC_CAP = 4 tics per frame either way (SRUINS.C:2139-2143, 2196, 2302). */
+/* the six ways a flat thing can meet what is behind it (WALLS.C compoFlags) */
+#define CFG_COMPO_NONE         0        /* not drawn at all                                    */
+#define CFG_COMPO_OPAQUE       1        /* COMPO_REP: its own pixels, nothing to calculate      */
+#define CFG_COMPO_MESH         2        /* DRAW_MESH: one pixel in two, free                    */
+#define CFG_COMPO_SHADOW       3        /* COMPO_SHADOW: the VDP1 darkens what is behind        */
+#define CFG_COMPO_GRAIN        4        /* both: it darkens one pixel in two -- grain, and what
+					   is behind shows through the other half.  The nearest
+					   thing this hardware has to Doom's fuzz column map  */
+#define CFG_COMPO_TRANS        5        /* COMPO_TRANS: HALF-TRANSPARENCY -- half its own colour
+					   and half what the framebuffer already holds, so the
+					   wall behind SHOWS THROUGH it, colour and all.  The
+					   manual's own figure: six times longer than no colour
+					   calculation (VDP1 p.95).  On a colour-bank sprite the
+					   blend runs on CRAM indices, so what comes out
+					   "depends on the ordering of VDP2 color RAM" -- it has
+					   to be seen, not reasoned about                    */
+#define CFG_COMPO_TGRAIN       6        /* the same on one pixel in two: three quarters of what is
+					   behind.  The nearest this hardware gets to Doom's
+					   fuzz column map                                   */
+#define CFG_COMPO_DARK         7        /* shadow TWICE: the manual's own recipe for a quarter of
+					   the luminance instead of a half ("set the same
+					   command table in VRAM twice"), at twice the pixels */
+#define CFG_COMPO_TBW          8        /* SEE THRU B&W: a shadow pass first -- which is correct
+					   over anything, wall or thing -- then the monster's own
+					   texture, in its GREY bank, on one pixel in two.  What is
+					   behind shows through the other half, halved.
+					   A true half-transparency cannot be black and white here:
+					   the blend runs on the WORD the framebuffer holds, and a
+					   thing leaves a PALETTE INDEX there, not a colour.  The
+					   average of two indices lands in some other bank, so the
+					   spectre came out coloured whatever bank it wore -- the
+					   grey bank is only read at display time.  The mesh is the
+					   only 50 % that keeps the grey                    */
+#define CFG_COMPO_FUZZ         9        /* three passes: one full shadow, then two meshed shadows
+					   each offset by a random pixel.  The mesh is a checkerboard
+					   on the FRAMEBUFFER, so a one-pixel offset lands on the
+					   other half: a pixel takes 1, 2 or 3 shadows and the draw
+					   changes every image.  Doom's fuzz column, as near as this
+					   hardware gets -- and three colour calculations deep, the
+					   dearest mode of the list                          */
+#define CFG_COMPO_NM           10
+/* NOT offered: COMPO_HARF (half-LUMINANCE, value 2).  It halves the SPRITE's own colour and writes
+   it opaque -- a darker monster, nothing showing through.  It was offered as `half` and was wrong:
+   half-luminance is not half-transparency. */
 #ifdef GP_GAME_DOOM
 int  game_placeObject(int ot);                       /* DOOM_GAME.C (OBJECT.C:212 hook)         */
 void doom_playerTic(void);                           /* DOOM_PLAYER.C, 35 Hz                    */
@@ -217,6 +261,30 @@ int doom_mapToggle(void);                            /* DOOM_PLAYER.C: 1 once an
 #define CFG_ENGINE_FIRE        0                                 /* SRUINS.C:977: no fireWeapon() on an empty queue -- the Doom psprite machine fires (A_WeaponReady) */
 void doom_useRefused(void);                          /* DOOM_PLAYER.C: sfx_noway                */
 #define CFG_DEATH_PITCH        0                                 /* SRUINS.C:895: dead view stays level (Doom has no pitch) */
+/* GCC14: the death screen was TRIED TWICE AND REVERTED (2026-09-23, console).  The engine's own
+   is kept: the picture and the sound fade out and the level reloads on its own.
+   1. Keeping the picture through the load, so the loading fire would climb over the corpse: it
+      meant skipping runLevel's three empty frames -- in frame mode 3 each frame change erases the
+      other buffer, and those three are what leave both black AND what makes the VDP1 finish the
+      list the last level left it.  Skipping them FROZE the game on the first draw of the loading
+      screen (SPR.C:534 is the same failure).  The picture cannot be kept without flushing the
+      VDP1, and flushing it is what erases the picture.
+   2. Holding on the corpse until the player presses fire (Doom's own behaviour): the flag that
+      said `fire was pressed` was reset on a split-screen path only, never by runLevel, so after
+      the first death runLevel returned on its first image, for ever -- an endless loop of loading
+      screens.  DONE the second time (SRUINS.C deathFade), with the flag reset beside
+      playerIsDead in runLevel: the view holds on the corpse at full brightness, fire or use
+      starts the fade of the picture AND of the sound, and the load that follows is an ordinary
+      one -- logo and fire.  A load showing the word alone on black was tried in between and
+      dropped: nothing says `you died` better than the corpse itself. */
+#define CFG_DEATH_HOLD         1                                 /* SRUINS.C: hold on the corpse until fire */
+#define CFG_DEATH_LOOK()       doom_deathLook()                  /* SRUINS.C: ... facing the killer */
+/* GCC14: the sky's VDP2 window (WALLS.C skyFullWindow).  Doom's sky is the CEILING of a whole
+   outdoor area and the box of its sky walls does not cover everything that shows it: the sky came
+   out cut along a line that moved with the view.  PowerSlave's sky is a window in a wall, always
+   small, and the box has always been right for it -- the full view would let RBG0 through every
+   crack of the geometry. */
+#define CFG_SKY_FULLWINDOW     1
 #define CFG_USE_REFUSED        else doom_useRefused();           /* SRUINS.C:853: use on a plain wall => sfx_noway (p_map.c PTR_UseTraverse) */
 /* AI2.C:535: Doom uses the whole line (P_UseSpecialLine), not a 40 u disc around the orifice --
    the disc (L1-like approxDist) left 5-84 % of an episode-1 switch wall pressable */
@@ -241,9 +309,50 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
    takes its corpses with it. */
 #define CFG_THING_LEAFLIGHT    1
 /* GCC14: the blob under a thing (WALLS.C drawSprites).  Doom draws no shadow at all, and the
-   engine's is a colour calculation the VDP1 pays six times over per pixel (the hardware manual):
-   for Doom it is a mesh of the level's black instead, and only under what is near. */
-#define CFG_SHADOW_MODE        DRAW_MESH
+   engine's own is a colour calculation the VDP1 pays six times over per pixel (the hardware
+   manual), which is what a level's shadows cost.  params/doom.cfg THING_SHADOW_MODE picks:
+     shadow  the engine's blob -- the VDP1 darkens what is under it.  What PowerSlave draws.
+     mesh    one pixel in two of the level's black: nothing to pay, but the grid shows.
+     opaque  a plain black disc, one flat fill, no colour calculation and no grid.
+   THING_SHADOW_DIST then says how far a thing still casts one, which is what limits their
+   number: at 512 only the things in the room pay. */
+#ifdef GP_THING_SHADOW_MODE_NONE
+#define CFG_SHADOW_MODE        CFG_COMPO_NONE
+#elif defined(GP_THING_SHADOW_MODE_MESH)
+#define CFG_SHADOW_MODE        CFG_COMPO_MESH
+#elif defined(GP_THING_SHADOW_MODE_OPAQUE)
+#define CFG_SHADOW_MODE        CFG_COMPO_OPAQUE
+#elif defined(GP_THING_SHADOW_MODE_GRAIN)
+#define CFG_SHADOW_MODE        CFG_COMPO_GRAIN
+#elif defined(GP_THING_SHADOW_MODE_DARK)
+#define CFG_SHADOW_MODE        CFG_COMPO_DARK
+#else
+#define CFG_SHADOW_MODE        CFG_COMPO_SHADOW
+#endif
+#ifndef GP_THING_SHADOW_SIZE
+#define GP_THING_SHADOW_SIZE   100      /* x100 of the blob's 48 chunk pixels                  */
+#endif
+/* GCC14: the spectre (MF_SHADOW).  Doom draws it through its fuzz column map, which this engine
+   has no equivalent of.  params/doom.cfg SPECTRE_MODE:
+     mesh    the VDP1's own see-through, a screen checkerboard, over its grey bank.
+     shadow  the same colour calculation as the blob: the thing darkens what is behind it
+             instead of being drawn, which is nearer what the fuzz does -- and costs what the
+             manual charges for it, over a whole monster rather than a disc. */
+#ifdef GP_SPECTRE_MODE_SHADOW
+#define CFG_SPECTRE_MODE       CFG_COMPO_SHADOW
+#elif defined(GP_SPECTRE_MODE_GRAIN)
+#define CFG_SPECTRE_MODE       CFG_COMPO_GRAIN
+#elif defined(GP_SPECTRE_MODE_TRANS)
+#define CFG_SPECTRE_MODE       CFG_COMPO_TRANS
+#elif defined(GP_SPECTRE_MODE_TGRAIN)
+#define CFG_SPECTRE_MODE       CFG_COMPO_TGRAIN
+#elif defined(GP_SPECTRE_MODE_TBW)
+#define CFG_SPECTRE_MODE       CFG_COMPO_TBW
+#elif defined(GP_SPECTRE_MODE_FUZZ)
+#define CFG_SPECTRE_MODE       CFG_COMPO_FUZZ
+#else
+#define CFG_SPECTRE_MODE       CFG_COMPO_MESH
+#endif
 #define CFG_SHADOW_DIST        (GP_THING_SHADOW_DIST>0? F(GP_THING_SHADOW_DIST): 0x7fffffff)
 #define CFG_LIGHT_EVICT        1                                 /* WALLS.C lightPut: a full list makes room */
 #define CFG_VIEW_CULL          1                                 /* WALLS.C drawSprites: SIGNAL_VIEW picks a rotation, nothing else */
@@ -272,7 +381,10 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_LIGHTSHIFT       11
 #define CFG_LIGHTSMOOTH      1
 #define CFG_THING_LEAFLIGHT  0                   /* things: distance fog and dynamic lights only */
-#define CFG_SHADOW_MODE      COMPO_SHADOW        /* the engine's half-luminance blob */
+#define CFG_SHADOW_MODE      CFG_COMPO_SHADOW    /* the engine's own blob, as it always drew it */
+#define CFG_SPECTRE_MODE     CFG_COMPO_MESH      /* PowerSlave has no see-through thing */
+#define GP_THING_SHADOW_SIZE 100                 /* x100 of the blob's 48 chunk pixels */
+#define CFG_SHADOW_DIST      0x7fffffff          /* every thing casts one, as it always did */
 #define CFG_SHADOW_DIST      0x7fffffff
 #define CFG_LIGHT_EVICT      0                   /* a full list refuses the new light */
 #define CFG_VIEW_CULL        0                   /* SIGNAL_VIEW wakes a hawk, turns a head: always sent */
@@ -281,6 +393,9 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_PLAY_INTRO()     playIntro()
 #define CFG_CONTROL(in,ch,p)   controlInput(in,ch)
 #define CFG_DEATH_SFX          1
+#define CFG_DEATH_HOLD         0        /* PowerSlave fades and reloads on its own */
+#define CFG_DEATH_LOOK()                /* ... and does not turn towards anything */
+#define CFG_SKY_FULLWINDOW   0          /* the box of the sky walls, as it always was */
 #define CFG_WEAPON_UP(m)       weaponUp(m)
 #define CFG_WEAPON_DN(m)       weaponDown(m)
 #define CFG_BOWLDOTS()         redrawBowlDots()
@@ -295,6 +410,7 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_WFLASH_OVERLAY     0x4000
 #define CFG_ENGINE_FIRE        1
 #define CFG_DEATH_PITCH        F(80)
+
 #define CFG_USE_REFUSED
 #define CFG_SWITCH_AIM         1
 #define CFG_VIEW_BOB           0

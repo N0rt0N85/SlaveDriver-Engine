@@ -196,6 +196,11 @@ typedef struct
 #define SECFLAG_EXPLODINGWALLS 8
 #define SECFLAG_LASERSECTOR 16
 #define SECFLAG_NOMAP 32
+/* GCC14: a room with a pool of nukage in it (doom_specials.py).  Its walls and its CEILINGS --
+   not its floors -- take the world's GREEN ramp (UTIL.C worldGreen) instead of the neutral one,
+   which is the only way a level's own light can carry a colour: the light of a vertex is one
+   scalar, and the ramp it reads is what turns it into a colour word. */
+#define SECFLAG_NUKAGE 64
 
 typedef struct
 {void *object;

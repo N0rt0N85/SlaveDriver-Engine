@@ -319,6 +319,21 @@ class Bsp:
 LIGHT_REF_J = 32
 
 
+# FAUX CONTRASTE (r_bsp.c R_StoreWallRange) : Doom eclaire un mur selon la DIRECTION qu'il suit,
+# pas seulement selon son secteur -- `if (v1->y == v2->y) lightnum--; else if (v1->x == v2->x)
+# lightnum++`, soit un cran de LIGHTSEGSHIFT, exactement un cran de notre echelle 0..16. Sans lui
+# tous les murs d'une piece ont la meme valeur et le relief disparait. Les flats n'en ont pas.
+# Le moteur refait le meme calcul depuis la normale du mur a chaque changement de lumiere de
+# secteur (DOOM_GAME.C doom_leafLight), sinon une piece animee le perdrait a son 1er clignotement.
+def fake_contrast(light, P, Q):
+    """lumiere 0..16 du mur P->Q (coordonnees Doom x, y), le cran de Doom applique."""
+    if P[1] == Q[1]:
+        light -= 1
+    elif P[0] == Q[0]:
+        light += 1
+    return max(0, min(16, light))
+
+
 def light_of(level):
     """lightlevel Doom 0..255 -> lumiere PowerSlave 0..16 (16 = le plus clair).
 
@@ -386,8 +401,10 @@ PARTITION = "bsp"
 #               carres pleins d'un flat se peignent par blocs de GROS_BLOC x GROS_BLOC puis 2 x 2,
 #               une face par bloc, tuile etiree -- texel de 2 a 4 u, motif 2 a 4 fois plus grand
 #               (geom3d.Emitter._gros_carres). Pour la carte que ses sols empechent de tourner.
-OPTIMS = ("penombres", "avalement", "fusion", "ordre", "bandes", "sommets", "tuiles", "grossiers")
-OPTIM_DEFAUT = ("penombres", "avalement", "fusion", "ordre", "bandes", "sommets", "tuiles")
+OPTIMS = ("penombres", "avalement", "fusion", "ordre", "bandes", "sommets", "tuiles",
+          "grossiers", "lumieres")
+OPTIM_DEFAUT = ("penombres", "avalement", "fusion", "ordre", "bandes", "sommets", "tuiles",
+                "lumieres")
 OPTIM_ACTIFS = set(OPTIM_DEFAUT)
 GROS_BLOC = geom3d_GROS_BLOC               # plus gros bloc de `grossiers`, en carres de TILESIZE
 
@@ -817,6 +834,7 @@ class DoomConverter:
         Retourne la liste des index de murs emis (un mur trop grand est decoupe)."""
         if top - bot <= 0:
             return []
+        light = fake_contrast(light, P, Q)   # le cran de Doom selon la direction du mur
         normale = None
         if droite is not None and centre is not None and math.dist(P, Q) < MUR_COURT:
             # orientee vers le centre du morceau (convexe, donc du bon cote de SA droite), et non
@@ -1614,6 +1632,8 @@ class DoomConverter:
         if self.mobile or self.switch_lines:
             self.finalize_mobile()
         self.anims = [[self.em._tile_index[k] for k in fam] for fam in self.anim_keys]
+        marquer_nukage(self.em, self.M, self, self.stats)
+        cuire_lumieres(self.em, self.M, self, self.stats)
         if "sommets" in OPTIM_ACTIFS:
             # coins partages (Emitter.partager_coins) ; les sommets des push blocks restent a eux
             mobiles = set()
@@ -1623,6 +1643,7 @@ class DoomConverter:
             for t in self.mobile.values():
                 t.verts = {remap[i] for i in t.verts}
             self.stats["sommets_partages"] += n
+        cuire_vert_nukage(self.em, self.M, self, self.stats)
         return self.em
 
     # -- mobile : interrupteurs et compaction des tuiles -----------------------------------
@@ -1779,6 +1800,306 @@ def push_blocks(conv, tags):
 # ----------------------------------------------------------------------------------------
 # criteres
 # ----------------------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------------------------
+# LUMIERES CUITES (optim `lumieres`). Doom n'a aucune lumiere dynamique et le moteur n'en a que 15
+# slots, qui coutent cher : une lampe met sur le chemin par sommet TOUT mur dont le plan passe dans
+# son rayon. Ce qui ne bouge pas est donc cuit ici, dans la lumiere des sommets -- cout nul a
+# l'execution, et rien a tenir en RAM.
+#   halos       les dalles de plafond lumineuses (TLITE6_*) : `dissoudre_penombres` fond leur
+#               anneau de penombre dans la piece (choix assume, voir plus haut), donc le halo
+#               clair autour d'elles avait disparu. Il est repeint ici, en rond, depuis la dalle.
+#   decor       les objets qui portent une flamme (colonne lumineuse, torches, chandelier, bougie,
+#               bidon) n'eclairaient rien : 51 colonnes rien que dans l'episode 1.
+#   debordement un passage entre un secteur clair et un secteur sombre coupe net (Doom le coupe
+#               aussi), mais le sol du cote sombre recoit un peu de la lumiere du seuil.
+# Le modele est le meme pour les trois : une source a une CIBLE (le niveau qu'elle voudrait
+# donner) et un rayon ; a la distance d elle propose `l + (cible - l) * (1 - d/rayon)`, et un
+# sommet prend le meilleur de ce qui le vise -- jamais moins que ce qu'il avait. Une source
+# n'eclaircit donc jamais au-dela de sa cible, et deux sources ne s'additionnent pas.
+# Les dalles de plafond qui ECLAIRENT. Doom et Doom 2 partagent les quatre TLITE6_ ; c'est ici
+# qu'on ajoute ce qu'apportent TNT et Plutonia. E1 : 97 dalles.
+LIGHT_FLATS = ("TLITE6_1", "TLITE6_4", "TLITE6_5", "TLITE6_6")
+HALO_MARGE = 128            # rayon du halo = rayon de la dalle + ca
+HALO_CIBLE = 16
+# type Doom -> (hauteur de la flamme au-dessus du sol, rayon, cible)
+DECOR_LAMPES = {34: (14, 96, 14),      # CAND  bougie
+                35: (42, 128, 15),     # CBRA  chandelier
+                44: (68, 160, 16),     # TBLU  torche bleue haute
+                45: (68, 160, 16),     # TGRN  torche verte haute
+                46: (68, 160, 16),     # TRED  torche rouge haute
+                55: (40, 128, 15),     # SMBT  torche bleue courte
+                56: (40, 128, 15),     # SMGT  torche verte courte
+                57: (40, 128, 15),     # SMRT  torche rouge courte
+                70: (40, 160, 16),     # FCAN  bidon en feu
+                2028: (48, 176, 16)}   # COLU  colonne lumineuse
+DEBORD_MIN = 4              # ecart de lumiere (0..16) a partir duquel un seuil deborde
+DEBORD_RAYON = 80
+
+
+def _centre_rayon(M, si):
+    """(cx, cy, rayon) du secteur Doom si : le centre de ses sommets, et le rayon du disque de
+    meme aire -- de quoi poser une source ronde sur une dalle qui ne l'est pas."""
+    V, L, SD = M["vertices"], M["linedefs"], M["sidedefs"]
+    pts = []
+    for ld in L:
+        for sd in (ld.right, ld.left):
+            if sd >= 0 and SD[sd].sector == si:
+                pts.append(V[ld.v1])
+                pts.append(V[ld.v2])
+                break
+    if not pts:
+        return None
+    cx = sum(p[0] for p in pts) / len(pts)
+    cy = sum(p[1] for p in pts) / len(pts)
+    _per, aire = _perimetre_aire(M, si)
+    return cx, cy, math.sqrt(max(1.0, abs(aire)) / math.pi)
+
+
+class _Sources:
+    """Les sources, rangees dans une grille de 256 u en (X, Z) : un sommet ne teste que les
+    sources de sa case et des huit voisines."""
+    PAS = 256
+
+    def __init__(self):
+        self.cases = defaultdict(list)
+        self.n = 0
+
+    def point(self, x, y, z, rayon, cible):
+        self._poser(("p", x, y, z, rayon, cible), x, z, rayon)
+
+    def segment(self, p, q, rayon, cible):
+        self._poser(("s", p, q, rayon, cible), (p[0] + q[0]) / 2.0, (p[2] + q[2]) / 2.0,
+                    rayon + math.dist((p[0], p[2]), (q[0], q[2])) / 2.0)
+
+    def _poser(self, src, cx, cz, port):
+        self.n += 1
+        for gx in range(int((cx - port) // self.PAS), int((cx + port) // self.PAS) + 1):
+            for gz in range(int((cz - port) // self.PAS), int((cz + port) // self.PAS) + 1):
+                self.cases[(gx, gz)].append(src)
+
+    def niveau(self, l, x, y, z):
+        """le meilleur niveau que les sources proposent au point (x, y, z), jamais sous `l`"""
+        best = l
+        for src in self.cases.get((int(x // self.PAS), int(z // self.PAS)), ()):
+            if src[0] == "p":
+                _k, sx, sy, sz, rayon, cible = src
+                d2 = (x - sx) ** 2 + (y - sy) ** 2 + (z - sz) ** 2
+            else:
+                _k, p, q, rayon, cible = src
+                d2 = _dist2_segment(x, y, z, p, q)
+            if d2 >= rayon * rayon or cible <= l:
+                continue
+            d = math.sqrt(d2)
+            v = l + (cible - l) * (1.0 - d / rayon)
+            if v > best:
+                best = v
+        return best
+
+
+def _dist2_segment(x, y, z, p, q):
+    dx, dy, dz = q[0] - p[0], q[1] - p[1], q[2] - p[2]
+    n = dx * dx + dy * dy + dz * dz
+    t = 0.0 if n <= 0 else ((x - p[0]) * dx + (y - p[1]) * dy + (z - p[2]) * dz) / n
+    t = max(0.0, min(1.0, t))
+    ax, ay, az = p[0] + t * dx, p[1] + t * dy, p[2] + t * dz
+    return (x - ax) ** 2 + (y - ay) ** 2 + (z - az) ** 2
+
+
+SECFLAG_NUKAGE = 0x40       # SLEVEL.H : la feuille appartient a une salle a nukage
+VERT_NM = 4                 # UTIL.H WORLDGREEN_NM : bandes de vert de la rampe du monde
+VERT_SH = 5                 # UTIL.H WORLDGREEN_SH : leur place dans l'octet de lumiere
+VERT_COEUR = 0.35           # rayons de flaque : plein vert jusque-la
+VERT_PORTEE = 1.2           # rayons de flaque : au-dela, plus de vert du tout
+
+
+def marquer_nukage(em, M, conv, stats):
+    """Pose SECFLAG_NUKAGE sur les feuilles des SALLES a nukage.
+
+    C'est tout ce que le vert coute : le moteur fait lire a leurs murs et a leurs plafonds -- pas
+    a leurs sols -- la rampe VERTE du monde au lieu de la neutre (WALLS.C getLight, UTIL.C
+    worldGreen). Rien n'est calcule a l'execution, et la lumiere des sommets ne change pas : c'est
+    la rampe qu'elle traverse qui change. Hors du drapeau d'optimisation `lumieres` : la couleur
+    d'une salle n'est pas une lumiere cuite, c'est une propriete du niveau."""
+    import doom_specials                           # tardif : doom_specials importe ce module
+    salles = doom_specials.salles_nukage(M, conv)
+    if not salles:
+        return
+    for i, li in enumerate(conv.keep):
+        if conv.leaf_sector[li] in salles:
+            em.sectors[i]["flags"] |= SECFLAG_NUKAGE
+            stats["nukage_feuilles"] += 1
+    stats["nukage_salles"] = len(salles)
+
+
+def cuire_vert_nukage(em, M, conv, stats):
+    """Ecrit le NIVEAU DE VERT de chaque sommet dans les bits 5-6 de son octet de lumiere.
+
+    Un sommet d'un mur ou d'un PLAFOND d'une salle a nukage prend VERT_NM-1 au bord de la flaque
+    et 0 a VERT_PORTEE rayons ; les SOLS n'en prennent pas (normale +Y, geom3d.py) -- la passerelle
+    qui traverse une salle verte reste grise, et c'est ce qui dit qu'elle est seche. Le moteur ne
+    teste rien : sa rampe a une bande par niveau, et l'octet la designe tout seul."""
+    import doom_specials                           # tardif : doom_specials importe ce module
+    flaques = doom_specials.bassins_nukage(M, conv)
+    if not flaques:
+        return
+    salles = doom_specials.salles_nukage(M, conv)
+    # Le rayon d'une flaque est celui de la SALLE (il couvre le bassin fondu, jusqu'a 448 u) :
+    # prendre le plein vert jusqu'a ce rayon-la peignait toute la piece d'un seul niveau. Le
+    # coeur est donc une fraction du rayon, et l'extinction court jusqu'a VERT_PORTEE rayons --
+    # ce qui laisse un vrai degrade EN TRAVERS de la salle, pas au-dela de ses murs.
+    pts = [(fl["x"], M["sectors"][fl["si"]].floorh + 16, fl["y"], float(fl["rayon"]))
+           for fl in flaques]
+    V = em.vertices
+
+    def niveau(x, y, z):
+        best = 0
+        for px, py, pz, r in pts:
+            d = math.sqrt((x - px) ** 2 + (y - py) ** 2 + (z - pz) ** 2)
+            if d >= r * VERT_PORTEE:
+                continue
+            t = 0.0 if d <= r * VERT_COEUR else                 (d - r * VERT_COEUR) / (r * (VERT_PORTEE - VERT_COEUR))
+            k = int(round((VERT_NM - 1) * (1.0 - t)))
+            if k > best:
+                best = k
+        return best
+
+    n = 0
+    for i, sec in enumerate(em.sectors):
+        if conv.leaf_sector[conv.keep[i]] not in salles:
+            continue
+        for wi in range(sec["firstWall"], sec["lastWall"] + 1):
+            w = em.walls[wi]
+            if w["normal"][1] > 0:                 # un sol : jamais de vert
+                continue
+            if w["flags"] & 0x01:                  # parallelogramme : sommets de GRILLE
+                tl, th, base = w["tileLength"], w["tileHeight"], w["firstLight"]
+                v0, v1, v2, v3 = (V[k] for k in w["v"])
+                for rr in range(th + 1):
+                    fr = rr / th
+                    for cc in range(tl + 1):
+                        fc = cc / tl
+                        x = (v0["x"] + (v1["x"] - v0["x"]) * fc) * (1 - fr) + \
+                            (v3["x"] + (v2["x"] - v3["x"]) * fc) * fr
+                        y = (v0["y"] + (v1["y"] - v0["y"]) * fc) * (1 - fr) + \
+                            (v3["y"] + (v2["y"] - v3["y"]) * fc) * fr
+                        z = (v0["z"] + (v1["z"] - v0["z"]) * fc) * (1 - fr) + \
+                            (v3["z"] + (v2["z"] - v3["z"]) * fc) * fr
+                        k = niveau(x, y, z)
+                        if k:
+                            j = base + rr * (tl + 1) + cc
+                            em.vertexLight[j] |= k << VERT_SH
+                            n += 1
+            elif w["firstVertex"] != 65535:        # mur a faces : ses sommets propres
+                for vi in range(w["firstVertex"], w["lastVertex"] + 1):
+                    v = V[vi]
+                    k = niveau(v["x"], v["y"], v["z"])
+                    if k:
+                        v["light"] |= k << VERT_SH
+                        n += 1
+            else:                                  # mur plein : ses quatre coins
+                for vi in w["v"]:
+                    v = V[vi]
+                    k = niveau(v["x"], v["y"], v["z"])
+                    if k:
+                        v["light"] |= k << VERT_SH
+                        n += 1
+    stats["nukage_sommets_verts"] = n
+
+
+def _sources_nukage(src, M, conv, stats):
+    """Une source au CENTRE de chaque flaque : le relief du vert, cuit dans la lumiere des sommets.
+    Le vert est plat sans elle -- la rampe teinte ce que la lumiere du sommet dit, et le WAD dit la
+    meme chose sur tout un secteur."""
+    import doom_specials
+    for fl in doom_specials.bassins_nukage(M, conv):
+        sec = M["sectors"][fl["si"]]
+        cible = min(16, light_of(sec.light) + doom_specials.NUKAGE_CIBLE)
+        src.point(fl["x"], sec.floorh + 16, fl["y"], fl["rayon"] + 64, cible)
+        stats["lumiere_flaque"] += 1
+
+
+def cuire_lumieres(em, M, conv, stats):
+    """Pose les sources, puis reecrit la lumiere de chaque sommet et de chaque sommet de grille.
+
+    Les sommets de GRILLE (murs parallelogrammes) ne portent pas leur position : elle se refait
+    par interpolation bilineaire sur le quad, exactement comme drawRectWall construit la sienne
+    (vWidth = (v1-v0)/tileLength, vHeight = (v2-v1)/tileHeight, WALLS.C:1036-1049), donc l'indice
+    de (rr, cc) est firstLight + rr*(tileLength+1) + cc."""
+    if "lumieres" not in OPTIM_ACTIFS:
+        return
+    S, V = M["sectors"], em.vertices
+    src = _Sources()
+    # halos : une source sous chaque dalle de plafond lumineuse
+    for si, sec in enumerate(S):
+        if sec.ceilpic not in LIGHT_FLATS:
+            continue
+        cr = _centre_rayon(M, si)
+        if cr is None:
+            continue
+        cx, cy, r = cr
+        src.point(cx, sec.ceilh - 16, cy, r + HALO_MARGE, HALO_CIBLE)
+        stats["lumiere_halo"] += 1
+    # decor : les objets qui portent une flamme
+    for t in M["things"]:
+        d = DECOR_LAMPES.get(t.type)
+        if d is None:
+            continue
+        lf = conv.leaf_at(t.x, t.y)
+        si = conv.leaf_sector.get(lf) if hasattr(conv.leaf_sector, "get") else (
+            conv.leaf_sector[lf] if lf in conv.remap else None)
+        if si is None:
+            continue
+        h, rayon, cible = d
+        src.point(t.x, S[si].floorh + h, t.y, rayon, cible)
+        stats["lumiere_decor"] += 1
+    # debordements : le seuil d'un secteur clair deborde sur le sol du voisin sombre
+    niveaux = [light_of(S[conv.leaf_sector[li]].light) for li in conv.keep]
+    for i, s in enumerate(em.sectors):
+        for wi in range(s["firstWall"], s["lastWall"] + 1):
+            w = em.walls[wi]
+            t = w["nextSector"]
+            if t < 0 or t >= len(niveaux) or niveaux[i] - niveaux[t] < DEBORD_MIN:
+                continue
+            a, b = V[w["v"][3]], V[w["v"][2]]      # l'arete BASSE du portail : le seuil
+            src.segment((a["x"], a["y"], a["z"]), (b["x"], b["y"], b["z"]),
+                        DEBORD_RAYON, niveaux[i])
+            stats["lumiere_debord"] += 1
+    _sources_nukage(src, M, conv, stats)
+    if not src.n:
+        return
+    # les sommets propres (murs a faces, sols et plafonds : ils portent leur position)
+    touches = 0
+    for v in V:
+        l = src.niveau(v["light"], v["x"], v["y"], v["z"])
+        n = int(round(l))
+        if n != v["light"]:
+            v["light"] = min(16, n)
+            touches += 1
+    # les sommets de grille des murs parallelogrammes
+    for w in em.walls:
+        if not (w["flags"] & 0x01):
+            continue
+        tl, th, base = w["tileLength"], w["tileHeight"], w["firstLight"]
+        v0, v1, v2, v3 = (V[i] for i in w["v"])
+        for rr in range(th + 1):
+            fr = rr / th
+            for cc in range(tl + 1):
+                fc = cc / tl
+                x = (v0["x"] + (v1["x"] - v0["x"]) * fc) * (1 - fr) + \
+                    (v3["x"] + (v2["x"] - v3["x"]) * fc) * fr
+                y = (v0["y"] + (v1["y"] - v0["y"]) * fc) * (1 - fr) + \
+                    (v3["y"] + (v2["y"] - v3["y"]) * fc) * fr
+                z = (v0["z"] + (v1["z"] - v0["z"]) * fc) * (1 - fr) + \
+                    (v3["z"] + (v2["z"] - v3["z"]) * fc) * fr
+                k = base + rr * (tl + 1) + cc
+                l = src.niveau(em.vertexLight[k], x, y, z)
+                n = min(16, int(round(l)))
+                if n != em.vertexLight[k]:
+                    em.vertexLight[k] = n
+                    touches += 1
+    stats["lumiere_sommets_eclaircis"] = touches
+
 def check(em, conv):
     crit = {}
 

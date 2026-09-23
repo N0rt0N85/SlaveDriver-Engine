@@ -10,12 +10,13 @@
 #if !defined(GP_LIGHT_IMP) || !defined(GP_LIGHT_CACO) || !defined(GP_LIGHT_BARON) ||     \
     !defined(GP_LIGHT_ROCKET) || !defined(GP_LIGHT_PLASMA) || !defined(GP_LIGHT_EXPLODE) || \
     !defined(GP_LIGHT_MUZZLE_PLAYER) || !defined(GP_LIGHT_MUZZLE_MONSTER) ||                \
+    !defined(GP_LIGHT_TELEPORT) ||                                                          \
     !defined(GP_LIGHT_EXPLODE_TICS) || !defined(GP_LIGHT_MUZZLE_TICS)
 #error "LIGHT_* keys missing from the game parameters: copy them from params/doom.cfg"
 #endif
 
 enum {DLF_IMP,DLF_CACO,DLF_BARON,DLF_ROCKET,DLF_PLASMA,DLF_EXPLODE,
-      DLF_MUZZLE_PLAYER,DLF_MUZZLE_MONSTER,DLF_NM};
+      DLF_MUZZLE_PLAYER,DLF_MUZZLE_MONSTER,DLF_TELEPORT,DLF_NM};
 
 /* k 0..16 per channel, radius in world units, intensity 0..31 at the centre, tics the flash
    lasts (0 = the effect's own life, a missile in flight) */

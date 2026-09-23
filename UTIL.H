@@ -71,6 +71,23 @@ extern unsigned short greyTable[];
    a thing's own glow -- and the geometry reads this one (walls, floors, water and things:
    WALLS.C, and _worldGrey in wallasm_gnu.s), so that the fog can have a COLOUR of its own. */
 extern unsigned short worldGrey[];
+/* GCC14: THE RAMP HAS FOUR BANDS OF 32.  A vertex's light byte carries its light in bits 0-4 and
+   its GREEN level in bits 5-6 (WORLDGREEN_NM levels), so `worldGrey[light]` reads the right band
+   without anyone testing anything -- the renderer's assembler indexes this table with the byte as
+   it stands (wallasm_gnu.s .Lrt_grey), and gouraud smooths the levels between two vertices.  The
+   converter bakes the level from the distance to the pool of nukage (doom3d.cuire_vert_nukage).
+   Band 0 IS the old ramp, byte for byte, so nothing that carries no green changes.
+   Entries 17..31 of a band are its FLOOR: the assembler subtracts the fog from the byte before it
+   indexes, so a vertex the fog swallows falls into the top of the band below, and must come out
+   dark.  Band 0 keeps the bright greyTable there instead -- that is where PowerSlave's water
+   reads, and PowerSlave has no green. */
+#define WORLDGREEN_NM 4                 /* bands: 0 = no green, 3 = the most */
+#define WORLDGREEN_SH 5                 /* the band's bit position in a light byte */
+/* how much RED and BLUE the LAST band keeps, in sixteenths; the green is the light itself.
+   NOT a params/ value: util.h is read before gameparams.h, so a GP_ default written here would
+   silently win over the file. */
+#define WORLDGREEN_R 13
+#define WORLDGREEN_B 11
 /* GCC14: the colour the fog fades TO, 0..31 a channel, in gouraud units (16 = the surface's own
    colour).  (0,0,0) is the original fog -- black -- and rebuilds greyTable byte for byte.
    worldGrey[] then runs from that colour at no light to neutral at 16, so a surface does not go

@@ -249,6 +249,7 @@ void        doom_roleNextAttack(void);         /* next weapon (Z): the monster's
 void        doom_rolePain(void);
 short       doom_roleBodySeq(int k,Sprite *body,Sprite *viewer,int health);
 void        doom_playerKilled(Object *source); /* the loaded player died: frags, the crown        */
+void        doom_deathLook(void);             /* dead: the view turns towards the killer          */
 void        doom_modesTic(void);               /* 35 Hz, once: limits, the crown                 */
 int         doom_modePlace(int mt,int sector,MthXyz *pos,int angle,int flags);   /* 1 = not placed in this mode or skill */
 const char *doom_skillName(int s);

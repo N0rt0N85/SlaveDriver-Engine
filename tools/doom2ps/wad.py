@@ -169,4 +169,4 @@ def read_map(wad, mapname):
     things = [Thing(*r) for r in recs("THINGS", "<5h", 10)]
     return dict(vertices=verts, linedefs=lines, sidedefs=sides, segs=segs,
                 subsectors=subs, nodes=nodes, sectors=sects, things=things,
-                name=mapname.upper())
+                name=mapname.upper(), wad=wad)

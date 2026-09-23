@@ -31,8 +31,11 @@
  *
  * OPTIONS acts at once, on the values the title's OPTIONS edits: CONTROLS (the action a button
  * does, controllerConfig), SOUND stereo/mono, MUSIC on/off (the CD), FOG (fogCap: the game sets it
- * on the next image), LIGHTS (the light tuner, TUNER.C).  The view stays frozen: what the lights
+ * on the next image), SHADOWS (the blob under a thing and the spectre: WALLS.C shadowMode,
+ * shadowPct, spectreMode), LIGHTS (the light tuner, TUNER.C).  The view stays frozen: what the lights
  * and the fog change shows when the game resumes. */
+#include <stdio.h>
+#include <string.h>
 #include <sega_scl.h>
 #include "util.h"
 #include "sprite.h"
@@ -105,7 +108,25 @@ static const char *const items[]={"RESUME","MAP","STATS","WEAPONS","OPTIONS","SA
 #define ITEM_QUIT   7
 #define LIVE ((1<<ITEM_RESUME)|(1<<ITEM_OPTIONS)|(1<<ITEM_QUIT))   /* the others: grey, later */
 
-enum {OPT_CONTROLS,OPT_SOUND,OPT_MUSIC,OPT_FOG,OPT_LIGHTS,OPT_BACK,OPT_NM};
+enum {OPT_CONTROLS,OPT_SOUND,OPT_MUSIC,OPT_FOG,OPT_SHADOWS,OPT_LIGHTS,OPT_BACK,OPT_NM};
+/* SHADOWS: the blob's mode, its size, the spectre's mode.  The blob may be off; the spectre may
+   not (it would be invisible), so the two lists differ. */
+enum {SHD_MODE,SHD_SIZE,SHD_SPECTRE,SHD_BACK,SHD_NM};
+static const char *const compoName[CFG_COMPO_NM]=
+   {"NONE","OPAQUE","MESH","SHADOW","GRAIN","SEE THROUGH","SEE THRU GRAIN","DARK",
+    "GREY + SHADOW","SHADOW X1-3"};
+#define SHADOW_NM   6
+#define SPECTRE_NM  6
+static const unsigned char shadowList[SHADOW_NM]=
+   {CFG_COMPO_NONE,CFG_COMPO_OPAQUE,CFG_COMPO_MESH,CFG_COMPO_SHADOW,CFG_COMPO_GRAIN,
+    CFG_COMPO_DARK};
+/* DARK left the spectre's list: two shadows over a whole monster is a flat quarter, and the
+   grouse of the thing is that its pixels are all alike.  SHADOW X1-3 took its place -- one full
+   shadow then two meshed ones, each offset by a random pixel, so a pixel takes one, two or three
+   shadows and the draw changes every image.  It sits next to SHADOW, where it is looked for. */
+static const unsigned char spectreList[SPECTRE_NM]=
+   {CFG_COMPO_SHADOW,CFG_COMPO_FUZZ,CFG_COMPO_GRAIN,CFG_COMPO_MESH,CFG_COMPO_TRANS,
+    CFG_COMPO_TBW};
 #define CTL_BACK    8                   /* CONTROLS: the eight actions, then BACK */
 /* Doom's words for the engine's action slots (UTIL.H ACTION_*, as DOOM_PLAYER.C and SRUINS.C read
    them in a Doom game: the JUMP slot runs, PUSH uses, the free-look slot does nothing) */
@@ -532,6 +553,99 @@ static int lights(void)
  return r;
 }
 
+/* SHADOWS: the blob under a thing and the spectre.  Both are a VDP1 composition mode, so they
+   are one page: GRAIN is the shadow calculation on one pixel in two (grain, and what is behind
+   shows through the other half), HALF the only mode that keeps the monster's own shading. */
+static int compoIndex(const unsigned char *list,int nm,int mode)
+{int i;
+ for (i=0;i<nm;i++)
+    if (list[i]==mode)
+       return i;
+ return 0;
+}
+
+static void shadowLine(int r,char *text)
+{switch (r)
+    {case SHD_MODE:    sprintf(text,"SHADOW  %s",compoName[shadowMode]); break;
+     case SHD_SIZE:    sprintf(text,"SIZE  %d PCT",shadowPct); break;
+     case SHD_SPECTRE: sprintf(text,"SPECTRE  %s",compoName[spectreMode]); break;
+     default:          strcpy(text,"BACK"); break;
+    }
+}
+
+static void shadowAdjust(int r,int d)
+{int i;
+ switch (r)
+    {case SHD_MODE:
+	i=compoIndex(shadowList,SHADOW_NM,shadowMode)+d;
+	if (i<0) i=SHADOW_NM-1;
+	if (i>=SHADOW_NM) i=0;
+	shadowMode=shadowList[i];
+	compoPlanOf(&shadowPlan,shadowMode);
+	break;
+     case SHD_SIZE:
+	setShadowPct(shadowPct+10*d);
+	break;
+     case SHD_SPECTRE:
+	i=compoIndex(spectreList,SPECTRE_NM,spectreMode)+d;
+	if (i<0) i=SPECTRE_NM-1;
+	if (i>=SPECTRE_NM) i=0;
+	spectreMode=spectreList[i];
+	compoPlanOf(&spectrePlan,spectreMode);
+	break;
+    }
+}
+
+static void drawShadows(void)
+{char t[40];
+ int r;
+ pageStart("SHADOWS",ITEM_X,SHD_NM,(1<<SHD_NM)-1);
+ for (r=0;r<SHD_NM;r++)
+    {shadowLine(r,t);
+     text(ITEM_X,lineY[r]=ITEM_Y0+r*ITEM_PITCH,t,red,1);
+    }
+ text(-1,LIT_NOTE_Y,"CHANGES SHOW WHEN YOU RESUME",red,0);
+ text(-1,LIT_HELP_Y,"LEFT RIGHT CHANGE   B BACK",red,0);
+ pageSkull();
+}
+
+static int shadows(void)
+{char t[40];
+ int r=-1,d,hold=0;
+ Uint16 hit;
+ sel=SHD_MODE;
+ drawShadows();
+ while (r<0)
+    {hit=step();
+     d=0;
+     if (!(held&PER_DGT_L))             /* active low: held down */
+	d=-1;
+     else if (!(held&PER_DGT_R))
+	d=1;
+     if (!d)
+	hold=0;
+     else if (hit&(PER_DGT_L|PER_DGT_R))
+	hold=1;
+     else if (++hold<30 || (hold&3))
+	d=0;
+     if (hit&PER_DGT_S)
+	r=1;
+     else if ((hit&PER_DGT_B) || ((hit&(PER_DGT_A|PER_DGT_C)) && sel==SHD_BACK))
+	r=0;
+     else if (!navigate(hit))
+	{if (hit&(PER_DGT_A|PER_DGT_C))
+	    d=1;
+	 if (d && sel!=SHD_BACK)
+	    {shadowAdjust(sel,d);
+	     doom_playerSound(sfx_stnmov);
+	     shadowLine(sel,t);
+	     lineAgain(sel,t);
+	    }
+	}
+    }
+ return r;
+}
+
 /* the options' words: the values they have now */
 static const char *optText(int i)
 {static const char *const fog[4]={"FOG  OFF","FOG  LOW","FOG  MEDIUM","FOG  HIGH"};
@@ -540,6 +654,7 @@ static const char *optText(int i)
      case OPT_SOUND:    return enable_stereo? "SOUND  STEREO": "SOUND  MONO";
      case OPT_MUSIC:    return enable_music? "MUSIC  ON": "MUSIC  OFF";
      case OPT_FOG:      return fog[fogLevel()];
+     case OPT_SHADOWS:  return "SHADOWS";
      case OPT_LIGHTS:   return "LIGHTS";
      default:           return "BACK";
     }
@@ -575,8 +690,9 @@ static int options(void)
 	 doom_playerSound(sfx_pistol);
 	 switch (i)
 	    {case OPT_CONTROLS:
+	     case OPT_SHADOWS:
 	     case OPT_LIGHTS:
-		if (i==OPT_CONTROLS? controls(): lights())
+		if (i==OPT_CONTROLS? controls(): i==OPT_SHADOWS? shadows(): lights())
 		   r=1;
 		else
 		   {doom_playerSound(sfx_swtchn);

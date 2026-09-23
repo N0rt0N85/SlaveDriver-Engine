@@ -44,6 +44,8 @@
 #define OT_DOOM_LIFT     184
 #define OT_DOOM_WLINE    185
 #define OT_DOOM_LAMP     186     /* GCC14: a light the map is given (doomLamp_func) */
+#define OT_DOOM_SECTORFX 187     /* GCC14: an animated sector light (doomSectorFx_func) */
+#define OT_DOOM_POOLS    188     /* GCC14: the map's pools of nukage (doomPools_func) */
 #define DOOM_LAMP_SEEN   8       /* GCC14: doom_specials.LAMPE_VUS_MAX */
 #define DOOM_TELE_ONCE   1
 #define DOOM_WLINE_ONCE  1
@@ -106,6 +108,48 @@ typedef struct
  short sector,channel,level;
 } DoomLightObject;
 
+/* GCC14: OT_DOOM_SECTORFX -- Doom's animated sector lights (p_lights.c: specials 1, 2, 3, 4, 8,
+   12, 13 and 17), which the conversion had left out: 109 sectors of episode 1 never moved.
+   ONE object for the whole map.  Doom gives each sector a thinker, and one object a leaf was the
+   obvious answer -- but E1M6 alone has 161 animated leaves against the 4 objects of margin its
+   reserve leaves (544 slots for a map's monsters, pickups and specials).  So the map's effects
+   are a single variable-length record which the object walks once a tic, and whose own shorts
+   carry the STATE of each effect: the engine reads AND writes it in place in level_objectParams.
+   That also settles the other constraint for nothing -- the leaves of one Doom sector have to
+   flash together, and here they are one entry, so they cannot drift apart.
+   Each entry is 9 shorts plus its leaves:
+     0 kind    1 dark    2 bright    3 darkTics                  (doom2ps, never written)
+     4 count   5 level   6 dir       7 seed                      (the state, written here)
+     8 nmLeaves, then that many leaves
+   The two levels are the engine's 0..16, which doom2ps converts from Doom's maxlight (the
+   sector's own) and minlight (its darkest neighbour, p_spec.c P_FindMinSurroundingLight). */
+#define DOOM_FX_FLASH   1               /* P_SpawnLightFlash:  long lit, a short blink dark     */
+#define DOOM_FX_STROBE  2               /* T_StrobeFlash:      darkTics dark, 5 tics lit        */
+#define DOOM_FX_GLOW    3               /* T_Glow:             up and down the ramp, no random  */
+#define DOOM_FX_FLICKER 4               /* T_FireFlicker:      a torch, 4 tics a step           */
+#define DOOM_FX_SYNC    0x80            /* specials 12 and 13: the map's strobes start in phase */
+#define DOOM_FX_BRIGHTTICS 5            /* STROBEBRIGHT                                         */
+#define DOOM_FX_GLOWTIC 2               /* tics a glow spends on each of the 16 steps (GLOWSPEED
+					   is 8 of Doom's 255, half a step of ours)             */
+#define DOOM_FX_KIND    0               /* the entry's shorts, as above */
+#define DOOM_FX_DARK    1
+#define DOOM_FX_BRIGHT  2
+#define DOOM_FX_DARKT   3
+#define DOOM_FX_COUNT   4
+#define DOOM_FX_LEVEL   5
+#define DOOM_FX_DIR     6
+#define DOOM_FX_SEED    7
+#define DOOM_FX_NMLEAF  8
+#define DOOM_FX_HEAD    9
+typedef struct
+{short type,class;
+ struct __object *next,*prev;
+ messHandler func;
+ short nmFx;                            /* entries in the record                             */
+ short *table;                          /* the record itself, in level_objectParams          */
+} DoomSectorFxObject;
+static void doomSectorFx_func(Object *_this,int message,int param1,int param2);
+
 /* GCC14: OT_DOOM_LAMP.  The light list keeps a Sprite * and reads nothing of it but pos (WALLS.C
    buildLightList, and each view's MTH_CoordTrans of its lights), so the lamp carries its own
    Sprite, outside the pool and every sector list: nothing hits it, draws it or counts it. */
@@ -122,12 +166,53 @@ typedef struct
  Sprite spot;                           /* the light's position                                    */
 } DoomLampObject;
 
+/* GCC14: OT_DOOM_POOLS -- the map's pools of nukage, which Doom leaves unlit: their flat animates,
+   their light does not.
+   THE GREEN IS NOT A LIGHT any more.  It was one for two discs and it was wrong both times: a
+   light is a blob, it takes one of the fifteen slots, and its intensity had to move for the pool
+   to live at all, which reads as a twinkle.  The colour is CUT INTO THE LEVEL instead -- the walls
+   and the ceilings of a nukage room read the world's GREEN ramp (SECFLAG_NUKAGE, WALLS.C
+   getLight), its floors the neutral one, and the relief around the pool is baked into the vertices
+   by the converter.  Nothing at all is paid for it while the game runs.
+   What is left here is the room BREATHING: every `pulse` tics each pool walks its room's light one
+   step towards a target of its own, at most `amp` levels off the room's own -- and only while a
+   player is near enough and may see one of its leaves, so a room nobody is in costs a subtraction
+   and a test.  Left behind, the room goes back to the level the file gave it.
+   Each entry of the record is 10 shorts plus the leaves that breathe with it:
+     0 x   1 y (the height)   2 z   3 radius   4 leaf   5 base (the room's own 0..16)
+     6 cur   7 target   8 seed   9 nmLeaves, then that many leaves */
+#define DOOM_POOL_X      0
+#define DOOM_POOL_Y      1
+#define DOOM_POOL_Z      2
+#define DOOM_POOL_RADIUS 3
+#define DOOM_POOL_LEAF   4
+#define DOOM_POOL_BASE   5
+#define DOOM_POOL_CUR    6
+#define DOOM_POOL_TARGET 7
+#define DOOM_POOL_SEED   8
+#define DOOM_POOL_NMLEAF 9
+#define DOOM_POOL_HEAD   10
+#define DOOM_POOL_FAR    5              /* a room stops breathing past this many radii */
+typedef struct
+{short type,class;
+ struct __object *next,*prev;
+ messHandler func;
+ short nmPools;
+ short *table;                          /* the record, read in place (level_objectParams) */
+ short pulse,amp;                       /* tics between two steps; levels off the room's own */
+ short wait;                            /* tics to the next step, for every pool at once */
+} DoomPoolsObject;
+static void doomPools_func(Object *_this,int message,int param1,int param2);
+static void doom_leafLight(int s,int level);   /* GCC14: the pools walk a room's light */
+
 /* compile-time guards (C89): the DoomActor must fit the Object pool slot, and the generated
    tables must have the layout the contract fixes (section 4) */
 typedef char doomActorFitsObject_[(sizeof(DoomActor)<sizeof(Object))?1:-1];
 typedef char doomExitFitsObject_[(sizeof(DoomExitObject)<=sizeof(Object))?1:-1];
 typedef char doomLightFitsObject_[(sizeof(DoomLightObject)<=sizeof(Object))?1:-1];
 typedef char doomLampFitsObject_[(sizeof(DoomLampObject)<=sizeof(Object))?1:-1];   /* GCC14 */
+typedef char doomFxFitsObject_[(sizeof(DoomSectorFxObject)<=sizeof(Object))?1:-1];  /* GCC14 */
+typedef char doomPoolsFitsObject_[(sizeof(DoomPoolsObject)<=sizeof(Object))?1:-1];  /* GCC14 */
 typedef char doomTeleportFitsObject_[(sizeof(DoomTeleportObject)<=sizeof(Object))?1:-1];
 typedef char doomFloorFitsObject_[(sizeof(DoomFloorObject)<=sizeof(Object))?1:-1];
 typedef char doomDoorFitsObject_[(sizeof(DoomDoorObject)<=sizeof(Object))?1:-1];
@@ -234,6 +319,8 @@ static void doomTeleFog(int sector,MthXyz *feet)
  DoomActor *f;
  pos.y+=F(doomMobjInfo[MT_TFOG].height/2);
  f=doom_spawn(MT_TFOG,sector,&pos,0,0);
+ if (f && f->type!=OT_DEAD && f->sprite)
+    doom_lightAdd(f->sprite,DLF_TELEPORT);      /* GCC14: the flash, for as long as the fog */
  doom_sound((f && f->type!=OT_DEAD)?f->sprite:NULL,sfx_telept);
 }
 
@@ -766,6 +853,150 @@ static void doomLamp_func(Object *_this,int message,int param1,int param2)
     }
 }
 
+/* GCC14: whether a player may see leaf `leaf`, or any of the `n` leaves at `seen` (the same
+   reject-table test doomLampInView does, on a pool's own list) */
+static int doomPoolSeen(const short *seen,int n)
+{int k,i;
+ if (!n)
+    return 1;
+ for (k=0;k<mpPlayers;k++)
+    if (mpBody[k])
+       for (i=0;i<n;i++)
+	  if (level_maySee(mpBody[k]->s,seen[i]))
+	     return 1;
+ return 0;
+}
+
+/* SIGNAL_MOVE, once a tic (OT_DOOM_POOLS).  Nothing happens on most of them: the step falls every
+   `pulse` tics, and even then a pool whose room no player is near or may see is only walked back
+   to where it started.  A step rewrites the light of that room's leaves, which is what the strobes
+   of the same map do, at a twentieth of their rate. */
+static void doomPools_func(Object *_this,int message,int param1,int param2)
+{DoomPoolsObject *this=(DoomPoolsObject *)_this;
+ short *e;
+ Fixed32 d,best,far;
+ int k,i,n,cur,live;
+ (void)param1; (void)param2;
+ if (message!=SIGNAL_MOVE)
+    return;
+ if (--this->wait>0)
+    return;
+ this->wait=this->pulse>0? this->pulse: 1;
+ e=this->table;
+ for (i=0;i<this->nmPools;i++,e+=DOOM_POOL_HEAD+n)
+    {n=e[DOOM_POOL_NMLEAF];
+     far=F(e[DOOM_POOL_RADIUS]*DOOM_POOL_FAR);
+     best=far;
+     for (k=0;k<mpPlayers;k++)
+	if (mpBody[k])
+	   {d=doom_approxDist2(mpBody[k]->pos.x-F(e[DOOM_POOL_X]),
+			       mpBody[k]->pos.z-F(e[DOOM_POOL_Z]));
+	    if (d<best)
+	       best=d;
+	   }
+     live=best<far && doomPoolSeen(e+DOOM_POOL_HEAD,n);
+     if (live)
+	{if (e[DOOM_POOL_CUR]==e[DOOM_POOL_TARGET])   /* arrived: somewhere else next */
+	    {e[DOOM_POOL_SEED]=(short)((unsigned short)e[DOOM_POOL_SEED]*25173u+13849u);
+	     e[DOOM_POOL_TARGET]=(short)((((unsigned short)e[DOOM_POOL_SEED])>>8)%
+					 (unsigned)(2*this->amp+1))-this->amp;
+	    }
+	 cur=e[DOOM_POOL_CUR]+(e[DOOM_POOL_TARGET]>e[DOOM_POOL_CUR]? 1: -1);
+	}
+     else                                             /* nobody to see it: give the room back */
+	{if (!e[DOOM_POOL_CUR])
+	    continue;
+	 e[DOOM_POOL_TARGET]=0;
+	 cur=e[DOOM_POOL_CUR]+(e[DOOM_POOL_CUR]>0? -1: 1);
+	}
+     e[DOOM_POOL_CUR]=(short)cur;
+     for (k=0;k<n;k++)
+	doom_leafLight(e[DOOM_POOL_HEAD+k],e[DOOM_POOL_BASE]+cur);
+    }
+}
+
+#if 0                                   /* the light the pools used to carry, kept for the record */
+static void doomPoolsLight_func(Object *_this,int message,int param1,int param2)
+{DoomPoolsObject *this=(DoomPoolsObject *)_this;
+ short *e;
+ Fixed32 d,best,near,far;
+ int k,i,n,p,pick;
+ (void)param1; (void)param2;
+ if (message!=SIGNAL_MOVE)
+    return;
+ if (--this->look<=0)                   /* choose the pool */
+    {int bestRate=0x7fffffff;
+     this->look=DOOM_POOL_LOOK;
+     pick=-1;
+     e=this->table;
+     for (i=0;i<this->nmPools;i++,e+=DOOM_POOL_HEAD+n)
+	{n=e[DOOM_POOL_NMSEEN];
+	 far=F(e[DOOM_POOL_RADIUS]*3);
+	 best=far;
+	 for (k=0;k<mpPlayers;k++)
+	    if (mpBody[k])
+	       {d=doom_approxDist2(mpBody[k]->pos.x-F(e[DOOM_POOL_X]),
+				   mpBody[k]->pos.z-F(e[DOOM_POOL_Z]));
+		if (d<best)
+		   best=d;
+	       }
+	 if (best>=far || !doomPoolSeen(e+DOOM_POOL_HEAD,n))
+	    continue;
+	 k=f(best)*256/e[DOOM_POOL_RADIUS];     /* the distance in radii: the fair comparison */
+	 if (k<bestRate)
+	    {bestRate=k;
+	     pick=i;
+	     this->radius=e[DOOM_POOL_RADIUS];
+	     this->spot.pos.x=F(e[DOOM_POOL_X]);
+	     this->spot.pos.y=F(e[DOOM_POOL_Y]);
+	     this->spot.pos.z=F(e[DOOM_POOL_Z]);
+	     this->spot.s=e[DOOM_POOL_LEAF];
+	    }
+	}
+     if (pick<0)
+	this->radius=0;
+    }
+ if (!this->radius || !lightOn)         /* no pool near, or the player's LIGHTS OFF */
+    {removeLight(&this->spot);
+     this->shown=0;
+     return;
+    }
+ if (--this->wait<=0)                   /* the wander: a new target, then one step a tic */
+    {int lo=this->peak/3;
+     this->wait=this->pulse>0? this->pulse: 1;
+     this->pseed=(unsigned short)(this->pseed*25173u+13849u);
+     this->target=(short)(lo+(((this->pseed>>8)*(this->peak-lo+1))>>8));
+    }
+ if (this->cur<this->target)
+    this->cur++;
+ else if (this->cur>this->target)
+    this->cur--;
+ p=this->cur;
+ near=F(this->radius*2);                /* a pool lights the pool, not the level */
+ far=F(this->radius*3);
+ best=far;
+ for (k=0;k<mpPlayers;k++)
+    if (mpBody[k])
+       {d=doom_approxDist2(mpBody[k]->pos.x-this->spot.pos.x,
+			   mpBody[k]->pos.z-this->spot.pos.z);
+	if (d<best)
+	   best=d;
+       }
+ if (best>near)
+    p=p*f(far-best)/f(far-near);
+ if (p<=0)
+    {removeLight(&this->spot);
+     this->shown=0;
+     return;
+    }
+ if (!hasLight(&this->spot))            /* a pool yields its slot to everything else */
+    addLightPrio(&this->spot,this->r,this->g,this->b,this->radius,p,DOOM_LIGHTPRIO_MUZZLE);
+ else if (p!=this->shown)
+    changeLightEx(&this->spot,this->r,this->g,this->b,this->radius,p);
+ this->shown=(short)p;
+}
+#endif
+
 /* contract section 9: 8.3 names at the disc root ('+'), bounded by DOOM_NMLEVELS.  make_e1m1.py
    checks these against cd_doom/.  Where each level leads is Doom's own order (g_game.c
    G_DoCompleted): the secret exit of E1M3 goes to E1M9, E1M9 comes back to E1M4, and -1 -- after
@@ -805,6 +1036,8 @@ void doom_init(void)
  assert(doomOtToMt[OT_DOOM_LIFT]==-1 && doomOtToMt[OT_DOOM_WLINE]==-1);
  assert(doomOtToMt[OT_DOOM_LIGHT]==-1);
  assert(doomOtToMt[OT_DOOM_LAMP]==-1);        /* GCC14 */
+ assert(doomOtToMt[OT_DOOM_SECTORFX]==-1);    /* GCC14 */
+ assert(doomOtToMt[OT_DOOM_POOLS]==-1);       /* GCC14 */
  assert(doomMobjInfo[MT_TROOPSHOT].speed==10);
  /* the pad as Mimas lays it out (dg_saturn.cxx pad_map: A fire, B use, C run held, L/R strafe)
     so the two are played with the same hands.  controllerConfig maps an action slot to a button
@@ -965,6 +1198,64 @@ int game_placeObject(int ot)
 	     o->nmSeen=(short)nmSeen;
 	     memcpy(o->seen,seen,sizeof(o->seen));
 	     moveObject((Object *)o,(channel==-1)? objectRunList: objectIdleList);
+	    }
+	 return 1;
+	}
+     case OT_DOOM_POOLS:                        /* GCC14: doomPools_func, one for the map */
+	{DoomPoolsObject *o;
+	 int nShorts=suckShort();
+	 int nmPools=suckShort();
+	 int pulse=suckShort();
+	 int amp=suckShort();
+	 short *table=suckParams(nShorts-4);
+	 short *e=table;
+	 int i,k,n;
+	 assert(nmPools>0 && nShorts>4);
+	 assert(pulse>0 && amp>0 && amp<=4);
+	 for (i=0;i<nmPools;i++,e+=DOOM_POOL_HEAD+n)
+	    {n=e[DOOM_POOL_NMLEAF];
+	     assert(e[DOOM_POOL_RADIUS]>=16 && e[DOOM_POOL_RADIUS]<=1024);
+	     assert(e[DOOM_POOL_LEAF]>=0 && e[DOOM_POOL_LEAF]<level_nmSectors);
+	     assert(e[DOOM_POOL_BASE]>=0 && e[DOOM_POOL_BASE]<=16);
+	     assert(n>0 && n<=DOOM_LAMP_SEEN);
+	     for (k=0;k<n;k++)
+		assert(e[DOOM_POOL_HEAD+k]>=0 && e[DOOM_POOL_HEAD+k]<level_nmSectors);
+	    }
+	 assert(e==table+nShorts-4);
+	 o=(DoomPoolsObject *)getFreeObject(doomPools_func,ot,CLASS_SECTOR);
+	 if (o)
+	    {o->nmPools=(short)nmPools;
+	     o->table=table;
+	     o->pulse=(short)pulse;
+	     o->amp=(short)amp;
+	     o->wait=1;
+	     moveObject((Object *)o,objectRunList);
+	    }
+	 return 1;
+	}
+     case OT_DOOM_SECTORFX:                     /* GCC14: doomSectorFx_func, one for the map */
+	{DoomSectorFxObject *o;
+	 int nShorts=suckShort();
+	 int nmFx=suckShort();
+	 short *table=suckParams(nShorts-2);   /* read and written where it lies */
+	 short *e=table;
+	 int k,i,n;
+	 assert(nmFx>0 && nShorts>2);
+	 for (k=0;k<nmFx;k++,e+=DOOM_FX_HEAD+n)
+	    {n=e[DOOM_FX_NMLEAF];
+	     assert(e[DOOM_FX_KIND]>=1 && e[DOOM_FX_KIND]<=4);
+	     assert(e[DOOM_FX_DARK]>=0 && e[DOOM_FX_DARK]<=e[DOOM_FX_BRIGHT] &&
+		    e[DOOM_FX_BRIGHT]<=16);
+	     assert(e[DOOM_FX_COUNT]>0 && e[DOOM_FX_DARKT]>=0 && n>0);
+	     for (i=0;i<n;i++)
+		assert(e[DOOM_FX_HEAD+i]>=0 && e[DOOM_FX_HEAD+i]<level_nmSectors);
+	    }
+	 assert(e==table+nShorts-2);
+	 o=(DoomSectorFxObject *)getFreeObject(doomSectorFx_func,ot,CLASS_SECTOR);
+	 if (o)
+	    {o->nmFx=(short)nmFx;
+	     o->table=table;
+	     moveObject((Object *)o,objectRunList);
 	    }
 	 return 1;
 	}
@@ -1228,6 +1519,112 @@ static void doomExitLevel(int secret)
     playerHitTeleport(2-200);
 }
 
+/* GCC14: leaf s to light `level`, KEEPING Doom's fake contrast.  Doom lights a wall by the
+   direction it runs, not just by its sector: a seg along the x axis is one unit darker and one
+   along the y axis one unit brighter (r_bsp.c R_StoreWallRange, `lightnum` +/- 1), and a flat
+   gets none.  doom2ps bakes that into the walls it emits, and AICOMMON.C setSectorBrightness
+   would flatten it -- it writes ONE value to every wall of the leaf -- so an animated room lost
+   its relief on its first blink.  The rule needs no memory: the wall's own plane normal says
+   which way it runs, so it is simply applied again here. */
+static void doom_leafLight(int s,int level)
+{int w,i,l;
+ assert(s>=0 && s<level_nmSectors);
+ for (w=level_sector[s].firstWall;w<=level_sector[s].lastWall;w++)
+    {const sWallType *wall=level_wall+w;
+     l=level;
+     if (wall->normal[1]==0)            /* a wall: a floor or a ceiling takes the plain value */
+	{if (wall->normal[0]==0)
+	    l--;                        /* it runs along x: Doom darkens it   */
+	 else if (wall->normal[2]==0)
+	    l++;                        /* it runs along z: Doom brightens it */
+	}
+     if (l<0) l=0;
+     if (l>16) l=16;
+     /* GCC14: bits 5-6 of a light byte are the vertex's GREEN BAND (UTIL.H), cut in by the
+	converter.  A sector whose light moves -- a strobe, a pool breathing -- must leave them
+	where they are, or the nukage would lose its colour the first time it flickers. */
+     if (wall->flags & WALLFLAG_PARALLELOGRAM)
+	{int nm=(wall->tileHeight+1)*(wall->tileLength+1);
+	 for (i=wall->firstLight;i<wall->firstLight+nm;i++)
+	    level_vertexLight[i]=(unsigned char)((level_vertexLight[i]&~31)|l);
+	}
+     else
+	for (i=wall->firstVertex;i<=wall->lastVertex;i++)
+	   level_vertex[i].light=(char)((((unsigned char)level_vertex[i].light)&~31)|l);
+    }
+}
+
+/* one step of an entry's own generator (a 16-bit LCG): no P_Random, so a saved game or a replay
+   would see the same sequence, and nothing else in the game is disturbed by the lights */
+static int doomFxRand(short *e)
+{e[DOOM_FX_SEED]=(short)((unsigned short)e[DOOM_FX_SEED]*25173u+13849u);
+ return ((unsigned short)e[DOOM_FX_SEED])>>8;
+}
+
+/* SIGNAL_MOVE, once a tic: Doom's own four thinkers (p_lights.c), on 0..16, for every effect of
+   the map.  A tic that changes nothing is a decrement and a test per effect. */
+static void doomSectorFx_func(Object *_this,int message,int param1,int param2)
+{DoomSectorFxObject *this=(DoomSectorFxObject *)_this;
+ short *e=this->table;
+ int k,i,n,l;
+ (void)param1; (void)param2;
+ if (message!=SIGNAL_MOVE)
+    return;
+ for (k=0;k<this->nmFx;k++,e+=DOOM_FX_HEAD+n)
+    {n=e[DOOM_FX_NMLEAF];
+     if (--e[DOOM_FX_COUNT]>0)
+	continue;
+     l=e[DOOM_FX_LEVEL];
+     switch (e[DOOM_FX_KIND] & ~DOOM_FX_SYNC)
+	{case DOOM_FX_FLASH:
+	    if (l==e[DOOM_FX_BRIGHT])
+	       {l=e[DOOM_FX_DARK];
+		e[DOOM_FX_COUNT]=(short)((doomFxRand(e)&7)+1);
+	       }
+	    else
+	       {l=e[DOOM_FX_BRIGHT];
+		e[DOOM_FX_COUNT]=(short)((doomFxRand(e)&63)+1);
+	       }
+	    break;
+	 case DOOM_FX_STROBE:
+	    if (l==e[DOOM_FX_DARK])
+	       {l=e[DOOM_FX_BRIGHT];
+		e[DOOM_FX_COUNT]=DOOM_FX_BRIGHTTICS;
+	       }
+	    else
+	       {l=e[DOOM_FX_DARK];
+		e[DOOM_FX_COUNT]=e[DOOM_FX_DARKT];
+	       }
+	    break;
+	 case DOOM_FX_GLOW:
+	    l+=e[DOOM_FX_DIR];
+	    if (l>=e[DOOM_FX_BRIGHT])
+	       {l=e[DOOM_FX_BRIGHT];
+		e[DOOM_FX_DIR]=-1;
+	       }
+	    else if (l<=e[DOOM_FX_DARK])
+	       {l=e[DOOM_FX_DARK];
+		e[DOOM_FX_DIR]=1;
+	       }
+	    e[DOOM_FX_COUNT]=DOOM_FX_GLOWTIC;
+	    break;
+	 default:                       /* DOOM_FX_FLICKER */
+	    l=e[DOOM_FX_BRIGHT]-(doomFxRand(e)&3);
+	    if (l<e[DOOM_FX_DARK])
+	       l=e[DOOM_FX_DARK];
+	    e[DOOM_FX_COUNT]=4;
+	    break;
+	}
+     if (e[DOOM_FX_COUNT]<1)
+	e[DOOM_FX_COUNT]=1;
+     if (l!=e[DOOM_FX_LEVEL])
+	{e[DOOM_FX_LEVEL]=(short)l;
+	 for (i=0;i<n;i++)
+	    doom_leafLight(e[DOOM_FX_HEAD+i],l);
+	}
+    }
+}
+
 /* EV_LightTurnOn and kin (p_lights.c): the channel sets this leaf's brightness, once and for
    good -- Doom's light specials do not animate, they assign.  setSectorBrightness (AICOMMON.C)
    writes the leaf's vertex lights, which is what the walls and the sprites both read. */
@@ -1236,7 +1633,7 @@ void doomLight_func(Object *_this,int message,int param1,int param2)
  (void)param2;
  if (message!=SIGNAL_SWITCH || param1!=this->channel)
     return;
- setSectorBrightness(this->sector,this->level);
+ doom_leafLight(this->sector,this->level);
 }
 
 void exit_func(Object *_this,int message,int param1,int param2)

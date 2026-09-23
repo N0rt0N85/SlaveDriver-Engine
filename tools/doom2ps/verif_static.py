@@ -223,7 +223,8 @@ def title_offsets():
     lb["U"] = lb["R"] + 256
     lb["LOGO"] = lb["U"] + 256
     lb["MASK"] = lb["LOGO"] + 8
-    lb["PIXELS"] = lb["MASK"] + t.MASK_ROWS * t.MASK_BYTES
+    lb["MASKG"] = lb["MASK"] + t.MASK_ROWS * t.MASK_BYTES
+    lb["PIXELS"] = lb["MASKG"] + t.MASK_ROWS * t.MASK_BYTES
     assert lb["PIXELS"] == t.LOGO_BLOCK_HEAD, lb
     return lb
 
@@ -266,18 +267,27 @@ def read_logo_block(b, empty_ok=False):
     assert len(set(rr)) > 64 and len(set(uu)) > 64 and rr != uu, "R/U pas aleatoires"
     lw, lh, lx, ly = b.i16(), b.i16(), b.i16(), b.i16()
     mask = b.take(t.MASK_ROWS * t.MASK_BYTES)
+    maskg = b.take(t.MASK_ROWS * t.MASK_BYTES)
     if empty_ok and lw == 0:
-        assert (lh, lx, ly) == (0, 0, 0) and not any(mask), "bloc logo vide : %s" % ((lh, lx, ly),)
+        assert (lh, lx, ly) == (0, 0, 0) and not any(mask) and not any(maskg), \
+            "bloc logo vide : %s" % ((lh, lx, ly),)
     else:
         assert lw > 0 and lh > 0 and not (lw & 3) and not (lx & 3), (lw, lx)
         assert lx + lw <= t.BITMAP_W and ly + lh <= t.SCREEN_H // 2, \
             "logo hors bitmap (%d,%d %dx%d)" % (lx, ly, lw, lh)
         assert any(mask), "masque LOADING vide"
+        # le CORPS de la lettre est strictement inclus dans le GLYPHE, et strictement plus petit :
+        # c'est ce qui donne a "LOADING" son contour noir et le trou de ses O (DOOM_TITLE.C)
+        assert all((a & ~b_) == 0 for a, b_ in zip(mask, maskg)), "corps hors du glyphe"
+        assert sum(bin(v).count("1") for v in mask) < \
+            sum(bin(v).count("1") for v in maskg), "corps == glyphe : lettres pleines"
     pixels = b.take(lw * lh)
     assert lw == 0 or any(pixels)
     assert b.p % 4 == 0 and b.p == t.LOGO_BLOCK_HEAD + lw * lh, "bloc logo : fin %d" % b.p
-    return dict(levels=nlev, pal=pal, p_load=p_load, logo=(lx, ly, lw, lh), mask=mask, pixels=pixels,
-                mask_bits=sum(bin(v).count("1") for v in mask))
+    return dict(levels=nlev, pal=pal, p_load=p_load, logo=(lx, ly, lw, lh), mask=mask,
+                maskg=maskg, pixels=pixels,
+                mask_bits=sum(bin(v).count("1") for v in mask),
+                maskg_bits=sum(bin(v).count("1") for v in maskg))
 
 
 def verify_title(data, wad=None):
