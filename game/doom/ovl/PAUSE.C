@@ -405,7 +405,8 @@ static void lineAgain(int i,const char *t)
 }
 
 /* the lines the skull may stop on.  MAP is grey in split screen: VRAM B belongs to the split
-   sky there (MPSKY.C), and the browser draws into it.  SAVE / LOAD is not written yet. */
+   sky there (MPSKY.C), and the browser draws into it.  SAVE / LOAD asks bup_canSaveGame
+   (DOOM_SAVE.C): a co-operative game may save, a competitive one has no single arsenal to write. */
 static unsigned int liveItems(void)
 {unsigned int m=(1<<ITEM_RESUME)|(1<<ITEM_STATS)|(1<<ITEM_WEAPONS)|(1<<ITEM_OPTIONS)|
 							  (1<<ITEM_RESTART)|(1<<ITEM_QUIT);
@@ -1206,9 +1207,8 @@ int pause_main(int k,char *freeBase,char *freeEnd)
 		{/* the browser left the map on the OTHER half: this page is painted unseen,
 		    and only then does the screen scroll back to it -- no flash of the map. */
 		 doom_playerSound(sfx_swtchn);
+		 sel=ITEM_MAP;                 /* before drawMain: it ends with the skull */
 		 drawMain();
-		 sel=ITEM_MAP;
-		 pageSkull();
 		 vblankIn();
 		 VDP2R(PAUSE_SCYIN0)=0;
 		}
@@ -1218,10 +1218,14 @@ int pause_main(int k,char *freeBase,char *freeEnd)
 	     if (sel==ITEM_STATS? stats(): weapons())
 		r=PAUSE_RESUME;
 	     else
-		{doom_playerSound(sfx_swtchn);
-		 drawMain();
+		{/* GCC14: the line we came from is set BEFORE the page is drawn.  A submenu owns
+		    `sel` while it runs -- weapons() opens on the weapon in hand and navigates with
+		    it -- and drawMain ends with pageSkull, so the old order painted a skull on the
+		    submenu's last line and then a second one on the real line, without erasing the
+		    first (reported 2026-09-23). */
+		 doom_playerSound(sfx_swtchn);
 		 sel=back;
-		 pageSkull();
+		 drawMain();
 		}
 	    }
 	 else if (sel==ITEM_SAVE)
@@ -1232,9 +1236,8 @@ int pause_main(int k,char *freeBase,char *freeEnd)
 		r=PAUSE_RESTART;			   /* a record was applied: the level it names starts */
 	     else
 		{doom_playerSound(sfx_swtchn);
+		 sel=ITEM_SAVE;                /* before drawMain: it ends with the skull */
 		 drawMain();
-		 sel=ITEM_SAVE;
-		 pageSkull();
 		}
 	    }
 	 else if (sel==ITEM_RESTART)

@@ -878,13 +878,30 @@ unsigned short getLight(char vlight,
      {r=(r*(16-(((16-worldTint[0])*k)/(WORLDTINT_NM-1))))>>4;
       g=(g*(16-(((16-worldTint[1])*k)/(WORLDTINT_NM-1))))>>4;
       b=(b*(16-(((16-worldTint[2])*k)/(WORLDTINT_NM-1))))>>4;
+      g+=((31-g)*k*WORLDTINT_GLOW)/((WORLDTINT_NM-1)*16);   /* the pool lights it (UTIL.H) */
      }
  }
  for (i=0;i<nmWallLights;i++)
     lightApply(wallLightIdx[i],pos,&r,&g,&b);
- if (r>31) r=31;
- if (g>31) g=31;
- if (b>31) b=31;
+/* GCC14: THE CEILING IS TAKEN ON THE WHOLE COLOUR, NOT ON EACH CHANNEL.  What reaches the VDP1
+   is a GOURAUD word -- an offset, 16 being the surface's own colour -- so a tint is carried by
+   the DIFFERENCE between the three channels and by nothing else: the nukage's green is
+   (13,16,11), three under the neutral in red and five in blue.  Clamping each channel on its own
+   let a lamp push the highest to 31 and hold it there while the others caught up, the difference
+   closed, and a green wall under a light came out WHITE (reported 2026-09-23).
+   Taking the overflow off all three keeps every difference exactly, which is the hue, and costs
+   what the three tests cost anyway.  A colour bright enough to drive a channel under zero has
+   nothing left to say. */
+ {int m=(r>g)? r: g;
+  if (b>m)
+     m=b;
+  if (m>31)
+     {m-=31;
+      r-=m; if (r<0) r=0;
+      g-=m; if (g<0) g=0;
+      b-=m; if (b<0) b=0;
+     }
+ }
  return RGB(r,g,b);
 }
 
@@ -908,13 +925,21 @@ unsigned short sgetLight(char vlight,
      {r=(r*(16-(((16-worldTint[0])*k)/(WORLDTINT_NM-1))))>>4;
       g=(g*(16-(((16-worldTint[1])*k)/(WORLDTINT_NM-1))))>>4;
       b=(b*(16-(((16-worldTint[2])*k)/(WORLDTINT_NM-1))))>>4;
+      g+=((31-g)*k*WORLDTINT_GLOW)/((WORLDTINT_NM-1)*16);   /* the pool lights it (UTIL.H) */
      }
  }
  for (i=0;i<snmWallLights;i++)
     lightApply(swallLightIdx[i],pos,&r,&g,&b);
- if (r>31) r=31;
- if (g>31) g=31;
- if (b>31) b=31;
+ {int m=(r>g)? r: g;              /* the whole colour, as getLight above */
+  if (b>m)
+     m=b;
+  if (m>31)
+     {m-=31;
+      r-=m; if (r<0) r=0;
+      g-=m; if (g<0) g=0;
+      b-=m; if (b<0) b=0;
+     }
+ }
  return RGB(r,g,b);
 }
 
@@ -3904,16 +3929,44 @@ void wallsQueueJoin(void)
 
 /* Joins the traversal started in the tail.  Call BEFORE drawWalls -- and before freeing the
    level, or the slave reads geometry reloaded under it. */
+/* GCC14: kicks the SLAVE lost, and frames given up because of them.  The slave leaves its wait
+   and clears its own capture flag one instruction later; a kick that lands in that window is
+   gone, and both sides then wait for each other for ever -- a dead console, with the crash
+   handler's dump saying `IN ROOT/WALLS/SLAVE WAIT` against `SLAVE JOB 0 STEP 1` (seen
+   2026-09-23).  The wait below is bounded instead, and a lost kick costs an image. */
+int pipeLost;
+
 void wallsPipeJoin(void)
 {
 #if WALLPIPE
- int i=0;
+ int i=0,again=0;
+ Uint32 t;
  if (!pipeInFlight)
     {pipeSpin=-1;
      return;
     }
+ t=vtimer;
  while (!(*FTCSR & 0x80))
-    i++;
+    {i++;
+     if (vtimer-t<4)                    /* four fields is far past any traversal */
+	   continue;
+     t=vtimer;
+     if (SLAVESTEP!=1)
+	   continue;                       /* it IS working, just slowly: keep waiting */
+     /* parked at its wait: it never started this job, so nothing of ours is being written */
+     pipeLost++;
+     if (++again<=2)
+	   {*(Uint16 volatile *)0x21000000=0xffff;      /* wake it again */
+	    continue;
+	   }
+     pipeInFlight=0;                    /* give the image up rather than the game */
+     slaveJob=0;
+     pipeSpin=-2;
+#ifdef STATUSTEXT
+     changeMessage("SLAVE KICK LOST");
+#endif
+     return;
+    }
  *FTCSR=0x0;
  /* The slave wrote sectorDraw[], updateList[], drawList[], doorwayCache and tLightPos
     through NORMAL addresses, not the cache-through alias.  The master's cache still holds
