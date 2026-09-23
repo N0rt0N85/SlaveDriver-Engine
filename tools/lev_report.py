@@ -28,9 +28,12 @@ TROIS FAMILLES, ET LA DEUXIEME EST LA RAISON D'ETRE DU FICHIER.
 470 / 896 / 1321 cellules viennent d'un build ASSERT et sur-estiment la pente d'environ 1,5x en
 NDEBUG. La MESURE DU 23-09 faite par cet outil le confirme par l'autre bout : passes a la meme
 moulinette, les 24 niveaux retail donnent une mediane de cone allant de 452 (TOMBEND) a 1441
-(SETARENA), mediane des medianes 928 -- autrement dit PowerSlave commercial serait declare
-majoritairement sous les 30 images par seconde par ces paliers. Ils ne sont donc pas un seuil de
-recette ; ils situent. Le vrai etalon est la DISTRIBUTION RETAIL, et c'est pour ca que `--etalon`
+(SETARENA), mediane des medianes 920 -- autrement dit PowerSlave commercial serait declare
+majoritairement sous les 30 images par seconde par ces paliers. (920 est la SUPERIEURE des deux
+valeurs centrales, 894 et 920 : c'est la convention `t[n//2]` que suivent tous les outils qui lisent
+cet etalon. La mediane vraie, moyenne des deux, vaut 907 ; la moyenne 886. Nommer la convention
+evite d'ecrire un nombre que l'etalon ne peut pas produire -- il y en avait un ici, 928, corrige le
+24-09.) Ils ne sont donc pas un seuil de recette ; ils situent. Le vrai etalon est la DISTRIBUTION RETAIL, et c'est pour ca que `--etalon`
 existe : la question utile n'est pas « suis-je au-dessus de 470 » mais « suis-je plus cher que le
 pire niveau qui a ete presse sur un CD ».
 

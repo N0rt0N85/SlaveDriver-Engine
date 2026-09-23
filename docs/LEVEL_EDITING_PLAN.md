@@ -287,13 +287,52 @@ outil de contrôle — celui qui apprend à l'auteur à l'ignorer. Les bornes d�
 **confrontées** à celles qu'on re-dérive de l'étalon, ce qui détecte un calque fabriqué contre un
 étalon périmé.
 
-**Mesure 2026-09-23 : 9 cartes (E1M1..E1M9) × 2 métriques, zéro défaut ; banc de mutations
-15 fautes sur 15 en `vue`, 12 à 13 sur autant en `propre`** (le banc écarte les mutations sans
-objet, par exemple les marqueurs quand il n'y en a pas), chacune rattrapée par la bonne famille, et
-les quatre combinaisons de `--garder-sols` / `--plafonds` exercées. Le banc commence par exiger qu'un
-aller-retour *sans* mutation repasse, sinon il mesurerait son propre écrivain.
+**Mesure 2026-09-24, après les correctifs de §4.7 ter : 9 cartes (E1M1..E1M9) × 2 métriques, zéro
+défaut ; banc de mutations 15 fautes sur 15 en `vue` — familles A B C D E — et 12 sur 12 en
+`propre`, où la famille E n'a rien à éprouver et où le banc le dit** au lieu de laisser croire le
+contraire. Les quatre combinaisons de `--garder-sols` / `--plafonds` sont exercées ; `--plafonds`
+ajoute une quatorzième mutation, un plafond qui ment sur son tag, et elle tire. Le banc commence par
+exiger qu'un aller-retour *sans* mutation repasse, sinon il mesurerait son propre écrivain.
 
-**Trois défauts réels que ce dispositif a trouvés, et qu'une relecture n'aurait pas donnés :**
+### 4.7 ter Ce qu'une relecture contradictoire a trouvé *après* le premier commit
+
+Quatre relecteurs indépendants ont été lancés sur les trois outils avant le `push`, chaque trouvaille
+passant ensuite devant un réfutateur chargé de la démolir. Treize verdicts, **huit réfutations** — et
+**cinq défauts réels**, dont deux dans le vérificateur lui-même, c'est-à-dire dans la pièce qui n'a
+pas le droit de mentir. Aucun des cinq ne se voyait à la relecture ordinaire ; les deux plus graves
+ont été reproduits en direct avant d'être crus.
+
+1. ⚠ **Le vérificateur ne regardait pas le plafond.** Sous `--plafonds`, le plafond devient un
+   quatrième canal de mesure, mais la famille B cesse de le contrôler dès que le drapeau est posé et
+   la famille C ne lisait que le sol. Mesuré : repeindre **les 78 plafonds non-ciel d'E1M1 en vert**
+   laissait imprimer « aucun défaut » et sortir avec le code 0, pendant qu'un auteur parcourant la
+   vue 3D lisait sa pièce la plus chère comme bon marché. Les deux canaux sont maintenant re-dérivés.
+2. ⚠ **La famille A ne vérifiait pas que les aplats étaient *entre* `F_START` et `F_END`** — or
+   c'est le seul critère qui compte : un aplat rangé hors de la plage n'est pas un flat pour
+   l'éditeur, il est ignoré, et tous les sols s'affichent comme textures manquantes.
+3. **La légende des couleurs mentait dans deux modes sur trois.** Elle était écrite une fois pour
+   toutes dans le vocabulaire des quantiles du *cône* (« entre médiane et p90 retail »), alors que
+   `--metrique propre` tire ses bornes du plus gros *secteur* retail et `--bandes paliers` de la loi
+   de coût. Le rapport imprimait donc « au-dessus de la médiane retail » pour des pièces qui étaient
+   dessous. La légende se dérive désormais des mêmes trois nombres que la peinture.
+4. **`lev_report.py` annonçait une médiane des médianes de 928** que l'étalon ne peut produire
+   d'aucune façon : la vraie vaut 907, la convention `t[n//2]` que suivent les outils donne 920, la
+   moyenne 886. Corrigé en 920, avec la convention nommée.
+5. **Le vérificateur plantait au lieu de diagnostiquer.** Passé un `geom3d.json` d'une autre carte,
+   il enregistrait bien « ils ne viennent pas de la même conversion » puis continuait et levait une
+   `IndexError` — la trace remplaçait le diagnostic. Il s'arrête maintenant proprement.
+
+Deux durcissements sont venus par la même passe, sans qu'un défaut vivant ait été prouvé : la garde
+« ne pas écrire sur le WAD source » compare désormais des chemins `normcase` (sous Windows
+`doom1.wad` et `DOOM1.WAD` sont le même fichier), et le `.bat` ne préfère `%UDB%` que si cette
+variable désigne un exécutable existant.
+
+Enfin, **le banc ne coupe plus en silence** : une mutation sans objet est écartée *et nommée*, le
+rapport imprime les familles réellement exercées et avertit de celles qui ne le sont pas. En
+`--metrique propre` il n'y a pas de marqueur, donc la famille E n'est pas éprouvée — le score plein
+ne la couvrait pas, et se lisait pourtant comme si.
+
+**Trois défauts réels que le banc de mutations avait trouvés avant elle :**
 
 1. Un contrôle de bandes **ordinal** — frontières relues dans le calque plutôt que re-dérivées —
    laisse passer un relabelage cohérent. C'est **E1M9** qui l'a montré : son pire cône vaut 830,

@@ -21,8 +21,10 @@ CE QUE LE CALQUE PORTE -- TROIS CANAUX, LA MEME MESURE :
                   calque a le droit de perdre ses vraies textures. Le plan est corrige en ce sens.)
   * `tag`      -> le NOMBRE EXACT de cellules. L'auteur clique un secteur et lit la valeur, au lieu
                   de deviner une nuance de gris. -1 = pas de mesure (voir plus bas).
-Les autres champs (hauteurs, plafond, type) et TOUS les autres lumps sont copies OCTET POUR OCTET :
-`verif_udb.py` le verifie, et c'est ce qui rend le calque reconnaissable comme etant sa carte.
+Les autres champs (hauteurs, plafond, type) et tous les autres lumps sont copies OCTET POUR OCTET,
+et `verif_udb.py` le verifie. UNE SEULE EXCEPTION, et il faut la nommer : avec `--pire N` (8 par
+defaut) le lump THINGS recoit N objets EN PLUS a la fin, aux pires positions debout ; il n'est donc
+pas identique, il est prefixe par l'original. C'est ce que verifie la famille E, pas la famille A.
 
 LES DEUX MESURES, ET POURQUOI LA VUE EST CELLE PAR DEFAUT.
   * `--metrique vue` (defaut) : le PIRE cone de `cout.carte` parmi les positions debout du secteur,
@@ -105,19 +107,51 @@ TAG_NON_MESURE = -1
 MARQUEUR_TYPE = 32000   # type d'objet inconnu : UDB le dessine ET le signale dans son verificateur
 MARQUEUR_FLAGS = 7      # les trois niveaux de difficulte, pour qu'aucun filtre ne le cache
 
-# Les aplats livres dans le PWAD : (nom, rvb vise, legende). L'index de palette retenu est le plus
-# proche dans le PLAYPAL du WAD source -- la palette Doom n'a ni bleu franc ni magenta, donc le
-# rapport imprime l'index reellement choisi plutot que de laisser croire a la couleur visee.
+# Les aplats livres dans le PWAD : (nom, rvb vise). L'index de palette retenu est le plus proche
+# dans le PLAYPAL du WAD source -- la palette Doom n'a ni bleu franc ni magenta, donc le rapport
+# imprime l'index reellement choisi plutot que de laisser croire a la couleur visee.
 APLATS = (
-    ("BUDGET0", (0, 168, 0), "vert    : sous la mediane retail"),
-    ("BUDGET1", (216, 200, 0), "jaune   : entre mediane et p90 retail"),
-    ("BUDGET2", (232, 120, 0), "orange  : entre p90 et max retail"),
-    ("BUDGET3", (216, 0, 0), "rouge   : au-dela du pire endroit du retail median"),
-    ("BUDGETNA", (48, 48, 216), "bleu    : aucune position debout (maille de 64 u)"),
-    ("BUDGETXX", (200, 0, 200), "magenta : secteur absent du .LEV (supprime a la conversion)"),
+    ("BUDGET0", (0, 168, 0)),
+    ("BUDGET1", (216, 200, 0)),
+    ("BUDGET2", (232, 120, 0)),
+    ("BUDGET3", (216, 0, 0)),
+    ("BUDGETNA", (48, 48, 216)),
+    ("BUDGETXX", (200, 0, 200)),
 )
 APL_NA = 4
 APL_XX = 5
+
+LEGENDE_NA = "bleu    : aucune position debout (maille de 64 u)"
+LEGENDE_XX = "magenta : secteur absent du .LEV (supprime a la conversion)"
+
+
+def legendes(metrique, bandes, b):
+    """Ce que chaque couleur VEUT DIRE, construit depuis les bornes reellement employees.
+
+    ⚠ CE N'ETAIT PAS UNE CONSTANTE, ET LA CROIRE CONSTANTE ETAIT UN MENSONGE (defaut trouve le
+    24-09 par relecture contradictoire). Les quatre legendes etaient ecrites une fois pour toutes
+    dans le style « entre mediane et p90 retail », qui decrit les quantiles du CONE. Or ces
+    quantiles ne servent qu'en `--metrique vue` : `propre` tire ses bornes du plus gros SECTEUR
+    retail (min / mediane / max) et `--bandes paliers` de la loi de cout. Le rapport imprimait donc,
+    juste sous une ligne annoncant « <=166 / <=306 / <=1147 ... plus gros secteur », une legende
+    parlant de p90 -- deux quantiles differents de deux populations differentes, colles l'un sous
+    l'autre. L'auteur lisait « au-dessus de la mediane retail » pour des pieces qui etaient
+    dessous. La legende se derive maintenant des memes trois nombres que la peinture."""
+    if bandes == "paliers":
+        f = [fps for _s, fps in cout.PALIERS]
+        return ("vert    : <= %d cellules, le palier des %d images" % (b[0], f[0]),
+                "jaune   : %d a %d, entre les paliers %d et %d images" % (b[0] + 1, b[1], f[0], f[1]),
+                "orange  : %d a %d, entre les paliers %d et %d images" % (b[1] + 1, b[2], f[1], f[2]),
+                "rouge   : au-dela de %d, sous le palier des %d images" % (b[2], f[2]))
+    if metrique == "vue":
+        return ("vert    : <= %d, sous la mediane des medianes de cone retail" % b[0],
+                "jaune   : %d a %d, jusqu'a la mediane des p90 retail" % (b[0] + 1, b[1]),
+                "orange  : %d a %d, jusqu'a la mediane des max retail" % (b[1] + 1, b[2]),
+                "rouge   : au-dela de %d, au-dela du pire endroit du retail median" % b[2])
+    return ("vert    : <= %d, sous le plus petit des plus gros secteurs retail" % b[0],
+            "jaune   : %d a %d, jusqu'a la mediane des plus gros secteurs" % (b[0] + 1, b[1]),
+            "orange  : %d a %d, jusqu'au plus gros secteur retail connu" % (b[1] + 1, b[2]),
+            "rouge   : au-dela de %d, plus gros qu'aucun secteur retail" % b[2])
 
 TEXTE = """CALQUE DE BUDGET -- FICHIER JETABLE, NE PAS JOUER, NE PAS EDITER.
 
@@ -389,14 +423,18 @@ def ecrire_bat(chemin_wad, mapname, wad_source, gameconfig, builder):
     palette ». Le `.bat` passe donc `-RESOURCE WAD` explicitement. Syntaxe et jetons pris dans la
     source d'UDB (General.cs:845-950) : -CFG, -MAP, -RESOURCE <WAD|DIR|PK3> <chemin>."""
     p = os.path.splitext(chemin_wad)[0] + ".bat"
+    # La variable UDB ne l'emporte que si elle DESIGNE QUELQUE CHOSE. Preferer aveuglement %UDB%
+    # au chemin qu'on vient de valider fait echouer le lanceur sur une variable perimee, avec en
+    # prime un message qui conseille de poser UDB... alors qu'elle est posee. Le chemin valide a
+    # la generation est donc le repli, et il est toujours essaye.
     txt = (
         "@echo off\r\n"
         "rem Ouvre le calque de budget dans Ultimate Doom Builder, deja configure.\r\n"
         "rem Calque JETABLE : son tag porte des cellules, pas un numero de tag.\r\n"
-        'if not "%%UDB%%"=="" set BUILDER=%%UDB%%\r\n'
-        'if "%%BUILDER%%"=="" set BUILDER=%s\r\n'
-        'if not exist "%%BUILDER%%" (echo Builder.exe introuvable : posez la variable UDB '
-        '& pause & exit /b 1)\r\n'
+        'set BUILDER=%s\r\n'
+        'if not "%%UDB%%"=="" if exist "%%UDB%%" set BUILDER=%%UDB%%\r\n'
+        'if not exist "%%BUILDER%%" (echo Builder.exe introuvable en "%%BUILDER%%" : '
+        'posez la variable UDB sur un Builder.exe existant. & pause & exit /b 1)\r\n'
         'start "" "%%BUILDER%%" "%s" -MAP %s -CFG %s -RESOURCE WAD "%s"\r\n'
         % (builder, os.path.abspath(chemin_wad), mapname.upper(), gameconfig,
            os.path.abspath(wad_source)))
@@ -453,7 +491,11 @@ def main(argv=None):
     # les ouvre l'un apres l'autre, donc un nom commun ferait silencieusement ecraser le premier.
     out = a.out or os.path.join(ROOT, "build", "udb",
                                 "%s_%s.wad" % (a.map.upper(), a.metrique.upper()))
-    if os.path.abspath(out) == os.path.abspath(a.wad):
+    # `normcase` et non `abspath` seul : sous Windows `doom1.wad` et `DOOM1.WAD` sont le MEME
+    # fichier, et une garde sensible a la casse sur un systeme qui ne l'est pas ne garde rien --
+    # elle laisserait ecraser le WAD source de l'auteur, qui est justement le seul fichier
+    # irremplacable de la chaine. (Defaut trouve le 24-09 par relecture contradictoire.)
+    if os.path.normcase(os.path.abspath(out)) == os.path.normcase(os.path.abspath(a.wad)):
         raise SystemExit("refus d'ecrire sur le WAD source : le calque est un fichier A PART.")
 
     w = wadmod.Wad(a.wad)
@@ -476,8 +518,8 @@ def main(argv=None):
     abs_set = set(absents)
 
     pal = w.playpal(0)
-    noms = [nm for nm, _rgb, _leg in APLATS]
-    idxs = [index_palette(pal, rgb) for _nm, rgb, _leg in APLATS]
+    noms = [nm for nm, _rgb in APLATS]
+    idxs = [index_palette(pal, rgb) for _nm, rgb in APLATS]
     aplats = [(nm, bytes([ix]) * 4096) for nm, ix in zip(noms, idxs)]
 
     sect, _n = construire_secteurs(par_nom["SECTORS"], valeurs, abs_set, b, plein,
@@ -513,10 +555,11 @@ def main(argv=None):
             na += 1
         else:
             tot[d] += 1
+    leg = legendes(a.metrique, a.bandes, b)
     for i in range(4):
-        print("  %-9s idx %3d  %-52s %3d secteurs" % (noms[i], idxs[i], APLATS[i][2], tot[i]))
-    print("  %-9s idx %3d  %-52s %3d secteurs" % (noms[APL_NA], idxs[APL_NA], APLATS[APL_NA][2], na))
-    print("  %-9s idx %3d  %-52s %3d secteurs" % (noms[APL_XX], idxs[APL_XX], APLATS[APL_XX][2],
+        print("  %-9s idx %3d  %-62s %3d secteurs" % (noms[i], idxs[i], leg[i], tot[i]))
+    print("  %-9s idx %3d  %-62s %3d secteurs" % (noms[APL_NA], idxs[APL_NA], LEGENDE_NA, na))
+    print("  %-9s idx %3d  %-62s %3d secteurs" % (noms[APL_XX], idxs[APL_XX], LEGENDE_XX,
                                                   len(absents)))
     if a.metrique == "vue" and na:
         # A DIRE A HAUTE VOIX. La maille de 64 u d'`ordre.PAS` rate les secteurs etroits -- couloirs,

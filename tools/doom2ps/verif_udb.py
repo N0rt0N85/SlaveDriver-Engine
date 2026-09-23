@@ -13,18 +13,25 @@ l'auteur ne peut pas voir -- il croirait sa salle bon marche.
 LES CINQ FAMILLES :
   A. LE CALQUE EST UNE COPIE. Tout lump de carte autre que SECTORS et THINGS est identique OCTET
      POUR OCTET a celui du WAD source. C'est la garantie que l'auteur reconnait sa carte et que le
-     calque ne peut pas lui faire croire a une geometrie qu'il n'a pas dessinee.
+     calque ne peut pas lui faire croire a une geometrie qu'il n'a pas dessinee. S'y ajoute la
+     conformite du fichier au format, et le fait que les six aplats soient ENTRE `F_START` et
+     `F_END` -- verifier qu'ils existent quelque part ne prouvait rien, un aplat range hors de la
+     plage n'est pas un flat pour l'editeur et tous les sols s'afficheraient comme manquants.
   B. SEULS TROIS CHAMPS BOUGENT. Dans SECTORS : hauteurs de sol et de plafond et type de secteur
      sont intacts, et le plafond aussi tant que `--plafonds` n'est pas demande. Un F_SKY1 n'est
      JAMAIS repeint, meme avec `--plafonds`.
-  C. LES TROIS CANAUX DISENT LA MEME CHOSE. Depuis le seul `tag`, l'aplat ET la luminosite sont
-     RE-DERIVES ici (deuxieme ecriture de `bornes` et de la rampe 48..255) et compares. S'y
-     ajoutent trois controles de forme : intervalles de tag par aplat SEPARANTS, luminosite
-     croissante avec le tag, et un tag a -1 qui doit avoir un aplat NA ou XX et une luminosite
-     nulle. ⚠ Les trois premiers ne suffisaient PAS : relire les frontieres dans le calque au lieu
-     de les re-deriver ne donne qu'un controle ORDINAL, et sur E1M9 -- dont le pire cone, 830, tient
-     sous la premiere borne, donc dont tous les secteurs sont verts -- un relabelage coherent passe
-     inapercu. C'est le banc de mutations qui l'a montre, pas la relecture du code.
+  C. LES CANAUX DISENT TOUS LA MEME CHOSE. Depuis le seul `tag`, l'aplat ET la luminosite sont
+     RE-DERIVES ici (deuxieme ecriture de `bornes` et de la rampe 48..255) et compares. Il y a DEUX
+     canaux d'aplat, pas un : le sol, et le PLAFOND des que `--plafonds` est demande -- les deux
+     sont re-derives, et un tag a -1 doit s'accompagner d'un aplat NA ou XX et d'une luminosite
+     nulle sur chacun. S'y ajoutent deux controles de forme, intervalles de tag SEPARANTS et
+     luminosite croissante avec le tag, qui sont aujourd'hui redondants avec la re-derivation et ne
+     sont gardes que parce qu'ils resteraient valables si l'echelle changeait.
+     ⚠ DEUX TROUS REELS ONT ETE BOUCHES ICI, ET AUCUN N'AURAIT ETE TROUVE PAR RELECTURE :
+     relire les frontieres dans le calque au lieu de les re-deriver ne donne qu'un controle
+     ORDINAL, et sur E1M9 -- pire cone 830, donc tout le niveau sous la premiere borne -- un
+     relabelage coherent passe inapercu ; et le canal PLAFOND n'etait re-derive par personne, si
+     bien que repeindre les 78 plafonds non-ciel d'E1M1 laissait imprimer « aucun defaut ».
   D. LA MESURE EST LA BONNE. Les cellules par secteur sont RE-DERIVEES ici depuis le `.LEV`, par
      une deuxieme ecriture de la regle (grille des murs plats + faces du maillage, WALLS.C:1832-1837
      et cout.py), puis re-agregees par `doom_sector`. Pour `--metrique propre` la comparaison est
@@ -44,13 +51,19 @@ quinzaine de facons -- un octet de LINEDEFS, un aplat tronque ou bariole, une ha
 ciel repeint, une luminosite hors bande puis decalee d'un seul cran, une couleur qui ment sur son
 tag, un tag decale d'une unite, des bornes declarees qui ne sont plus celles de l'etalon, un
 marqueur hors carte -- et exige que la BONNE famille proteste a chaque fois.
-DEUX REGLES QUE LE BANC S'IMPOSE, apprises en le faisant tourner :
+TROIS REGLES QUE LE BANC S'IMPOSE, apprises en le faisant tourner :
   * une mutation doit CHANGER quelque chose. Repeindre en vert un secteur deja vert n'est pas une
     faute, et se lisait comme un echec de la verification (vu sur E1M9, dont le pire cone tient
     sous la premiere borne, donc dont tous les secteurs sont verts). Celle qui repeint le pire
     secteur choisit maintenant un aplat different du sien.
   * la famille attendue depend du MODE. Toucher un sol est une incoherence entre canaux (C) en
     temps normal, mais une atteinte a la copie (B) sous `--garder-sols`.
+  * AUCUNE COUPE SILENCIEUSE. Une mutation sans objet -- les deux mutations de marqueur sur un
+    calque qui n'en porte aucun, le ciel repeint sur une carte sans F_SKY1 -- est ECARTEE et
+    NOMMEE, et le rapport imprime les familles reellement exercees puis avertit de celles qui ne
+    le sont pas. Le banc imprimait auparavant un score plein en n'exercant pas la famille E, ce
+    qui se lit comme « les cinq familles sont prouvees » : une coupe muette dans un banc de preuve
+    est pire que pas de banc.
 L'aller-retour sans mutation doit d'abord repasser, sinon le banc mesurerait son propre ecrivain.
 
 Usage : python tools\\doom2ps\\verif_udb.py --calque build\\udb\\E1M1_BUDGET.wad
@@ -280,6 +293,18 @@ def verifier(a, entrees=None):
     for m in ("F_START", "F_END", "BUDGET"):
         if m not in noms_cal:
             ko("A", "lump %s absent" % m)
+    # ET ILS DOIVENT ETRE ENTRE LES DEUX MARQUEURS. Verifier que F_START, F_END et les six aplats
+    # existent quelque part dans le repertoire ne prouve RIEN : un aplat range hors de la plage
+    # n'est pas un flat pour l'editeur, il est ignore, et tous les sols du calque s'affichent comme
+    # textures manquantes. C'est le seul critere qui compte, et c'est celui qui manquait.
+    # (Defaut trouve le 24-09 par relecture contradictoire.)
+    if "F_START" in noms_cal and "F_END" in noms_cal:
+        d0, d1 = noms_cal.index("F_START"), noms_cal.index("F_END")
+        if d1 < d0:
+            ko("A", "F_END precede F_START : la plage de flats est vide")
+        for nm in NOMS:
+            if nm in noms_cal and not (d0 < noms_cal.index(nm) < d1):
+                ko("A", "aplat %s hors de la plage F_START..F_END : l'editeur ne le verra pas" % nm)
     plats = dict(dc)
     for nm in NOMS:
         if nm not in plats:
@@ -298,7 +323,14 @@ def verifier(a, entrees=None):
     cel = cellules_par_secteur(S, W)
     dsec = json.load(open(a.geom, encoding="utf-8"))["doom_sector"]
     if len(dsec) != len(S):
-        ko("D", "geom3d (%d) et .LEV (%d) ne s'accordent pas" % (len(dsec), len(S)))
+        # ET ON S'ARRETE LA. Continuer indexait `dsec[i]` sur `range(len(S))` et levait une
+        # IndexError AVANT que le defaut qu'on vient d'enregistrer ne soit imprime : la trace
+        # remplacait le diagnostic, et `udb_budget.agreger` nommait mieux le probleme que son
+        # propre verificateur. (Defaut trouve le 24-09 par relecture contradictoire.)
+        ko("D", "le geom3d annonce %d secteurs, le .LEV en a %d : ils ne viennent pas de la meme "
+                "conversion" % (len(dsec), len(S)))
+        return defauts, {"secteurs": len(cal.get("SECTORS", b"")) // 26, "lumps": len(cal_l),
+                         "marqueurs": 0, "absents": 0, "abandon": True}
 
     so = secteurs(src["SECTORS"])
     co = secteurs(cal.get("SECTORS", b""))
@@ -339,16 +371,31 @@ def verifier(a, entrees=None):
     par_bande = {}
     for k in range(n):
         lt, tg = co[k][4], co[k][6]
-        nm = None if a.garder_sols else _nom8(co[k][2])
+        # LES CANAUX D'APLAT DU SECTEUR, ET IL Y EN A DEUX. Le sol, sauf sous `--garder-sols` ou il
+        # n'en porte plus ; et LE PLAFOND des que `--plafonds` est demande et que la source n'est
+        # pas un ciel -- `udb_budget.construire_secteurs` y ecrit alors le MEME aplat que le sol.
+        # ⚠ Ce second canal n'etait re-derive par personne : la famille B cesse de regarder le
+        # plafond des que `--plafonds` est pose, et la famille C ne lisait que le sol. Mesure du
+        # 24-09 : repeindre les 78 plafonds non-ciel d'E1M1 en BUDGET0 laissait la verification
+        # imprimer « aucun defaut » et sortir avec 0, alors que l'auteur parcourant la vue 3D
+        # lisait sa piece la plus chere comme bon marche. Trou trouve par relecture contradictoire.
+        canaux = []
+        if not a.garder_sols:
+            canaux.append(("sol", _nom8(co[k][2])))
+        if a.plafonds and k < len(so) and _nom8(so[k][3]) != "F_SKY1":
+            canaux.append(("plafond", _nom8(co[k][3])))
+        nm = canaux[0][1] if canaux else None
         if tg == TAG_NON_MESURE:
-            if nm is not None and nm not in ("BUDGETNA", "BUDGETXX"):
-                ko("C", "secteur %d : tag -1 mais aplat %s" % (k, nm))
+            for quoi, c in canaux:
+                if c not in ("BUDGETNA", "BUDGETXX"):
+                    ko("C", "secteur %d : tag -1 mais %s peint %s" % (k, quoi, c))
+                if k not in absents and c == "BUDGETXX":
+                    ko("C", "secteur %d : %s peint XX alors qu'il est present dans le .LEV"
+                       % (k, quoi))
+                if k in absents and c != "BUDGETXX":
+                    ko("C", "secteur %d : absent du .LEV mais %s peint %s" % (k, quoi, c))
             if lt != 0:
                 ko("C", "secteur %d : non mesure mais luminosite %d" % (k, lt))
-            if k not in absents and nm == "BUDGETXX":
-                ko("C", "secteur %d : peint XX alors qu'il est present dans le .LEV" % k)
-            if k in absents and nm is not None and nm != "BUDGETXX":
-                ko("C", "secteur %d : absent du .LEV mais peint %s" % (k, nm))
             continue
         if k in absents:
             ko("C", "secteur %d : absent du .LEV mais porte un tag de %d" % (k, tg))
@@ -357,15 +404,15 @@ def verifier(a, entrees=None):
         elif lt != lum_de(tg, B[2]):
             ko("C", "secteur %d : luminosite %d, re-derivee %d pour un tag de %d"
                % (k, lt, lum_de(tg, B[2]), tg))
-        if nm is not None:
-            if nm in ("BUDGETNA", "BUDGETXX"):
-                ko("C", "secteur %d : mesure (%d) mais peint %s" % (k, tg, nm))
-            else:
-                attendu = NOMS[bande_de(tg, B)]
-                if nm != attendu:
-                    ko("C", "secteur %d : tag %d peint %s, re-derive %s (bornes %d/%d/%d)"
-                       % (k, tg, nm, attendu, B[0], B[1], B[2]))
-                par_bande.setdefault(nm, []).append(tg)
+        attendu = NOMS[bande_de(tg, B)]
+        for quoi, c in canaux:
+            if c in ("BUDGETNA", "BUDGETXX"):
+                ko("C", "secteur %d : mesure (%d) mais %s peint %s" % (k, tg, quoi, c))
+            elif c != attendu:
+                ko("C", "secteur %d : tag %d, %s peint %s, re-derive %s (bornes %d/%d/%d)"
+                   % (k, tg, quoi, c, attendu, B[0], B[1], B[2]))
+        if nm is not None and nm not in ("BUDGETNA", "BUDGETXX"):
+            par_bande.setdefault(nm, []).append(tg)
     ordonnees = [nm for nm in NOMS[:4] if nm in par_bande]
     for i in range(len(ordonnees) - 1):
         if max(par_bande[ordonnees[i]]) >= min(par_bande[ordonnees[i + 1]]):
@@ -510,17 +557,35 @@ def mutations(entrees, a):
         ("C", "des bornes declarees qui ne sont plus celles de l'etalon",
          _lump(E, "BUDGET", lambda d: d.replace(b"bornes=", b"bornes=9"))),
     ]
+    plafonds = [k for k in range(len(co)) if _nom8(co[k][3]).startswith("BUDGET")]
+    ecartees = []
     if ciels:
         out.append(("B", "un plafond de ciel repeint", _sect(E, ciels[0], 3, b"BUDGET3\0")))
+    else:
+        ecartees.append(("B", "un plafond de ciel repeint : la carte n'a aucun F_SKY1"))
     if nonmes:
         out.append(("C", "un secteur non mesure qui s'allume", _sect(E, nonmes[0], 4, 120)))
+    else:
+        ecartees.append(("C", "un secteur non mesure qui s'allume : tous sont mesures"))
+    if a.plafonds and plafonds:
+        out.append(("C", "un plafond peint qui ment sur son tag",
+                    _sect(E, plafonds[0], 3, b"BUDGET0\0"
+                          if _nom8(co[plafonds[0]][3]) != "BUDGET0" else b"BUDGET3\0")))
+    elif a.plafonds:
+        ecartees.append(("C", "un plafond peint : aucun plafond ne porte d'aplat"))
     if a.pire:
         out.append(("E", "un marqueur hors de la carte",
                     _lump(E, "THINGS", lambda d: d[:-10] + struct.pack(
                         "<5h", 30000, 30000, 0, MARQUEUR_TYPE, 7))))
         out.append(("E", "un marqueur d'un autre type",
                     _lump(E, "THINGS", lambda d: d[:-4] + struct.pack("<2h", 7, 7))))
-    return out
+    else:
+        # ⚠ IL FAUT LE DIRE. Sans marqueur il n'y a rien a abimer, donc la famille E n'est PAS
+        # exercee -- et le banc imprimait tout de meme un score plein, ce qui se lit comme « les
+        # cinq familles sont prouvees ». Une coupe silencieuse dans un banc de preuve est pire que
+        # pas de banc. (Defaut trouve le 24-09 par relecture contradictoire.)
+        ecartees.append(("E", "les deux mutations de marqueur : le calque n'en porte aucun"))
+    return out, ecartees
 
 
 def main(argv=None):
@@ -563,7 +628,10 @@ def main(argv=None):
     print("%s contre %s / %s : %d secteurs, %d lumps de carte, %d marqueurs"
           % (os.path.basename(a.calque), os.path.basename(a.wad), a.map.upper(),
              info["secteurs"], info["lumps"], info["marqueurs"]))
-    if "cone" in info:
+    if info.get("abandon"):
+        print("   verification ABANDONNEE : les entrees ne vont pas ensemble, rien d'autre n'a"
+              " pu etre juge")
+    elif "cone" in info:
         print("   vue : %d secteurs Doom sans position debout, %d absents du .LEV, pire cone %d"
               % (info["sans_position"], info["absents"], info["cone"]))
     else:
@@ -584,7 +652,7 @@ def main(argv=None):
             return 1
         print("banc de mutations :")
         rate = 0
-        muts = mutations(entrees, a)
+        muts, ecartees = mutations(entrees, a)
         for fam, nom, e in muts:
             d, _ = verifier(a, e)
             vu = [x for x in d if x.startswith(fam + " ")]
@@ -593,7 +661,18 @@ def main(argv=None):
             else:
                 rate += 1
                 print("  %s RATE %-45s -> %s" % (fam, nom, d[0] if d else "rien"))
-        print("%d/%d mutations rattrapees par la bonne famille" % (len(muts) - rate, len(muts)))
+        for fam, pourquoi in ecartees:
+            print("  %s --   %s" % (fam, pourquoi))
+        exercees = sorted({f for f, _n, _e in muts})
+        print("%d/%d mutations rattrapees par la bonne famille ; familles exercees : %s"
+              % (len(muts) - rate, len(muts), " ".join(exercees) or "aucune"))
+        manquantes = [f for f in "ABCDE" if f not in exercees]
+        if manquantes:
+            # Le score plein ne vaut QUE pour les familles reellement mises a l'epreuve. Le dire
+            # ici, et non en note de bas de page, est la seule facon que le lecteur ne prenne pas
+            # « 13/13 » pour « les cinq familles sont prouvees sur ce calque ».
+            print("  ATTENTION : famille(s) %s NON exercee(s) sur ce calque : le score ci-dessus ne les "
+                  "couvre pas" % ", ".join(manquantes))
         if rate:
             return 1
     return 0
