@@ -640,12 +640,18 @@ static void fireWord(struct fireArea *a,int pct)
     return;
  fireShownPct=pct;
  firePct(a,pct);
+ /* GCC14: THE OUTLINE IS BACK.  The word is written in the menus' own shape: the letter's body
+    in PLAYPAL 176, the pure red every menu line is drawn in, sitting inside the glyph GROWN by a
+    cell in PLAYPAL 247's opaque black.  The converter ships both planes already grown (LB_MASK
+    and LB_MASKG), so this is two tests a long and nothing else.  Painted body-first would eat
+    its own edge, so the grown plane goes down first and the body over it. */
  for (y=0;y<MASK_H;y++)
     {volatile unsigned int *v=(volatile unsigned int *)(VRAM_B1+((WORD_Y0+y)<<9));
-     const unsigned char *m=a->M[y];     /* the body alone: the grown plane was its black
-										   outline, and the word reads better without it */
+     const unsigned char *m=a->M[y],*d=a->MD[y];
      for (x=0;x<FIRE_W/4;x++)
-	{unsigned int w=base,mk=MASKLONG(m,x);
+	{unsigned int w=base,hl=MASKLONG(d,x),mk=MASKLONG(m,x);
+	 if (hl!=0xffffffffu)
+	    w=(w & hl)|(~hl & FIRE_INK);
 	 if (mk!=0xffffffffu)
 	    w=(w & mk)|(~mk & FIRE_ROUGE);
 	 v[x]=w;

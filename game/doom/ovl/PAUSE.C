@@ -259,12 +259,42 @@ static void vblankIn(void)
     ;
 }
 
+/* GCC14: AND THE SPRITES GO UNDER.  The frozen image is the VDP1's, and a sprite beats a scroll
+   screen of the SAME priority -- the menu owns 7 in PRINA and the game leaves its sprites at 7
+   too, so the whole frozen frame, status bar and all, sat ON TOP of the page.  It showed: the
+   help line could be read through the holes in the HUD font's own glyphs, which is the frozen
+   bar in front of the menu and not behind it (photo, 2026-09-23).  Every earlier attempt at
+   hiding the bar wrote into a plane nothing could see.
+   PRISA..PRISD are not in regList and cannot be: bufReg maps 0xf8 upwards to the background
+   priorities and would index before its own array.  They are taken from the chip and put back
+   on the chip, which needs no SCL buffer at all.  Under the menu (7) and under the veil (6), a
+   sprite at 1 is what the veil was written to darken. */
+#define PAUSE_PRIS0 0x00f0              /* PRISA: 0xf0, 0xf2, 0xf4, 0xf6 */
+#define PAUSE_NPRIS 4
+static Uint16 savedPriS[PAUSE_NPRIS];
+static char priSaved;
+
 /* at the next vblank: the pause's registers (on), or the game's (off) */
 static void setRegs(int on)
 {int i;
  vblankIn();
  for (i=0;i<(int)NREGS;i++)
     VDP2R(regList[i])=on? pauseReg(regList[i],31): bufReg(regList[i]);
+ if (on)
+    {if (!priSaved)                     /* the game's own, whatever it set them to */
+	{for (i=0;i<PAUSE_NPRIS;i++)
+	    savedPriS[i]=VDP2R(PAUSE_PRIS0+i*2);
+	 priSaved=1;
+	}
+     for (i=0;i<PAUSE_NPRIS;i++)
+	VDP2R(PAUSE_PRIS0+i*2)=0x0101;
+    }
+ else
+    if (priSaved)
+       {for (i=0;i<PAUSE_NPRIS;i++)
+	   VDP2R(PAUSE_PRIS0+i*2)=savedPriS[i];
+	priSaved=0;
+       }
 }
 
 /* ------------------------------------------------------------------------ letters */

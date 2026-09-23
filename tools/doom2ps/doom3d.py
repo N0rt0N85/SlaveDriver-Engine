@@ -1909,12 +1909,17 @@ def _dist2_segment(x, y, z, p, q):
 SECFLAG_NUKAGE = 0x40       # SLEVEL.H : la feuille appartient a une salle a nukage
 VERT_NM = 4                 # UTIL.H WORLDGREEN_NM : bandes de vert de la rampe du monde
 VERT_SH = 5                 # UTIL.H WORLDGREEN_SH : leur place dans l'octet de lumiere
-# Mesure du 2026-09-23 : avec 64/448 le vert touchait 38 % des sommets d'E1M1, 54 % d'E1M3 et 76 %
-# d'E1M5 -- le mur du fond de la cour d'E1M1 en prenait, a trois salles du liquide. 48/256 ramene
-# ca a 20/38/50 % et fait commencer la premiere bande vers 220 u du bord, trois largeurs de
-# joueur : « pres du nukage » veut alors dire quelque chose.
-VERT_COEUR = 48             # u depuis le BORD du nukage : plein vert jusque-la
-VERT_PORTEE = 256           # u depuis le bord : au-dela, plus de vert du tout
+# UN CRAN DE VERT PAR TUILE. La rampe etait une fonction continue de la distance, arrondie sur
+# quatre bandes : ses paliers tombaient ou ils voulaient, et deux sommets d'une meme tuile avaient
+# souvent la meme valeur -- donc la tuile etait d'un vert plat et la marche se voyait sur son
+# arete. Un pas d'exactement une tuile met une bande de chaque cote de chaque tuile : le gouraud
+# fait alors le degrade A L'INTERIEUR de chaque tuile, de la flaque jusqu'au zero, et les points
+# proches d'une tuile valent les points lointains de la precedente (demande a l'ecran, 2026-09-23).
+# Une tuile de Doom fait 64 u -- un texel une unite -- et il n'y a que VERT_NM-1 bandes non nulles,
+# donc le degrade s'etend sur trois tuiles et pas plus.
+VERT_TUILE = 64             # u : le pas, une tuile de Doom
+VERT_COEUR = 64             # u depuis le BORD du nukage : plein vert dans la premiere tuile
+VERT_PORTEE = VERT_COEUR + (VERT_NM - 2) * VERT_TUILE   # 192 : au-dela, plus de vert du tout
 SECFLAG_NUKAGE_CORE = 0x80  # SLEVEL.H : la feuille est dans le coeur vert (things teintes)
 
 
@@ -1999,8 +2004,10 @@ def cuire_vert_nukage(em, M, conv, stats):
         if best is None or best >= VERT_PORTEE * VERT_PORTEE:
             return 0
         d = math.sqrt(best)
-        t = 0.0 if d <= VERT_COEUR else (d - VERT_COEUR) / float(VERT_PORTEE - VERT_COEUR)
-        return int(round((VERT_NM - 1) * (1.0 - t)))
+        if d <= VERT_COEUR:
+            return VERT_NM - 1
+        k = (VERT_NM - 1) - int(math.ceil((d - VERT_COEUR) / float(VERT_TUILE)))
+        return k if k > 0 else 0
 
     n = 0
     for i, sec in enumerate(em.sectors):
