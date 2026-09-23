@@ -506,6 +506,12 @@ inline void doFriction(Sprite *o)
 }
 
 short spriteCollideNm;
+#ifdef STATUSTEXT
+/* the two halves of a collision, under Collide Sprite (pushProfile finds a child by the ADDRESS
+   of its id, so these are objects, not literals) */
+static char collSprProf[]="Coll Spr";
+static char collWallProf[]="Coll Wall";
+#endif
 void collideSpriteSprite(Sprite *mobile,Sprite *stat)
 {Fixed32 distance2,pushDistance;
  Fixed32 len;
@@ -640,18 +646,38 @@ int collideSprite(Sprite *o)
     wallCollideNm=behindWall-level_wall;
 
  CFG_PROF_SUB("Sprite");
+#ifdef STATUSTEXT
+ /* GCC14: which HALF of a collision costs -- the sprites of the penetrated leaves, or their
+    walls.  The engine's own CFG_PROF_SUB is compiled out under Doom, and rightly so: one of
+    them sits inside bumpWalls, which runs several times per collision, and its own cost would
+    swamp what it measures.  These two are once per collision, so they read about 5 % high on a
+    50-100 us call, and only the probe disc carries them. */
+ pushProfile(collSprProf);
+#endif
  /* check for collision with other sprites */
  spriteCollideNm=-1;
  for (i=0;i<nmPenetrate;i++)
     {/* check for collision with sprites in that sector */
      Sprite *s;
+     /* GCC14: the three rejections that kill almost every pair were INSIDE collideSpriteSprite,
+	behind a call the compiler cannot inline (it is not static, SPRITE.H).  In a crowded leaf
+	this loop is walked once per step per monster, so the call was the cost of a pair, not the
+	maths: a monster is tested against every corpse, every drop and every puff of its leaf.
+	The same three tests, hoisted -- identical rejections, no call. */
      for (s=sectorSpriteList[sectorPenetrate[i]];s;s=s->next)
-	{if (s==o)
+	{Fixed32 r;
+	 if (s==o || (s->flags & SPRITEFLAG_NOSPRCOLLISION))
+	    continue;
+	 r=o->radius+s->radius;
+	 if (abs(o->pos.x-s->pos.x)>r || abs(o->pos.z-s->pos.z)>r)
 	    continue;
 	 collideSpriteSprite(o,s);
 	}
     }
  CFG_PROF_SUB_END();
+#ifdef STATUSTEXT
+ popProfile();
+#endif
 
  if (o->flags & SPRITEFLAG_IMMOBILE)
     goto skipWallCollision;
@@ -660,11 +686,17 @@ int collideSprite(Sprite *o)
 
  /* if we aren't colliding with any sprites then we don't have to collide
     with our sector again */
+#ifdef STATUSTEXT
+ pushProfile(collWallProf);
+#endif
  i=0;
  if (spriteCollideNm==-1)
     i++;
  for (;i<nmPenetrate;i++)
     bumpWalls(sectorPenetrate[i],o);
+#ifdef STATUSTEXT
+ popProfile();
+#endif
 
  if (floorValid)
     {int floorDistance=SPR_FOOT(o)+bestFloorHeight-o->pos.y;

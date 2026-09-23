@@ -2217,6 +2217,9 @@ static int mpView;              /* the view being drawn */
 static int mpFog[MPMAX]={MPFOGMAX,MPFOGMAX,MPFOGMAX,MPFOGMAX};
 static int mpCells[MPMAX],mpShare[MPMAX],mpQuads[MPMAX];
 static int mpBudget;
+/* GCC14: hblank lines the master spent waiting for the VDP1, smoothed over four images (the tail
+   of the game loop fills it).  mpBalance closes the fog on it, in solo as in split. */
+int vdp1WaitLines;
 #ifdef STATUSTEXT
 static int loadT0,loadFields;   /* GCC14: runLevel's start, the fields its load took (L:) */
 #endif
@@ -2273,9 +2276,16 @@ static void mpBalance(void)
        mpShare[k]=left/n;
  /* each view closes in on its share: fog in by 1/16 an image, out by 1/32 */
  for (k=0;k<mpPlayers;k++)
-    {if (mpCells[k]>mpShare[k] || mpQuads[k]>MPQUADLIM)
+    {/* GCC14: and the VDP1's own lateness, the SAME rule in solo as in split.  The command
+	budget alone never fires in one view -- a solo image draws 250 cells against a list of
+	1448 -- so the servo was on and idle while the console waited 27 ms an image for the
+	drawing hardware (E1M3, 2026-09-23).  What the fog hides is what the VDP1 does not have to
+	fill, so this is the one knob that answers that wait. */
+     int late=(GP_VDP1_LATE>0 && vdp1WaitLines>GP_VDP1_LATE);
+     if (mpCells[k]>mpShare[k] || mpQuads[k]>MPQUADLIM || late)
 	mpFog[k]-=mpFog[k]>>4;
-     else if (mpCells[k]<mpShare[k]-(mpShare[k]>>3) && mpQuads[k]<MPQUADLIM-(MPQUADLIM>>3))
+     else if (mpCells[k]<mpShare[k]-(mpShare[k]>>3) && mpQuads[k]<MPQUADLIM-(MPQUADLIM>>3) &&
+	      (GP_VDP1_LATE<=0 || vdp1WaitLines<(GP_VDP1_LATE>>1)))
 	mpFog[k]+=(mpFog[k]>>5)+1;
      if (mpFog[k]<MPFOGMIN) mpFog[k]=MPFOGMIN;
      if (mpFog[k]>MPFOGMAX) mpFog[k]=MPFOGMAX;
@@ -3058,7 +3068,17 @@ int runLevel(char *filename,int levelNm)
 	that belonged to no node of the tree: on console 7 to 38 ms an image were unaccounted for,
 	more than several named nodes (E1M3 captures 2026-09-23).  Named, so a capture says
 	whether the frame is held by the master's own work or by the drawing hardware. */
-     CFG_PROF("VDP1 Wait"); SPR_WaitDrawEnd(); CFG_PROF_END();
+     CFG_PROF("VDP1 Wait");
+     {int w=(int)htimer;
+      SPR_WaitDrawEnd();
+      w=(int)htimer-w;
+      /* GCC14: how long the master stood waiting for the VDP1, in hblank lines, smoothed over
+	 four images -- mpBalance closes the fog on it (SOLO_FOG).  Raw, it swings between 0 and a
+	 whole field from one image to the next and the fog would breathe. */
+      vdp1WaitLines-=vdp1WaitLines>>2;
+      vdp1WaitLines+=w>>2;
+     }
+     CFG_PROF_END();
      lastDraw=htimer-lastCalc;
      /* GCC14: the wall tiles this image took from the last one go in now the VDP1 is done with it
 	(PIC.H) -- before the display, and before the gap's kick */
