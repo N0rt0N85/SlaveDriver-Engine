@@ -25,6 +25,7 @@ Usage : python tools\\doom2ps\\doom3d.py --wad DOOM1.WAD --map E1M1 --out build\
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import math
 import os
@@ -109,6 +110,7 @@ ECART_FENETRE = 0.02
 # joueur tant que c'est ferme (E8), et `setDoorBlockBits` recalcule a chaque pas de porte (AI.C:4294).
 DOOR_SLIT = sp.DOOR_SLIT
 WALLFLAG_DOORWALL = 0x20
+WALLFLAG_BLOCKED = 0x100         # mur qui arrete le joueur (geom3d.add_wall)
 WALLFLAG_SHORTOPENING = 0x1000
 
 # Les deux drapeaux de LIGNE de Doom qui bloquent le passage sans rien fermer (p_map.c
@@ -603,6 +605,11 @@ class DoomConverter:
         self.uwin_wall = {}                   # id(mur) -> face de linedef (compter_fenetres)
         self.uwin_base = Counter()            # cle SANS fenetre -> cellules qui s'en servent
         self.door_faces = set()               # FACES DE PORTE (linedef, cote) : linteau mobile
+        # frontieres que le CONTROLE D'ETAT laisse passer, notees ici parce que Doom lui-meme les
+        # traite ainsi : deux plafonds de ciel (aucun linteau) et une grille ML_BLOCKING (passage
+        # ferme). Voir controle_etats().
+        self.paires_ciel = set()
+        self.paires_grille = set()
         self.anim_keys = []                   # [[cle de tuile de chaque image]] par famille animee
         self.anims = []                       # idem en index de tuile, apres compaction
         # Polygones ETIQUETES + frontieres exactes : voir tools/doom2ps/adjacency.py. La
@@ -1332,7 +1339,13 @@ class DoomConverter:
             # bas : `mid` = sol du voisin (defaut) ou plafond de devant (DONTPEGBOTTOM)
             v = ((ch - hb) % h if pegbot else 0) + yoff
             tex, pic = self.wall_tex(name, hb - fh, v, cadre)
-            mob = own(fh, hb)
+            # Une contremarche est entre DEUX SOLS : elle ne suit jamais un plafond. Celle d'une
+            # porte dont le voisin est plus haut QUE SON PLAFOND FERME finissait pile dessus, et
+            # `own` lui donnait alors le role `top` : elle montait avec la porte et bouchait
+            # l'ouverture des deux cotes (E1M5, portes 121 et 122 -- sol 80 sous des voisins a 88,
+            # plafond ferme a 88 : capture console du 24-09, « un mur dans les deux sens, on reste
+            # coince contre lui »).
+            mob = [] if (ms is not None and ms.kind == "door") else own(fh, hb)
             if mn_lift and hb == nfh:
                 # plate-forme voisine plus haute que nous : Doom ancre la texture a SON sol, qui
                 # descend -> dalle rigide, ce qui passe sous notre sol est cache par lui
@@ -1355,11 +1368,26 @@ class DoomConverter:
             self.stats["contremarches"] += 1
         if nch < ch:                                   # linteau
             if self.sky(sec) and self.sky(nsec):
-                pass                                   # deux ciels : rien (Doom ne dessine rien)
+                # deux ciels : rien (Doom n'en dessine pas plus), et le controle d'etat le sait
+                if nbi >= 0:
+                    self.paires_ciel.add((self.remap[leaf], nbi))
             else:
                 name = side.upper if side and side.upper != "-" else "BROWN1"
                 h = self.tex_h(name)
-                hb = max(nch, fh)
+                # Le linteau d'une PORTE est ancre a SON plafond, meme quand ce plafond ferme est
+                # sous notre sol (porte creusee : E1M5 50, 52, 64, 82, E1M3 134, 167, E1M7 96,
+                # E1M8 25). Cale a notre sol il n'etait plus la dalle mobile mais un mur FIXE en
+                # travers de l'ouverture -- la porte s'ouvrait d'un seul cote (capture du 24-09,
+                # « la plupart des portes ne se franchissent que dans un sens ») -- et sous lui
+                # restait un trou, l'ouverture de la porte n'etant emise qu'en fente de 1 u
+                # (E1M3 133|134 : rien entre 121 et 176, « la partie haute apparait ouverte »).
+                # Le bas du linteau est le plafond du voisin, borne par NOTRE sol -- mais notre sol
+                # s'en va peut-etre : borne sur sa position EMISE, le linteau n'existait pas encore
+                # quand le sol descendait, et l'on voyait par-dessus le plafond du voisin (E1M8,
+                # l'arene 30 qui s'effondre de 344 u ; E1M2 137, E1M7 23 et 35). On le borne donc
+                # par le PLUS BAS que notre sol atteigne.
+                sol_bas = min(fh, ms.lower) if (ms is not None and ms.kind != "door") else fh
+                hb = nch if mn_door else max(nch, sol_bas)
                 top_ = ch
                 if mn_door and hb == nch:
                     # CETTE face de linedef est une face de porte -- pas toutes celles qui portent
@@ -1367,7 +1395,8 @@ class DoomConverter:
                     # MESURE 2026-09-20, STARTAN2 sert UNE fois de linteau en E1M2 et gagnait 58
                     # fenetres partout dans la carte ; 446 tuiles demandees au lieu de 285).
                     self.door_faces.add((sg.line, sg.side))
-                if mn_door and hb == nch and ms is None and not self.sky(sec):
+                if (mn_door and hb == nch and not self.sky(sec)
+                        and (ms is None or ms.kind != "door")):
                     # FACE DE PORTE : la recette retail, une dalle rigide qui monte avec la porte
                     # (4 coins mobiles). Doom ancre ce `upper` au plafond de la porte (defaut), il
                     # glisse avec elle : la dalle est allongee de la course pour que son haut, cache
@@ -1408,8 +1437,10 @@ class DoomConverter:
                 tex, pic = self.wall_tex(side.middle, t_ - b_, mtop - t_, cadre, masked=True)
                 emit_wall(P, Q, b_, t_, next_sector=-1, tex=tex, picnum=pic, light=light,
                           invisible=False, centre=cen, mob=own(b_, t_),
-                          force_blocked=bool(ld.flags & 0x0001))
+                          force_blocked=bool(ld.flags & ML_BLOCKING))
                 self.stats["grilles"] = self.stats.get("grilles", 0) + 1
+                if nbi >= 0 and (ld.flags & ML_BLOCKING):
+                    self.paires_grille.add((self.remap[leaf], nbi))
 
         if top > bot and nbi >= 0:
             mob = own(bot, top)
@@ -2190,6 +2221,187 @@ def cuire_lumieres(em, M, conv, stats):
                     touches += 1
     stats["lumiere_sommets_eclaircis"] = touches
 
+
+def controle_etats(em, conv):
+    """CONTROLE D'ETAT : rejouer chaque frontiere dans TOUS les etats de ses push blocks.
+
+    Une frontiere entre deux feuilles n'est pas UN mur mais une PILE de quads -- contremarche,
+    linteau, portail, bouchon -- dont certains montent ou descendent avec un push block. Ils sont
+    emis un par un, et aucun critere ne regardait ce qu'ils donnent ENSEMBLE, ni au chargement ni
+    une fois la porte ouverte ou l'ascenseur descendu. Les deux fautes qui en sortaient sont
+    exactement celles vues sur console le 24-09 :
+      - un mur FIXE en travers de l'ouverture -- « la plupart des portes ne se franchissent que
+        dans un sens », « un mur s'etend la ou je devrais voir un portail » ;
+      - un TROU entre deux quads -- « la partie haute apparait toujours ouverte ».
+    D'ou les deux exigences, verifiees etat par etat et DANS LES DEUX SENS :
+      COUVERTURE  [sol, plafond] de la feuille est entierement pave par ses quads.
+      OUVERTURE   ce qu'un portail laisse passer, moins ce qu'un mur plein bouche, vaut
+                  [max des deux sols, min des deux plafonds] -- la regle de Doom (P_LineOpening).
+    Deux exemptions, fideles a Doom l'une comme l'autre : deux plafonds de CIEL (Doom ne dessine
+    pas le linteau, `paires_ciel`) et une grille ML_BLOCKING (Doom ferme le passage aussi,
+    `paires_grille`). Deux feuilles d'un MEME secteur Doom ne sont pas une frontiere.
+    -> (trous, ouvertures) : deux listes de (feuille, voisine, etat, intervalles fautifs).
+    """
+    V, W, S = em.vertices, em.walls, em.sectors
+    TOL = DOOR_SLIT                                    # la fente d'une porte fermee
+    TOL_OUV = 2 * DOOR_SLIT
+
+    # LA COURSE REELLE DU BLOC, celle que l'objet donne au moteur, pas `throw`. Une porte part de
+    # SON plafond emis (doom_specials : `depart`), qui n'est pas toujours son sol + la fente : une
+    # porte creusee sous ses voisins garde le plafond du WAD (E1M5 121 et 122, sol 80, plafond 88).
+    # Tout le reste est emis EN HAUT et descend de sa course (raise_floors, lift, floor_*).
+    blocs = []
+    for t in conv.mobile.values():
+        if t.kind == "door":
+            dz = t.upper - max(conv.M["sectors"][t.sector].ceilh, t.lower + DOOR_SLIT)
+        else:
+            dz = -t.throw
+        blocs.append((dz, t.verts))
+    vbloc = {}
+    for bi, (_dz, verts) in enumerate(blocs):
+        for vi in verts:
+            vbloc.setdefault(vi, []).append(bi)
+
+    def y(vi, etat):
+        return V[vi]["y"] + sum(blocs[bi][0] for bi in vbloc.get(vi, ()) if etat.get(bi))
+
+    plats = {}                                         # feuille -> (mur du sol, mur du plafond)
+    for li, sc in enumerate(S):
+        f = c = None
+        for wi in range(sc["firstWall"], sc["lastWall"] + 1):
+            if W[wi]["normal"][1] > 0 and f is None:
+                f = wi
+            elif W[wi]["normal"][1] < 0 and c is None:
+                c = wi
+        plats[li] = (f, c)
+
+    # murs VERTICAUX indexes sur une grille de 64 u : une sonde ne regarde que ses 9 cases
+    verticaux, grille = [], {}
+    for li, sc in enumerate(S):
+        for wi in range(sc["firstWall"], sc["lastWall"] + 1):
+            if W[wi]["normal"][1] != 0:
+                continue
+            a, b = V[W[wi]["v"][0]], V[W[wi]["v"][1]]
+            seg = (li, wi, (a["x"], a["z"]), (b["x"], b["z"]))
+            verticaux.append(seg)
+            x0, x1 = sorted((a["x"], b["x"]))
+            z0, z1 = sorted((a["z"], b["z"]))
+            for cx in range(int(x0) // 64, int(x1) // 64 + 1):
+                for cz in range(int(z0) // 64, int(z1) // 64 + 1):
+                    grille.setdefault((cx, cz), []).append(seg)
+
+    def traverse(P, Q, m):
+        """m est-il SUR le segment PQ, franchement entre ses bouts ?"""
+        dx, dz = Q[0] - P[0], Q[1] - P[1]
+        ll = math.hypot(dx, dz)
+        if ll < 1e-9:
+            return False
+        t = ((m[0] - P[0]) * dx + (m[1] - P[1]) * dz) / (ll * ll)
+        return 0.02 < t < 0.98 and abs(dx * (m[1] - P[1]) - dz * (m[0] - P[0])) / ll < 0.6
+
+    def union(iv):
+        out = []
+        for a, b in sorted(iv):
+            if out and a <= out[-1][1] + 1e-6:
+                out[-1][1] = max(out[-1][1], b)
+            else:
+                out.append([a, b])
+        return out
+
+    def moins(A, B, tol):
+        """A prive de B, les miettes de `tol` ou moins jetees."""
+        out = [list(x) for x in A]
+        for a, b in B:
+            nx = []
+            for c, d in out:
+                if b <= c or a >= d:
+                    nx.append([c, d])
+                    continue
+                if c < a:
+                    nx.append([c, min(d, a)])
+                if d > b:
+                    nx.append([max(c, b), d])
+            out = nx
+        return [x for x in out if x[1] - x[0] > tol]
+
+    trous, ouvertures, vues, ignores = [], [], set(), 0
+    for li, wi, P, Q in verticaux:
+        m = ((P[0] + Q[0]) / 2.0, (P[1] + Q[1]) / 2.0)
+        cx, cz = int(m[0]) // 64, int(m[1]) // 64
+        pile = [(lj, wj) for dx in (-1, 0, 1) for dz in (-1, 0, 1)
+                for lj, wj, R, T in grille.get((cx + dx, cz + dz), ()) if traverse(R, T, m)]
+        feuilles = sorted({lj for lj, _ in pile})
+        if len(feuilles) != 2:
+            continue                                   # bord de carte, ou trois feuilles en coin
+        A, B = feuilles
+        if (A, B, cx, cz) in vues:
+            continue                                   # deja teste ici, pas ailleurs
+        vues.add((A, B, cx, cz))
+        if conv.leaf_sector[conv.keep[A]] == conv.leaf_sector[conv.keep[B]]:
+            continue                                   # un seul secteur Doom : pas de frontiere
+        actifs = set()
+        for lj, wj in pile:
+            for vi in W[wj]["v"]:
+                actifs.update(vbloc.get(vi, ()))
+        for lj in (A, B):
+            for wj in plats[lj]:
+                if wj is not None:
+                    actifs.update(vbloc.get(W[wj]["v"][0], ()))
+        actifs = sorted(actifs)
+        ignores += max(0, len(actifs) - 4)             # 16 etats au plus : on DIT ce qu'on saute
+        actifs = actifs[:4]
+        for combo in itertools.product((0, 1), repeat=len(actifs)):
+            etat = dict(zip(actifs, combo))
+            hs = {}
+            for lj in (A, B):
+                fw, cw = plats[lj]
+                if fw is None or cw is None:
+                    break
+                hs[lj] = (y(W[fw]["v"][0], etat), y(W[cw]["v"][0], etat))
+            if len(hs) != 2:
+                break
+            douv = (max(hs[A][0], hs[B][0]), min(hs[A][1], hs[B][1]))
+            # DEUX SOLS QUI BOUGENT, chacun sur sa course : le convertisseur n'emet PAS de
+            # contremarche entre eux, choix assume depuis le 18-09 -- emise, elle se dresserait au
+            # chargement sur toute sa course (E1M3, l'escalier 8..19 et les sols 48 et 49 ; E1M8,
+            # l'arene 30 contre l'ascenseur 28). Un quad ne peut pas naitre : il faudrait qu'il ait
+            # une hauteur nulle dans l'etat emis. Le portail y est donc trop grand des que l'un des
+            # deux descend plus bas que l'autre -- Doom, lui, etire la texture basse. Seule cette
+            # FUITE est exemptee ; un BLOCAGE reste une faute, et la couverture aussi.
+            solA, solB = [sorted(vbloc.get(W[plats[lj][0]]["v"][0], ())) for lj in (A, B)]
+            deux_sols_mobiles = bool(solA and solB and solA != solB)
+            for moi, lui in ((A, B), (B, A)):
+                sol, plafond = hs[moi]
+                tout, portails, pleins = [], [], []
+                for lj, wj in pile:
+                    if lj != moi:
+                        continue
+                    ys = [y(vi, etat) for vi in W[wj]["v"]]
+                    a, b = min(ys), max(ys)
+                    if b - a <= 0:
+                        continue
+                    tout.append([a, b])
+                    if W[wj]["nextSector"] >= 0:
+                        portails.append([a, b])
+                    elif W[wj]["flags"] & WALLFLAG_BLOCKED:
+                        pleins.append([a, b])
+                if plafond > sol and (moi, lui) not in conv.paires_ciel:
+                    manque = moins([[sol, plafond]], union(tout), TOL)
+                    if manque:
+                        trous.append((moi, lui, tuple(sorted(etat.items())), manque[:2]))
+                if douv[1] - douv[0] > TOL_OUV and (moi, lui) not in conv.paires_grille:
+                    ouv = moins(moins(union(portails), union(pleins), 0),
+                                [[-1e9, sol], [plafond, 1e9]], 0)
+                    bloque = moins([list(douv)], ouv, TOL_OUV)
+                    fuite = moins(ouv, [list(douv)], TOL_OUV)
+                    etiq = tuple(sorted(etat.items()))
+                    if bloque:
+                        ouvertures.append((moi, lui, etiq, "BLOQUE", bloque[:2]))
+                    if fuite and not deux_sols_mobiles:
+                        ouvertures.append((moi, lui, etiq, "FUITE", fuite[:2]))
+    return trous, ouvertures, ignores
+
+
 def check(em, conv):
     crit = {}
 
@@ -2217,6 +2429,12 @@ def check(em, conv):
               if em.walls[wi]["normal"][1] < 0) for s in em.sectors]
     put("un_sol_un_plafond", all(x == 1 for x in nf) and all(x == 1 for x in nc),
         sols_non_1=sum(1 for x in nf if x != 1), plafonds_non_1=sum(1 for x in nc if x != 1))
+
+    trous, ouvertures, blocs_non_croises = controle_etats(em, conv)
+    put("frontieres_couvertes_a_tout_etat", not trous, n=len(trous), ex=trous[:6],
+        blocs_non_croises=blocs_non_croises)
+    put("ouvertures_justes_a_tout_etat", not ouvertures, n=len(ouvertures), ex=ouvertures[:6],
+        blocs_non_croises=blocs_non_croises)
 
     px = [abs(v["x"]) for v in em.vertices] + [abs(v["z"]) for v in em.vertices]
     put("dans_les_bornes_monde", max(px) < WORLD_LIMIT, max_xz=max(px), limite=WORLD_LIMIT)
