@@ -30,7 +30,8 @@
                        flags (DOOM_TELE_ONCE)
      OT_DOOM_FLOOR     push block, throw (> 0 rises, < 0 lowers), channel, speed (1/8 u per
                        tic), donor face (-1 = keep the flat), damage afterwards (hp per 32 tics,
-                       -1 = unchanged)
+                       -1 = unchanged), the channel that sends it back where the WAD drew it
+                       (-1 = one way) and that return's own speed
      OT_DOOM_DOOR      push block, channel (-1 = no tag), open height, press kind, key, tag kind
      OT_DOOM_LIFT      push block, throw (< 0), channel, speed (1/8 u per tic), wait (tics)
      OT_DOOM_WLINE     x1, z1, x2, z2 (the linedef), channel, flags (DOOM_WLINE_ONCE)
@@ -74,7 +75,8 @@ typedef struct
  short pbNum,state;
  int counter,waitCounter;
  Fixed32 offset;
- short throw,channel,speed,donorFace,damage,pad;
+ short throw,channel,speed,donorFace,damage;
+ short back,backSpeed;                  /* the channel that sends it home again, -1 = one way */
 } DoomFloorObject;
 
 typedef struct
@@ -373,7 +375,7 @@ static void doomTeleport_func(Object *_this,int message,int param1,int param2)
 
 /* --- moving floors (EV_DoFloor, EV_DoPlat raise*AndChange; p_floor.c, p_plats.c) ------------- */
 
-enum {DOOM_FLOOR_WAIT,DOOM_FLOOR_MOVE,DOOM_FLOOR_DONE};
+enum {DOOM_FLOOR_WAIT,DOOM_FLOOR_MOVE,DOOM_FLOOR_DONE,DOOM_FLOOR_BACK};
 
 /* a Doom sfx from a push block's centre (pushBlockMakeSound, OBJECT.C:547); absent = silent */
 static void doomPbSound(Object *o,int sfx)
@@ -404,41 +406,68 @@ static void doomFloorChange(DoomFloorObject *this)
    the level starts as the WAD draws it.  A LOWERING floor (throw < 0) is emitted as the WAD draws
    it and goes down by -throw (the engine elevator it used to be went at 5 u per tic with
    PowerSlave's sound).  SIGNAL_SWITCH(channel) -- a switch, a walk-over line, or the boss death
-   on tag 666 -- moves it once at `speed`/8 u per tic (FLOORSPEED 1, the plats' PLATSPEED/2,
-   turbo 4), stnmov every 8 tics and pstop at the end (T_MoveFloor, T_PlatRaise).  It does not
-   stop for what stands in its way: the engine carries the sprites with it. */
+   on tag 666 -- moves it at `speed`/8 u per tic (FLOORSPEED 1, the plats' PLATSPEED/2, turbo 4),
+   stnmov every 8 tics and pstop at the end (T_MoveFloor, T_PlatRaise).  It does not stop for what
+   stands in its way: the engine carries the sprites with it.
+
+   GCC14: AND IT COMES BACK.  A Doom sector is not a machine with one motion -- it is a floor, and
+   every special that names its tag moves it somewhere, each to its own destination.  A sector
+   with TWO of them was converted with the FIRST and the others were dropped without a word, which
+   is not a detail but the level's way out: E1M5's two blocks (tag 1) go down into the pit with
+   the player and the six walk-over lines down there (91, raise to the lowest ceiling) are what
+   brings them -- and the player -- back up.  They were lost, so the pit was a trap with no exit
+   and the level could not be finished (reported 2026-09-24).  Same shape on E1M7 (tag 3) and on
+   E1M8, whose first platform (tag 2) rose and never came down again.
+   `back` is the channel of the trigger that sends the floor back to where the WAD drew it, on its
+   own speed; -1 keeps the old one-way floor.  The two ends are all a floor ever has here: doom2ps
+   refuses to convert a third destination rather than invent one. */
 static void doomFloor_func(Object *_this,int message,int param1,int param2)
 {DoomFloorObject *this=(DoomFloorObject *)_this;
  Fixed32 step;
+ int rises=(this->throw>0);                  /* its far end is offset 0; a falling one's is throw */
  (void)param2;
  switch (message)
     {case SIGNAL_SWITCH:
-	if (this->state!=DOOM_FLOOR_WAIT || param1!=this->channel)
+	if (this->state==DOOM_FLOOR_WAIT && param1==this->channel)
+	   {this->state=DOOM_FLOOR_MOVE;
+	    if (rises)
+	       doomFloorChange(this);            /* the raise ...AndChange: at the start */
+	   }
+	else if (this->state==DOOM_FLOOR_DONE && this->back!=-1 && param1==this->back)
+	   this->state=DOOM_FLOOR_BACK;
+	else
 	   break;
-	this->state=DOOM_FLOOR_MOVE;
-	if (this->throw>0)
-	   doomFloorChange(this);                /* the raise ...AndChange: at the start */
 	doomPbOpenSight(this->pbNum);
 	doomPbSound(_this,sfx_stnmov);
 	delay_moveObject((Object *)this,objectRunList);
 	break;
      case SIGNAL_MOVE:
-	if (this->state!=DOOM_FLOOR_MOVE)
-	   break;
-	pushBlockAdjustSound((PushBlockObject *)this);
-	step=((Fixed32)this->speed)<<13;
-	pbObject_move((PushBlockObject *)this,(this->throw>0)?step:-step);
-	if ((this->throw>0)?(this->offset>=0):(this->offset<=F(this->throw)))
-	   {pbObject_moveTo((PushBlockObject *)this,(this->throw>0)?0:this->throw);
-	    this->state=DOOM_FLOOR_DONE;
-	    stopAllSound((int)this);
-	    doomPbSound(_this,sfx_pstop);
-	    delay_moveObject((Object *)this,objectIdleList);
-	   }
-	else if (!(doomLevelTime&7))
-	   doomPbSound(_this,sfx_stnmov);
-	doom_pbBlockBits(this->pbNum);
-	break;
+	{int home,goal,up;
+	 if (this->state!=DOOM_FLOOR_MOVE && this->state!=DOOM_FLOOR_BACK)
+	    break;
+	 home=rises? -this->throw: 0;             /* where the level starts: the WAD's own state */
+	 goal=(this->state==DOOM_FLOOR_MOVE)? (rises? 0: this->throw): home;
+	 up=(this->state==DOOM_FLOOR_MOVE)? rises: !rises;
+	 pushBlockAdjustSound((PushBlockObject *)this);
+	 step=((Fixed32)((this->state==DOOM_FLOOR_MOVE)? this->speed: this->backSpeed))<<13;
+	 pbObject_move((PushBlockObject *)this,up? step: -step);
+	 if (up? (this->offset>=F(goal)): (this->offset<=F(goal)))
+	    {pbObject_moveTo((PushBlockObject *)this,goal);
+	     this->state=(this->state==DOOM_FLOOR_MOVE)? DOOM_FLOOR_DONE: DOOM_FLOOR_WAIT;
+	     stopAllSound((int)this);
+	     doomPbSound(_this,sfx_pstop);
+	     delay_moveObject((Object *)this,objectIdleList);
+	     /* as the doors and the lifts do it: a repeatable switch can be pressed again */
+	     if (this->back!=-1)
+		{signalAllObjects(SIGNAL_SWITCHRESET,this->channel,0);
+		 signalAllObjects(SIGNAL_SWITCHRESET,this->back,0);
+		}
+	    }
+	 else if (!(doomLevelTime&7))
+	    doomPbSound(_this,sfx_stnmov);
+	 doom_pbBlockBits(this->pbNum);
+	 break;
+	}
     }
 }
 
@@ -1377,8 +1406,9 @@ int game_placeObject(int ot)
 	 o->speed=suckShort();
 	 o->donorFace=suckShort();
 	 o->damage=suckShort();
-	 o->pad=0;
-	 assert(o->throw!=0 && o->speed>0);
+	 o->back=suckShort();
+	 o->backSpeed=suckShort();
+	 assert(o->throw!=0 && o->speed>0 && (o->back==-1 || o->backSpeed>0));
 	 /* a rising floor goes down to the WAD's floor now, not at the end of the first frame:
 	    nothing stands on it yet (every sprite's floorSector is still -1, SPRITE.C:87), so only
 	    the vertices move.  A lowering one already is where the WAD draws it. */

@@ -518,6 +518,22 @@ def _neighbours(M):
     return nb
 
 
+def special_dest(M, sector, sp):
+    """(destination, vitesse, famille) d'un special de LIGNE sur `sector`, règle de Doom.
+
+    Doom recalcule la destination À CHAQUE déclenchement, depuis l'état courant du secteur ; nous
+    la calculons sur l'état du WAD, qui est celui des deux bouts où le niveau démarre. -> (None,)*3
+    si ce special ne déplace pas de sol."""
+    if sp in LIFT_W or sp in LIFT_S:
+        return mobile_bounds(M, sector, "lift")[0],             (LIFT_SPEED_BLAZE if sp in LIFT_BLAZE else LIFT_SPEED), "ascenseur"
+    if sp in FLOOR_W or sp in FLOOR_S:
+        k = FLOOR_W.get(sp) or FLOOR_S[sp]
+        return mobile_bounds(M, sector, k)[0], FLOOR_SPEED[k], "sol-descend"
+    if sp in RAISE:
+        return mobile_bounds(M, sector, "raise_" + RAISE[sp][1])[1], RAISE[sp][2], "sol-monte"
+    return None, None, None
+
+
 def mobile_bounds(M, sector, kind):
     """(lower, upper) de la course d'un secteur mobile, règle de Doom, en unités monde.
 
@@ -688,10 +704,17 @@ def specials_of(M):
             ignored["secteur %d" % s.special] += 1
     door_by_sector = {}
     seen_mobile = set()
+    # Un secteur que PLUSIEURS specials visent. Doom donne un penseur par declenchement et
+    # recalcule la destination ; ici un secteur est UN push block et UN objet, donc UNE course.
+    # Ce qui est refuse est donc note, pas jete en silence : `autres[secteur]` porte les lignes
+    # qui le visent aussi, et la resolution plus bas en fait le RETOUR quand leur destination est
+    # celle du WAD (le cas de tout l'episode 1) -- ou le dit tout haut quand ce n'est pas le cas.
+    autres = defaultdict(list)
 
-    def add_mobile(lst, tag, kind, **extra):
+    def add_mobile(lst, tag, kind, line=None, sp=None, **extra):
         for si in by_tag.get(tag, ()):
             if si in seen_mobile:
+                autres[si].append((line, sp))
                 continue
             seen_mobile.add(si)
             lst.append(dict(sector=si, tag=tag, kind=kind, **extra))
@@ -745,11 +768,11 @@ def specials_of(M):
             # rien de mobile : seule la ligne compte, les receveurs se posent par feuille
             wsw.append(dict(line=li, channel=ld.tag, special=sp))
         elif sp in LIFT_W or sp in LIFT_S:
-            add_mobile(lifts, ld.tag, "lift",
+            add_mobile(lifts, ld.tag, "lift", line=li, sp=sp,
                        speed=LIFT_SPEED_BLAZE if sp in LIFT_BLAZE else LIFT_SPEED)
             (wsw if sp in LIFT_W else ssw).append(dict(line=li, channel=ld.tag, special=sp))
         elif sp in FLOOR_W or sp in FLOOR_S:
-            add_mobile(floors, ld.tag, FLOOR_W.get(sp) or FLOOR_S[sp])
+            add_mobile(floors, ld.tag, FLOOR_W.get(sp) or FLOOR_S[sp], line=li, sp=sp)
             (wsw if sp in FLOOR_W else ssw).append(dict(line=li, channel=ld.tag, special=sp))
         elif sp in EXIT_S or sp in EXIT_W:
             ch = EXIT_S.get(sp) or EXIT_W[sp]
@@ -759,6 +782,7 @@ def specials_of(M):
             trig, regle, vit, flat, degats = RAISE[sp]
             for si in by_tag.get(ld.tag, ()):
                 if si in seen_mobile:
+                    autres[si].append((li, sp))
                     continue
                 seen_mobile.add(si)
                 raises.append(dict(sector=si, tag=ld.tag, kind="raise_" + regle, special=sp,
@@ -817,9 +841,73 @@ def specials_of(M):
         if r["upper"] <= r["lower"]:
             immobiles.add(r["sector"])
             ignored["sol qui monte deja a destination (%d)" % r["special"]] += 1
+    # ------------------------------------------------------------------ le RETOUR
+    # Un secteur vise par plusieurs specials : celui qui le renvoie a l'etat du WAD devient le
+    # retour de son objet (OT_DOOM_FLOOR `back`), sur un canal a lui -- les deux sens portent le
+    # MEME tag dans le WAD (E1M5 tag 1, E1M7 tag 3, E1M8 tag 2), un canal ne peut donc pas les
+    # distinguer. Tout autre cas est nomme dans `ignored` : personne n'invente une destination.
+    retour = {}                               # ligne -> (canal, vitesse)
+    prim = {}
+    for lst in (floors, raises, lifts):
+        for m in lst:
+            prim[m["sector"]] = m
+    for si, lignes in sorted(autres.items()):
+        m = prim.get(si)
+        if m is None:
+            # une porte, un escalier, un donut : pas de sol a deux bouts. Un special qui
+            # l'enverrait la ou son sol est DEJA ne perd rien -- Doom ne le bouge pas non plus
+            # (E1M4 secteur 41 : la porte a cle jaune porte le tag 3 des ascenseurs, dont la
+            # course sur elle est nulle).
+            perdus = [spn for _, spn in lignes
+                      if special_dest(M, si, spn)[0] != sects[si].floorh]
+            if perdus:
+                ignored["secteur %d (%s) vise aussi par %s, non convertis"
+                        % (si, "porte" if si in door_by_sector else "autre", sorted(set(perdus)))] += 1
+            continue
+        maison = sects[si].floorh
+        loin = m["upper"] if m["kind"].startswith("raise_") else m["lower"]
+        for li, spn in lignes:
+            dst, vit, fam = special_dest(M, si, spn) if spn is not None else (None, None, None)
+            if dst == maison and li is not None:
+                r = retour.setdefault(li, (None, vit))
+                retour[li] = (None, min(r[1], vit))
+            elif dst == loin:
+                pass                          # le meme mouvement, deja converti
+            else:
+                ignored["secteur %d : le special %s l'envoie a %s, ni %d ni %d"
+                        % (si, spn, dst, maison, loin)] += 1
+    if retour:
+        # un canal neuf par ligne de retour, hors des tags du WAD et des sorties
+        pris = {sec.tag for sec in sects if sec.tag} | {ld.tag for ld in M["linedefs"] if ld.tag}
+        pris |= {CHANNEL_EXIT, CHANNEL_SECRETEXIT}
+        libre = (c for c in range(CHANNEL_SECRETEXIT + 1, 1024) if c not in pris)
+        par_tag = {}
+        for li in sorted(retour):
+            tag = M["linedefs"][li].tag
+            if tag not in par_tag:
+                par_tag[tag] = next(libre)
+            retour[li] = (par_tag[tag], retour[li][1])
+        # le retour ne vaut que si TOUS les secteurs du tag le voient comme un retour : sinon la
+        # ligne garderait son tag et emporterait les autres secteurs avec elle
+        for li in list(retour):
+            tag = M["linedefs"][li].tag
+            for si in by_tag.get(tag, ()):
+                m = prim.get(si)
+                if m is None or m.get("back") not in (None, retour[li][0]):
+                    ignored["ligne %d : retour d'un tag partage (%d), non converti" % (li, tag)] += 1
+                    del retour[li]
+                    break
+            else:
+                for si in by_tag.get(tag, ()):
+                    prim[si]["back"] = retour[li][0]
+                    prim[si]["backSpeed"] = retour[li][1]
+        for w in wsw + ssw:
+            if w["line"] in retour:
+                w["channel"] = retour[w["line"]][0]
+    canaux_retour = {c for c, _ in retour.values()}
     if immobiles:
         raises = [r for r in raises if r["sector"] not in immobiles]
-        vivantes = {r["tag"] for r in raises}
+        vivantes = {r["tag"] for r in raises} | canaux_retour
         monte = set(RAISE) | set(STAIRS)
         wsw = [w for w in wsw if w["special"] not in monte or w["channel"] in vivantes]
         ssw = [s for s in ssw if s["special"] not in monte or s["channel"] in vivantes]
@@ -830,7 +918,7 @@ def specials_of(M):
             if f["sector"] in bas:
                 ignored["sol qui descend deja en bas (secteur %d)" % f["sector"]] += 1
         floors = [f for f in floors if f["sector"] not in bas]
-        vivantes = {f["tag"] for f in floors}
+        vivantes = {f["tag"] for f in floors} | canaux_retour
         descend = set(FLOOR_W) | set(FLOOR_S)
         wsw = [w for w in wsw if w["special"] not in descend or w["channel"] in vivantes]
         ssw = [s for s in ssw if s["special"] not in descend or s["channel"] in vivantes]
@@ -1189,6 +1277,7 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
             notes["sol sans push block"] += 1
             continue
         emit(OT_DOOM_FLOOR, pb, f["lower"] - f["upper"], f["tag"], FLOOR_SPEED[f["kind"]], -1, -1,
+             f.get("back", CHANNEL_NONE), f.get("backSpeed", FLOOR_SPEED[f["kind"]]),
              sector_doom=f["sector"], kind=f["kind"])
     # sols qui montent : pb, course, canal, vitesse, face du nouveau flat, degats ensuite. La
     # geometrie est emise EN HAUT (doom3d.raise_floors) et l'objet la descend de la course au
@@ -1209,8 +1298,9 @@ def special_objects(M, conv, ids, specials, pb_index, *, lift_contact=False, swi
         if degats == "front":
             degats = SECTOR_DAMAGE.get(S[M["sidedefs"][M["linedefs"][r["line"]].right].sector].special, 0)
         emit(OT_DOOM_FLOOR, pb, r["upper"] - r["lower"], r["tag"], r["speed"], donor,
-             -1 if degats is None else degats, sector_doom=r["sector"], kind=r["kind"],
-             line=r["line"])
+             -1 if degats is None else degats,
+             r.get("back", CHANNEL_NONE), r.get("backSpeed", r["speed"]),
+             sector_doom=r["sector"], kind=r["kind"], line=r["line"])
     # teleporteurs : une feuille qui declenche = un objet (level_sector[s].object, SIGNAL_ENTER)
     taken = {}
     for tp in specials.teleports:
@@ -1386,7 +1476,7 @@ def longueur_variable(o, params=None):
 def expected_param_bytes(objects, params=None):
     """Σ des params attendus par type (DOOM_ABI « Vérifications PC ») : 5 joueur, 6 mobj, 6 porte
     Doom (3 porte du moteur), 4 ascenseur, 2 sector-switch, 5 interrupteur, 1 sortie, 2 dégâts,
-    8 teleporteur, 6 sol, nShorts pour les enregistrements de longueur variable (187/188 :
+    8 teleporteur, 8 sol (dont le canal et la vitesse du retour), nShorts pour les enregistrements de longueur variable (187/188 :
     `longueur_variable`, d'ou `params` cote verif) -- en octets."""
     n = 0
     for o in objects:
@@ -1396,7 +1486,7 @@ def expected_param_bytes(objects, params=None):
         elif t == OT_DOOM_TELEPORT:
             n += 8
         elif t == OT_DOOM_FLOOR:
-            n += 6
+            n += 8
         elif t == OT_DOOM_DOOR:
             n += 6
         elif t == OT_NORMALDOOR:

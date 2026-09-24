@@ -144,7 +144,8 @@ def build_objects(W, M, ids, G, *, skill, lift_contact):
                                                    secret_walls=mobile.get("secret_walls"),
                                                    geom=G)
     objects, params = sp.concat_objects((things, tparams), (specs, sparams))
-    return objects, params, dict(things=st, specials=specs, notes=notes)
+    return objects, params, dict(things=st, specials=specs, notes=notes,
+                                ignored=specials.ignored)
 
 
 # ----------------------------------------------------------------------------- etape 5
@@ -587,6 +588,13 @@ def main(argv=None):
                        st["starts"], st["ambush"]))
     for k, v in oinfo["notes"].items():
         log("    NOTE : %s x%d" % (k, v))
+    # Un MECANISME que le WAD demande et que la carte n'emet pas arrete la conversion : c'est ce
+    # qui a coute la sortie de la fosse d'E1M5 (tag 1) et la descente de la plate-forme d'E1M8
+    # (tag 2) -- deux destinations pour un secteur, la seconde jetee sans un mot. Le reste de
+    # `ignored` est decide et documente (textures qui defilent, portes qui se ferment seules).
+    perdus = {k: v for k, v in oinfo["ignored"].items() if "vise aussi par" in k}
+    if perdus:
+        fails.append("mecanisme(s) du WAD non emis : %s" % perdus)
     if sp.expected_param_bytes(objects) != len(params):
         fails.append("params : %d attendus vs %d" % (sp.expected_param_bytes(objects), len(params)))
 

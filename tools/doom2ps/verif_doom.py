@@ -701,8 +701,9 @@ def main(argv=None):
         # ascenseurs Doom : pb, course (< 0), canal, vitesse, attente
         lifts_d = [struct.unpack(">5h", bytes(p[o["firstParam"]:o["firstParam"] + 10]))
                    for o in obj if o["type"] == sp.OT_DOOM_LIFT]
-        # sols : pb, course (> 0 monte, < 0 descend), canal, vitesse, face donneuse, degats
-        sols_o = [struct.unpack(">6h", bytes(p[o["firstParam"]:o["firstParam"] + 12]))
+        # sols : pb, course (> 0 monte, < 0 descend), canal, vitesse, face donneuse, degats,
+        # canal du retour (-1 = aller simple) et sa vitesse
+        sols_o = [struct.unpack(">8h", bytes(p[o["firstParam"]:o["firstParam"] + 16]))
                   for o in obj if o["type"] == sp.OT_DOOM_FLOOR]
         raises = [r for r in sols_o if r[1] > 0]
         pbs = ([d[0] for d in doors] + [l_[1][0] for l_ in lifts] + [l_[0] for l_ in lifts_d]
@@ -753,7 +754,7 @@ def main(argv=None):
                 for wi in range(s_["firstWall"], s_["lastWall"] + 1):
                     owner_[wi] = si
             bad = []
-            for (pb_, course, ch, vit, donor, dg) in raises:
+            for (pb_, course, ch, vit, donor, dg, back, vback) in raises:
                 b = PB[pb_]
                 for k in range(b["startWall"], b["endWall"] + 1):
                     wi = PBW[k]
@@ -763,8 +764,9 @@ def main(argv=None):
                     si = owner_[wi]
                     if ys != {S[si]["floorLevel"] + course}:
                         bad.append((pb_, si, sorted(ys), S[si]["floorLevel"], course))
-                if not (0 < vit <= 64) or not (-1 <= donor < len(F)) or not (-1 <= dg < 256):
-                    bad.append((pb_, "params", vit, donor, dg))
+                if (not (0 < vit <= 64) or not (-1 <= donor < len(F)) or not (-1 <= dg < 256)
+                        or back < -1 or (back != -1 and not 0 < vback <= 64)):
+                    bad.append((pb_, "params", vit, donor, dg, back, vback))
             put("sols qui montent : emis a floorLevel + course, params dans les bornes", not bad,
                 f"{len(raises)} sols, courses {sorted(r[1] for r in raises)}"
                 + (f", fautifs {bad[:3]}" if bad else ""))
@@ -873,6 +875,34 @@ def main(argv=None):
                 put("course des sols qui montent == regle Doom (p_floor.c / p_plats.c, fente sous "
                     "le plafond)", sorted(r[1] for r in raises) == want_r,
                     f"{sorted(r[1] for r in raises)} vs {want_r}")
+            # LES DEUX BOUTS. Doom donne un penseur par declenchement et recalcule la destination
+            # depuis l'etat courant du secteur ; un objet du moteur est un push block, donc UNE
+            # course entre deux positions. Le WAD dit ici combien de destinations DISTINCTES ses
+            # specials nomment pour chaque secteur -- lu du WAD, pas du convertisseur -- et le .LEV
+            # dit combien de sols savent revenir. Deux, une de chaque cote : c'est le cas de tout
+            # l'episode 1 (E1M5 tag 1, E1M7 tag 3, E1M8 tag 2, la sortie de leurs fosses). Trois
+            # serait irrepresentable : le controle l'exige NOMME plutot que converti a moitie.
+            vise = {}
+            for ld in M["linedefs"]:
+                if not (ld.special and ld.tag):
+                    continue
+                for si, sec in enumerate(M["sectors"]):
+                    if sec.tag == ld.tag:
+                        dst = sp.special_dest(M, si, ld.special)[0]
+                        if dst is not None:
+                            vise.setdefault(si, {}).setdefault(dst, []).append(ld.special)
+            trop = {si: sorted(d) for si, d in vise.items() if len(d) > 2}
+            deux = {si: sorted(d) for si, d in vise.items()
+                    if len(d) == 2 and M["sectors"][si].floorh in d}
+            mobiles = {m["sector"] for m in spx.floors + spx.raises}
+            veut = {si for si in deux if si in mobiles}
+            revient = [r for r in sols_o if r[6] != -1]
+            put("les deux bouts : un sol qui revient par secteur a deux destinations",
+                len(revient) == len(veut) and all(r[7] > 0 for r in revient),
+                f"{len(revient)} sol(s) de retour pour {len(veut)} secteur(s) {sorted(veut)}"
+                + (f" ; canaux {sorted(r[6] for r in revient)}" if revient else ""))
+            put("aucun secteur a plus de deux destinations (irrepresentable)", not trop,
+                f"{len(vise)} secteur(s) vises" + (f", fautifs {trop}" if trop else ""))
     else:
         put("push blocks", True, "aucun (geometrie statique)")
 
@@ -998,7 +1028,10 @@ def main(argv=None):
         elif o["type"] == sp.OT_DOOM_LIFT:
             ecoute[_sh(o, 5)[2]] += 1
         elif o["type"] == sp.OT_DOOM_FLOOR:
-            ecoute[_sh(o, 6)[2]] += 1
+            f_ = _sh(o, 8)
+            ecoute[f_[2]] += 1
+            if f_[6] != sp.CHANNEL_NONE:
+                ecoute[f_[6]] += 1                          # le canal du retour (les deux bouts)
         elif o["type"] == sp.OT_DOOM_LIGHT:
             ecoute[_sh(o, 3)[1]] += 1
         elif o["type"] == sp.OT_DOOM_LAMP:
