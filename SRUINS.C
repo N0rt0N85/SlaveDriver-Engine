@@ -2313,15 +2313,60 @@ static unsigned short probeLast;
 static char probeHave,probeFrozen;
 static int probeMHz100,probeFrm10;
 
+/* GCC14: the WHOLE-LEVEL counterfactual, and the reason the probe does not try to compare two
+   captures.  Two fights are not the same fight, so an A/B of combat is not a measurement.  But
+   the work of one image is a continuous quantity -- htimer at the moment the loop leaves for the
+   VBlank wait -- and the frame period is that work rounded UP to a whole field.  So from the one
+   arm being played, both roundings can be worked out: the same work costs 6.56 % fewer lines at
+   28.6364 MHz, and a field is 262.5 lines on both (the NTSC line rate does not move).  Measured
+   2026-09-24 on console: c scaled x0.9393 against x0.9384 predicted, 0.09 % apart, so the ratio
+   is good enough to decide a rounding.  wkUp counts the images where the faster clock lands on a
+   SHORTER field count -- the only way a clock gain is ever visible, because the loop sleeps on
+   the vblank.  Accumulated over a whole level it needs no second run and no matched combat.
+   The one thing it cannot model: work that is wall-clock bound rather than CPU bound (a CD read)
+   does not shrink with the clock, so a level that streams heavily will read slightly optimistic. */
+static int wkImg,wkF0,wkF1,wkUp,wkWait,wkH0;
+
 static void probeReset(void)
 {probeImg=0; probeQ=0; probeLineSum=0; probeOk=0; probeNo=0;
  probeHave=0; probeFrozen=0; probeMHz100=0; probeFrm10=0;
+ wkImg=0; wkF0=0; wkF1=0; wkUp=0; wkWait=0; wkH0=0;
+}
+
+/* the lines this image spent asleep on the vblank, read around that wait */
+static void probeWaitStart(void)
+{wkH0=(int)htimer;
+}
+
+static void probeWaitEnd(void)
+{wkWait=(int)htimer-wkH0;
+ if (wkWait<0)
+    wkWait=0;
 }
 
 static void probeSample(int lines)
 {unsigned short t=getTimer();
+ /* the level accumulator: every image, for the whole level, never frozen */
+ if (probeHave && probeImg>PROBE_SKIP && lines>=1 && lines<=8000)
+    {int wHi,wLo,f0,f1,w=lines-wkWait;
+     if (w<1)
+	w=1;
+     if (SYS_GETSYSCK)                  /* playing the 352 arm: w is the fast one */
+	{wLo=w; wHi=(w*10656)/10000;}
+     else                               /* playing the 320 arm: w is the slow one */
+	{wHi=w; wLo=(w*10000)/10656;}
+     f0=(wHi*2+524)/525;                /* ceil(w / 262.5), a whole field either way */
+     f1=(wLo*2+524)/525;
+     if (f0<1) f0=1;
+     if (f1<1) f1=1;
+     wkImg++; wkF0+=f0; wkF1+=f1;
+     if (f1<f0)
+	wkUp++;
+    }
  if (probeFrozen)
-    return;
+    {probeLast=t;
+     return;
+    }
  probeImg++;
  /* The FRC is 16 bit at phi/32, so it wraps after 65536 ticks -- 78.0 ms at 26.87 MHz, 73.2 at
     28.64.  Throwing those images away would blind the probe exactly where it is wanted: a 15 fps
@@ -2929,7 +2974,7 @@ int runLevel(char *filename,int levelNm)
 		       before views 1..: a gun is refused only when view 0's things alone
 		       filled every slot.  Before, the slots were given over under the list.
 	 The fps line used nine of the ~40 readable columns, and -50 to -28
-	 are taken (time, mem, clk, then the profile tree): the LOD fits here. */
+	 are taken (time, mem, clk, lvl, then the profile tree): the LOD fits here. */
      CFG_PROF("Overlay"); drawStringf(-158,-60,1,"fps:%d lod:%d/%d/%d th:%d/%d",
 				      60/framesElapsed,lodFused,lodCells,lodFlat,
 				      picLastSpriteOut,picSpriteLod);
@@ -2941,7 +2986,7 @@ int runLevel(char *filename,int levelNm)
 	 GCC14: row -100 and solo only.  It used to sit on -80 and wrote over obj:, both every
 	 image.  -100 is the row the shipping build leaves free, and the three that borrow it
 	 win over this one: the split screen's c: line, the walk probe (WALK=1), the ASSERT
-	 build's extra:.  Before moving any line, check the row -- SRUINS.C draws ten. */
+	 build's extra:.  Before moving any line, check the row -- SRUINS.C draws eleven. */
 #if defined(NDEBUG) && !defined(WALKPROBE)
      if (mpPlayers==1)
 	CFG_STATUS_SECTOR();
@@ -3055,6 +3100,17 @@ int runLevel(char *filename,int levelNm)
 	{drawStringf(-158,-30,1,"clk:%d/%d.%02dM/frm:%d.%d/ok:%d/no:%d",
 		     (int)SYS_GETSYSCK,probeMHz100/100,probeMHz100%100,
 		     probeFrm10/10,probeFrm10%10,probeOk,probeNo);}
+
+     /* LEGEND  lvl : images counted since this level started -- it never freezes, so it is the
+			WHOLE level, however it was played.  Two playthroughs need not match: each
+			one judges ITSELF.
+		up  : of those, the images the 28.64 MHz clock would land on a SHORTER field
+			count.  That is the only way a clock gain is ever seen, the loop being
+			asleep on the vblank otherwise.
+		f   : total fields the level cost at 26.87 / would have cost at 28.64.  Their
+			ratio is the honest whole-level answer -- play a level end to end on
+			either arm and read it once at the exit. */
+     drawStringf(-158,-20,1,"lvl:%d up:%d f:%d/%d",wkImg,wkUp,wkF0,wkF1);
 
 #ifdef WALKPROBE
      /* LEGEND  walk : what the VDP1 steps through for the cells, in thousands of pixels:
@@ -3225,7 +3281,9 @@ int runLevel(char *filename,int levelNm)
 	next whole field: work removed anywhere else only shows as frames per second once this one
 	has been eaten through. */
      CFG_PROF("VBlank Wait");
+     probeWaitStart();                  /* GCC14: the idle this image is about to spend */
      while (vtimer<smoothVTime) ;
+     probeWaitEnd();
      CFG_PROF_END();
 
      /* sometimes a vtimer switch can occur in here */
