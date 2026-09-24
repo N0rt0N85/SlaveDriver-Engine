@@ -263,7 +263,7 @@ void playMovie(char *fileName,int canSkip)
  EZ_setChar(charNm,COLOR_5,320,240,NULL);
  vdp1Vram=(EZ_charNoToVram(charNm)<<3)+0x25c00000;
 
- SCL_SetDisplayMode(SCL_NON_INTER,SCL_240LINE,SCL_NORMAL_A);
+ SCL_SetDisplayMode(SCL_NON_INTER,SCL_240LINE,SYS_GETSYSCK? SCL_NORMAL_B: SCL_NORMAL_A);  /* GCC14: keep the clock */
  SCL_SetFrameInterval(FRAMESKIP);
  SPR_SetTvMode(SPR_TV_NORMAL,SPR_TV_320X240,OFF);
  SPR_SetEraseData(0x0000,0,0,319,239);

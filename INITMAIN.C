@@ -198,7 +198,7 @@ void playIntro(void)
  EZ_initSprSystem(500,8,500,
 		  240,0x0000);
  i=initFonts(0,7);
- SCL_SetDisplayMode(SCL_NON_INTER,SCL_240LINE,SCL_NORMAL_A);
+ SCL_SetDisplayMode(SCL_NON_INTER,SCL_240LINE,SYS_GETSYSCK? SCL_NORMAL_B: SCL_NORMAL_A);  /* GCC14: keep the clock */
  SCL_SetFrameInterval(1);
  SPR_SetTvMode(SPR_TV_NORMAL,SPR_TV_320X240,OFF);
 
@@ -576,7 +576,7 @@ void main(void)
  BOOT_PROBE(0x7fff); /* GCC14: white */
  dPrint("Here we are!\n");
  SCL_Vdp2Init();
- SCL_SetDisplayMode(SCL_NON_INTER,SCL_240LINE,SCL_NORMAL_A);
+ SCL_SetDisplayMode(SCL_NON_INTER,SCL_240LINE,SYS_GETSYSCK? SCL_NORMAL_B: SCL_NORMAL_A);  /* GCC14: keep the clock */
  SPR_SetEraseData(RGB(0,0,0),0,0,319,239);
  EZ_initSprSystem(1540,8,1524,
 		  240,0x8000);
@@ -587,6 +587,27 @@ void main(void)
  displayEnable(1);
  SetVblank();
  abcResetEnable=1;
+
+ /* GCC14: the 352-dot arm.  Hold X+Y+Z through the logo to ask MAIN for the 28.6364 MHz clock
+    (SMPC CKCHG352) instead of 26.8741.  Sampled HERE because SetVblank() above is what starts
+    the continuous peripheral fetch: a hand-rolled PER_LInit before it can leave the SMPC mid
+    INTBACK and kill the pad on both arms.  controlerPresent guards the active-low sample --
+    lastInputSample is .bss-zero before the first fetch, which reads as every button down. */
+ {int i,held=0,seen=0;
+  for (i=0;i<60;i++)                /* delay(1) waits two vblanks, so the window is about 2 s */
+     {delay(1);
+      if (controlerPresent &&
+	  (((~lastInputSample)&(PER_DGT_X|PER_DGT_Y|PER_DGT_Z))==
+	   (PER_DGT_X|PER_DGT_Y|PER_DGT_Z)))
+	 {if (++held>=8)               /* eight in a row, and it is latched: releasing the */
+	     seen=1;                   /* chord before the window ends must not lose the arm */
+	 }
+      else
+	 held=0;
+     }
+  POKE(CLK352_ADDR,seen? CLK352_TOKEN: 0);
+ }
+
  token=PEEK(0x02ffffc);
  if (token==GOODEND || token==BADEND || token==SUPERGOODEND)
     {

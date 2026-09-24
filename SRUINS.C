@@ -2293,6 +2293,59 @@ static void mpBalance(void)
     }
 }
 
+/* GCC14: the system-clock probe.  SYS_GETSYSCK says which clock the BIOS was ASKED for; it is a
+   BIOS RAM word, not a register, so it cannot witness what the SMPC applied.  This measures it:
+   the master's FRT runs at phi/32, htimer counts HBlank-IN, and the NTSC line rate is the same
+   15734 Hz in both dot modes (26.8741e6/1708 == 28.6364e6/1820), so the line is a ruler that
+   does not move with the clock.  Ticks per line therefore reads the clock itself -- 53372 per
+   1000 lines at 320 dots, 56862 at 352.
+   Main thread only.  PROFILE.C is the binary's only 16-bit FRT reader, and a read from an
+   interrupt would create the SH-2 shared-TEMP race that corrupts every profile pair.  Never
+   touch FTCSR either: the master uses the FRT's capture flag as the slave's answer semaphore
+   (WALLS.C), so calling setFastTimer() here would eat a slave kick.
+   Read it as a RATIO (352/320 should be 1.0656), not as a calibration: HBLK_IN sits below both
+   vblank vectors, so lines missed inside the vblank handlers are collapsed into one interrupt
+   and the derived MHz reads a little high on both arms. */
+#define PROBE_SKIP  120        /* images let through before anything is counted */
+#define PROBE_AVG    60        /* images averaged, then frozen for the photograph */
+static int probeImg,probeQ,probeLineSum,probeOk,probeNo;
+static unsigned short probeLast;
+static char probeHave,probeFrozen;
+static int probeMHz100,probeFrm10;
+
+static void probeReset(void)
+{probeImg=0; probeQ=0; probeLineSum=0; probeOk=0; probeNo=0;
+ probeHave=0; probeFrozen=0; probeMHz100=0; probeFrm10=0;
+}
+
+static void probeSample(int lines)
+{unsigned short t=getTimer();
+ if (probeFrozen)
+    return;
+ probeImg++;
+ /* the FRC is 16 bit at phi/32: it wraps after 65536 ticks, which is 1228 lines at 26.87 MHz
+    and 1153 at 28.64.  An image past 1100 lines could have wrapped, so it is thrown away, and
+    the ticks-per-line band catches what the length test cannot (the sample that straddles
+    initProfiler's FRC clear).  A wrap cannot alias back into the band: it subtracts 65536. */
+ if (probeHave && probeImg>PROBE_SKIP && lines>=200 && lines<=1100)
+    {int q=(((int)(unsigned short)(t-probeLast))*1000)/lines;
+     if (q>=45000 && q<=70000)
+	{probeQ+=q; probeLineSum+=lines; probeOk++;}
+     else
+	probeNo++;
+    }
+ probeLast=t; probeHave=1;
+ if (probeImg>=PROBE_SKIP+PROBE_AVG)
+    {if (probeOk>0)
+	{/* q is ticks per 1000 lines; a line is 63.5556 us and a tick 32 cycles, so
+	    Hz = q*503.496 and MHz*100 = q*5035/100000 (53372 -> 2687). */
+	 probeMHz100=((probeQ/probeOk)*5035)/100000;
+	 probeFrm10=(probeLineSum*10)/probeOk;
+	}
+     probeFrozen=1;
+    }
+}
+
 int runLevel(char *filename,int levelNm)
 {XyInt noUserClip[2]={{0,0},{320-1,240-1}};
  int i,monsterMoveCounter,musicMark;
@@ -2496,6 +2549,7 @@ int runLevel(char *filename,int levelNm)
 #endif
  debugPrint("Start Loop\n");
  initProfiler();
+ probeReset();                      /* GCC14: initProfiler zeroed the FRC, so start the probe here */
  keyMask=0;
  earthQuake=0;
  vspeedSwitchCount=0;
@@ -2553,6 +2607,7 @@ int runLevel(char *filename,int levelNm)
 				      straddles this zeroing (WALLS.C wallsPipeJoin) */
      if (lastFrameLines<1)
 	lastFrameLines=1;
+     probeSample(lastFrameLines);   /* GCC14: FRC and lines sampled at the same point of the loop */
      htimer=0;
      crashBeat();                   /* freeze report: armed while the loop turns (CRASH.H) */
      mpPollStart();                 /* START on the next pad: that player joins, once */
@@ -2864,8 +2919,8 @@ int runLevel(char *filename,int levelNm)
 		       bar are not drawn, nor their shadow.  The guns take their tiles
 		       before views 1..: a gun is refused only when view 0's things alone
 		       filled every slot.  Before, the slots were given over under the list.
-	 The fps line used nine of the ~40 readable columns, and -50 to -30
-	 are taken (time, mem, then the profile tree): the LOD fits here. */
+	 The fps line used nine of the ~40 readable columns, and -50 to -28
+	 are taken (time, mem, clk, then the profile tree): the LOD fits here. */
      CFG_PROF("Overlay"); drawStringf(-158,-60,1,"fps:%d lod:%d/%d/%d th:%d/%d",
 				      60/framesElapsed,lodFused,lodCells,lodFlat,
 				      picLastSpriteOut,picSpriteLod);
@@ -2877,7 +2932,7 @@ int runLevel(char *filename,int levelNm)
 	 GCC14: row -100 and solo only.  It used to sit on -80 and wrote over obj:, both every
 	 image.  -100 is the row the shipping build leaves free, and the three that borrow it
 	 win over this one: the split screen's c: line, the walk probe (WALK=1), the ASSERT
-	 build's extra:.  Before moving any line, check the row -- SRUINS.C draws nine. */
+	 build's extra:.  Before moving any line, check the row -- SRUINS.C draws ten. */
 #if defined(NDEBUG) && !defined(WALKPROBE)
      if (mpPlayers==1)
 	CFG_STATUS_SECTOR();
@@ -2969,6 +3024,26 @@ int runLevel(char *filename,int levelNm)
 
      drawStringf(-158,-40,1,"mem:%dk+%dk=%dk",mem_coreleft(0)>>10,
 		 mem_coreleft(1)>>10,(mem_coreleft(0)+mem_coreleft(1))>>10);
+
+     /* LEGEND  clk : the clock the BIOS was ASKED for (0 = 320 dots / 26.87 MHz, 1 = 352 dots
+			/ 28.64).  It is a BIOS RAM word, NOT a register: it says what was
+			requested, never what the SMPC applied.  The MHz beside it is MEASURED
+			(the FRT against the hblank line count, which does not move with the dot
+			clock) and is the only witness.  clk:1 with 26.8M means the hardware
+			refused the change.
+		frm : the frame period in hblank lines, averaged -- the WHOLE loop, including
+			everything time:'s c leaves out (Tile Flush, the pipe kick, the VBlank
+			wait).  Clock-independent and continuous, unlike fps: 60/N.
+		ok/no : sample windows kept / thrown away by the FRT wrap guard.
+	 The row counts down (wait:N images) and then FREEZES, so one photograph of a spawn is
+	 representative.  Read the two arms as a RATIO: 28.64/26.87 = 1.0656. */
+     if (!probeFrozen)
+	{drawStringf(-158,-30,1,"clk:%d/wait:%d",
+		     (int)SYS_GETSYSCK,PROBE_SKIP+PROBE_AVG-probeImg);}
+     if (probeFrozen)
+	{drawStringf(-158,-30,1,"clk:%d/%d.%02dM/frm:%d.%d/ok:%d/no:%d",
+		     (int)SYS_GETSYSCK,probeMHz100/100,probeMHz100%100,
+		     probeFrm10/10,probeFrm10%10,probeOk,probeNo);}
 
 #ifdef WALKPROBE
      /* LEGEND  walk : what the VDP1 steps through for the cells, in thousands of pixels:
@@ -3262,7 +3337,22 @@ static void fadeSegaLogo(void)
 void main(void)
 {char *levelFile;
  int level;
+ int clk352;
  BOOT_PROBE2(0x7c1f);	/* GCC14: magenta = MAIN.BIN reached, see docs/PORTING_NOTES.md */
+
+ /* GCC14: the 352-dot arm (INIT's X+Y+Z chord).  The token is read BEFORE the clock change --
+    low work RAM is DRAM and the SMPC destroys it (SBL MANSYS.TXT, system clock change).  The
+    change must also precede megaInit() below: the SMPC turns the SCSP, VDP1, VDP2, SCU and the
+    slave off, and megaInit is the only code that brings them back.  SBL's SCL_SetDisplayMode
+    issues the BIOS call itself, guarded on SYS_GETSYSCK, so this is the one site in the whole
+    program that can change the clock -- every other one below follows SYS_GETSYSCK and is a
+    no-op.  displayEnable writes TVMD now rather than at the next vblank: the manual asks for
+    the TV mode to follow the clock fast, or the sync signal glitches. */
+ clk352=(PEEK(CLK352_ADDR)==CLK352_TOKEN);
+ POKE(CLK352_ADDR,0);
+ SCL_SetDisplayMode(SCL_NON_INTER,CFG_SCL_LINES,clk352? SCL_NORMAL_B: SCL_NORMAL_A);
+ displayEnable(0);
+
  enable_stereo=1;
  enable_music=1;
  abcResetEnable=1;
@@ -3286,7 +3376,7 @@ void main(void)
  dPrint("done.\n");
 
  SCL_Vdp2Init();
- SCL_SetDisplayMode(SCL_NON_INTER,CFG_SCL_LINES,SCL_NORMAL_A);
+ SCL_SetDisplayMode(SCL_NON_INTER,CFG_SCL_LINES,SYS_GETSYSCK? SCL_NORMAL_B: SCL_NORMAL_A);  /* GCC14: keep the clock */
  SPR_SetEraseData(RGB(0,0,0),0,0,319,239);
  displayEnable(0);
  setVDP2();
@@ -3377,7 +3467,7 @@ void main(void)
  SCL_Vdp2Init();
  dPrint("2\n");
  displayEnable(0);
- SCL_SetDisplayMode(SCL_NON_INTER,CFG_SCL_LINES,SCL_NORMAL_A);
+ SCL_SetDisplayMode(SCL_NON_INTER,CFG_SCL_LINES,SYS_GETSYSCK? SCL_NORMAL_B: SCL_NORMAL_A);  /* GCC14: keep the clock */
  setVDP2();
  dPrint("3\n");
 

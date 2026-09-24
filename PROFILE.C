@@ -2,6 +2,7 @@
 
 #include "util.h"
 #include "string.h"
+#include <sega_sys.h>    /* GCC14: SYS_GETSYSCK, the clock PROF_TENTHS follows */
 #include "print.h"
 #include "spr.h"
 
@@ -155,9 +156,13 @@ static void printTree(ProfileNode *tree,int level,
    the 320-dot mode, 26.8741 MHz NTSC (SMPC manual table 1.1), so a tick is 1/839.8 ms and
    2/179 reads 6.6 % low.  Checked on the 2026-09-14 E1M1 captures: with 839.8 the children of
    the root add up to the frame's calc (time: c - b) within 5 lines at all three spots, with
-   895 they fall short of the frame period.  The default build keeps its constant. */
+   895 they fall short of the frame period.  The default build keeps its constant.
+   GCC14: and since the 352 arm exists the rate is no longer a compile-time constant -- it is
+   whichever clock the SMPC is on.  Frozen at 839.8 a 352 tree would inflate every node by the
+   same 6.56 % it saves, and print the master's work unchanged to within 0.003 %: a manufactured
+   null result, and the most quotable line in the frame. */
 #undef PROF_TENTHS
-#define PROF_TENTHS(t) (((t)*50)/4199)
+#define PROF_TENTHS(t) (SYS_GETSYSCK? (((t)*2)/179): (((t)*50)/4199))
 #else
 #define MAXPROFLINES 14
 #endif

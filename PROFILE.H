@@ -10,6 +10,7 @@ void dumpProfileData(void);
 void drawProfileData(int x,int y);
 extern int profileShow;
 char *profilePath(char *buf,int size);  /* GCC14: "root>Walls>...", for CRASH.C */
+unsigned short getTimer(void);          /* GCC14: the FRT at phi/32 -- the 352 clock probe */
 
 #else
 

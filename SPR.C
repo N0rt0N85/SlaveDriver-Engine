@@ -6,6 +6,7 @@
 #include<string.h>
 
 #include "util.h"
+#include <sega_sys.h>    /* GCC14: SYS_GETSYSCK, the clock the erase width follows */
 #include "spr.h"
 #include "dma.h"
 
@@ -44,7 +45,9 @@ void EZ_setErase(int eraseWriteEndLine,unsigned short eraseWriteColor)
 {struct cmdTable *first=(struct cmdTable *)VRAM_ADDR;
  if (eraseWriteEndLine>0)
     {
-     SPR_SetEraseData(eraseWriteColor,0,0,319,eraseWriteEndLine);
+     /* GCC14: the erase covers the whole raster, so it follows the dot clock -- at 352 the
+	right 32 columns would otherwise hold power-on framebuffer garbage. */
+     SPR_SetEraseData(eraseWriteColor,0,0,SYS_GETSYSCK? 351: 319,eraseWriteEndLine);
     }
  else
     SPR_SetEraseData(eraseWriteColor,0,0,1,1);
@@ -55,10 +58,14 @@ void EZ_setErase(int eraseWriteEndLine,unsigned short eraseWriteColor)
     {first->control=JUMP_ASSIGN|ZOOM_NOPOINT|DIR_NOREV|FUNC_POLYGON;
      first->drawMode=COLOR_5|ECDSPD_DISABLE;
      first->color=eraseWriteColor;
-     first->ax=-160; first->ay=ERASEWRITESTARTLINE-120;
-     first->bx= 160; first->by=ERASEWRITESTARTLINE-120;
-     first->cx= 160; first->cy=eraseWriteEndLine-120;
-     first->dx=-160; first->dy=eraseWriteEndLine-120;
+     /* GCC14: the local origin stays at 160 on both arms, so screen column 351 is local +191:
+	the right edge follows the clock, the left one does not. */
+     {int right=SYS_GETSYSCK? 192: 160;
+      first->ax=-160;   first->ay=ERASEWRITESTARTLINE-120;
+      first->bx= right; first->by=ERASEWRITESTARTLINE-120;
+      first->cx= right; first->cy=eraseWriteEndLine-120;
+      first->dx=-160;   first->dy=eraseWriteEndLine-120;
+     }
     }
  else
     first->control=SKIP_ASSIGN;
