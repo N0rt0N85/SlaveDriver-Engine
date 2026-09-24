@@ -298,9 +298,11 @@ static int mpGameMenu(int multi)
  SCL_SetFrameInterval(0xfffe);
  data=lastInputSample;
  while (1)
-    {/* HORDE is a survival run, playable alone: the multiplayer screen's floor of two is its
-	alone lifted, and the count follows when the mode changes under it. */
-     lo=(multi && mpMode!=MP_HORDE)? 2: 1;
+    {/* HORDE is a survival run and CO-OP is Doom's own campaign: both are playable ALONE, so the
+	multiplayer screen's floor of two is lifted for them, and the count follows when the mode
+	changes under it.  Co-op alone is not the title's NEW GAME twice over -- this screen also
+	chooses the MAP and the skill, and a save only ever writes in co-op (DOOM_SAVE.C). */
+     lo=(multi && mpMode!=MP_HORDE && mpMode!=MP_COOP)? 2: 1;
      if (players<lo)
 	players=lo;
      if (mpMode==MP_BOSS && !CFG_MP_BOSSLEVEL(level))

@@ -61,7 +61,8 @@ extern int mpPadsPresent;               /* pads found at the last poll */
    spawn spots and the score; what a role IS (a monster the player drives, the boss) belongs to
    the game (CFG_MP_* hooks). */
 /* MP_HORDE (game/doom/DOOM_HORDE.C): the survival mode.  Appended, so the values above keep
-   theirs; it is the one mode the multiplayer screen lets a single player start. */
+   theirs.  It and MP_COOP are the two modes the multiplayer screen lets a SINGLE player start:
+   both are playable alone, the others need someone to fight. */
 enum {MP_COOP,MP_DM,MP_TEAM,MP_MONSTERS,MP_BOSS,MP_HORDE,MP_NMMODES};
 extern int mpMode;
 extern unsigned char mpTeam[MPMAX];     /* MP_TEAM: 0 or 1 */
