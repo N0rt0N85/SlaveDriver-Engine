@@ -157,6 +157,26 @@ void initInput(void)
  set_imask(o);
 }
 
+/* GCC14: WHAT HAPPENED WHILE THE GAME WAS NOT LOOKING DID NOT HAPPEN.  A screen that blocks the
+   main loop -- the pause menu, a question -- runs for hundreds of fields while these queues keep
+   filling at 60 Hz, and they are SIXTEEN deep: when the loop starts again it replays the window it
+   was handed (SRUINS.C movePlayer: inputEnd and the fields elapsed), and the ring no longer holds
+   the fields that window names -- it holds the end of the menu.  The button that closed the menu is
+   in there, and it is replayed as a fresh press: A on RESUME fired the weapon (reported
+   2026-09-24).  So every slot takes the sample as it is NOW.  A button still held is still held --
+   the d-pad walks the moment the game is back -- and nothing released while the menu was open can
+   come back as a press. */
+void inputForget(void)
+{int o=get_imask(),i,k;
+ set_imask(0xff);
+ for (i=0;i<INPUTQSIZE;i++)
+    {inputQ[i]=lastInputSample;
+     for (k=1;k<MPMAX;k++)
+	inputQP[k][i]=lastInputSampleP[k]|PER_DGT_S;   /* as the vblank writes them: no START */
+    }
+ set_imask(o);
+}
+
 #ifdef BOOTPROBE
 volatile unsigned short bootStage=0;
 

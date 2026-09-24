@@ -123,7 +123,7 @@ static const Uint16 regList[]=
  0x98,0x9a,0xd0,                        /* ZMCTL, SCRCTL, WCTLA */
  0xe4,0xe8,0xea,0xec,0xee,              /* CRAOFA, LNCLEN, SFPRMD, CCCTL, SFCCMD */
  0xf0,0xf2,0xf4,0xf6,                   /* PRISA..PRISD: the sprites' priorities */
- 0xf8,0x108,0x110,0x112};               /* PRINA, CCRNA, CLOFEN, CLOFSL */
+ 0xf8,0xfc,0x108,0x110,0x112};          /* PRINA, PRIR, CCRNA, CLOFEN, CLOFSL */
 #define NREGS (sizeof(regList)/sizeof(regList[0]))
 
 static const char *const items[]={"RESUME","MAP","STATS","WEAPONS","OPTIONS","SAVE / LOAD",
@@ -250,6 +250,7 @@ static Uint16 pauseReg(int o,int v)
      case 0xf0: case 0xf2: case 0xf4: case 0xf6:
 	return 0x0101;                  /* every sprite register down to 1: see below */
      case 0xf8: return 0x0607;          /* NBG0 7 (the menu), NBG1 6 (the veil) */
+     case 0xfc: return 1;               /* ... and the sky with the sprites: see below */
      case 0x108: return (b&0x001f)|(v<<8);
      case 0x110:                        /* colour offset: never on the menu; on the veil as on */
      case 0x112:                        /* SP0, the view under it (it applies to the mixed    */
@@ -273,6 +274,17 @@ static void vblankIn(void)
    hiding the bar wrote into a plane nothing could see.  So PRISA..PRISD go down to 1 with the
    rest: under the menu (7) and under the veil (6), a sprite at 1 is what the veil was written
    to darken.
+   AND THE SKY FOLLOWS THEM.  RBG0 is the sky (PLAX.C), and the game leaves it at 4 -- the SBL's
+   own default, which nothing in a level changes.  That is at or under every sprite the game
+   draws: sprite register 0 is 4 as well and the tie goes to the sprite (Sprite > RBG0 > NBG0 >
+   NBG1, VDP2 table 11.1), the other seven are 7.  Either way the world is drawn over the sky and
+   the sky fills its holes.  Lower the sprites alone and 4 beats 1: RBG0 has its transparency
+   turned OFF for the parallax (PLAX.C dispenbl |= 0x1000), so the frozen frame disappeared under
+   the sky wherever the last image left the sky's window open -- which CFG_SKY_FULLWINDOW makes
+   the WHOLE view as soon as one sky wall was in sight (reported 2026-09-24: "des fois on voit le
+   ciel en arriere plan du menu pause").  So PRIR goes to 1 too: the pair is the game's own
+   again, one step lower, both under the veil.
+
    THE WAY BACK IS THE BUFFER, NOT THE CHIP.  They were first taken from the chip at the top of
    the menu and put back at the bottom, and a priority register cannot be read: "a WRITE-ONLY
    16-bit register located at addresses 1800F0H through 1800F6H" (VDP2 p.209).  What came back

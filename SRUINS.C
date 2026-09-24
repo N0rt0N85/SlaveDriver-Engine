@@ -3210,6 +3210,7 @@ int runLevel(char *filename,int levelNm)
 	 stunCounter=10;
 	 hitCamel=0;
 	 vtimer=smoothVTime;
+	 inputForget();              /* the button that answered is not a press for the level */
 	}
      if (playerMotionEnable &&
 	 (!(lastInputSample & PER_DGT_S) || !controlerPresent || delayed_fade || CFG_PAUSE_ASKED()))
@@ -3222,6 +3223,7 @@ int runLevel(char *filename,int levelNm)
 			delayed_fade,delayed_fadeButton,delayed_fadeSel);
 	 delayed_fade=0;
 	 vtimer=smoothVTime;
+	 inputForget();              /* ... nor is the one that closed the menu */
 	}
 
      if (quitRequest)

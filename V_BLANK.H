@@ -24,6 +24,8 @@ extern volatile short analogTR;
 extern volatile short analogTL;
 extern volatile char enableDoorReset;
 void initInput(void);
+void inputForget(void);         /* GCC14: after a screen that blocked the loop -- the button that
+				   closed it is not a press for the game (V_BLANK.C) */
 
 extern volatile Uint32 vtimer, htimer;
 
