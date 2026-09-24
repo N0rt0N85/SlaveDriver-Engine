@@ -87,6 +87,13 @@ extern unsigned short worldGrey[];
    the game's: the converter reads it off the special floor the map is built around -- green for
    nukage, red for blood, orange for lava -- and the pools object hands it over at load
    (setWorldTint).  The default is the nukage green, which is what an untouched level gets. */
+/* GCC14: THE TINT IS A LIGHT, NOT A FILTER.  Holding red and blue down (worldTint) gives the hue,
+   but on its own it is a MULTIPLY: it shifts a bright wall by six levels and a dark one by two, so
+   the green showed most exactly where the room was already bright, and a dark room near the pool
+   barely changed -- the opposite of a pool that glows.  The bands therefore also LIFT green toward
+   full by a share of what the wall has left, which is large when the wall is dark and nearly
+   nothing when it is bright.  Out of sixteen, at the top band. */
+#define WORLDTINT_GLOW 3
 extern unsigned char worldTint[3];
 void setWorldTint(int r,int g,int b);   /* rebuilds bands 1.. of worldGrey, and the things' bank */
 /* how much RED and BLUE the LAST band keeps, in sixteenths; the green is the light itself.

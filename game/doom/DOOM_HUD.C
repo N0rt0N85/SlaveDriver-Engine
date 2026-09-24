@@ -281,10 +281,8 @@ static void doomHudText(int x,int y,const char *s)
 /* GCC14: the automap's title line (HU_Drawer draws w_title while automapactive): the level's
    name at (HU_TITLEX 0, HU_TITLEY 167 - the font's 7 lines), just above the status bar -- here
    the view ends at CFG_YMAX.  The names of d_englsh.h (HUSTR_E1M1..9). */
-static const char *const doomMapTitles[DOOM_NMLEVELS]=
-   {"E1M1: Hangar","E1M2: Nuclear Plant","E1M3: Toxin Refinery","E1M4: Command Control",
-    "E1M5: Phobos Lab","E1M6: Central Processing","E1M7: Computer Station",
-    "E1M8: Phobos Anomaly","E1M9: Military Base"};
+const char *const doomMapTitles[DOOM_NMLEVELS]=   /* not static: PAUSE.OVL's STATS and MAP */
+   {DOOM_EP_TITLES};                             /* the .cfg's EPISODEn_TITLES (episodes.py) */
 
 /* SRUINS.C:2211 (CFG_DRAW_MESSAGE): HUlib_drawTextLine at (HU_MSGX 0, HU_MSGY 0) = screen (0, 0) */
 void doom_drawMessage(void)

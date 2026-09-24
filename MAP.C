@@ -16,6 +16,9 @@
 #include "bigmap.h"
 #include "gamestat.h"
 #include "local.h"
+#include "walls.h"     /* GCC14: viewXmin..viewCy -- the window of the view being drawn */
+#include "mplayer.h"   /* ... and who is looking at it */
+#include "map.h"
 
 #define MINX (-160)
 #define MAXX (160)
@@ -24,8 +27,21 @@
 
 char mapColor[MAXNMWALLS];
 
+/* GCC14: THE WINDOW THE MAP IS DRAWN IN.  Solo keeps the four numbers above, to the pixel and
+   for both games -- they are not the renderer's window (PowerSlave centres its view on line 120
+   and its map on 110).  In SPLIT SCREEN each view draws ITS OWN map in ITS OWN half, and there
+   the window IS the renderer's: viewXmin..viewYmax are what mpSetViewport just computed for this
+   view (WALLS.H), so the map lands exactly where the view it replaces was. */
+static short mapXmin=MINX,mapXmax=MAXX,mapYmin=MINY,mapYmax=MAXY;
+
 static Fixed32 mapScale;
 static int gotFullMap;
+
+/* MPLAYER.H: each player zooms ITS OWN map.  mapOn is registered by the engine (SRUINS.C
+   mpRegisterEngine), the scale belongs here. */
+void mapMpRegister(void)
+{MPREG(mapScale);
+}
 
 void mapScaleUp(void)
 {mapScale=MTH_Mul(mapScale,60000);
@@ -181,12 +197,14 @@ static void doomDrawMapWalls(int cx,int cy,MthXyz *north,MthXyz *east)
  pal[1]=doomMapColor(DOOM_AM_REDS);
  pal[2]=doomMapColor(DOOM_AM_BROWNS);
  pal[3]=doomMapColor(DOOM_AM_YELLOWS);
- colors[1]=doomMapColor(DOOM_AM_WHITE);       /* the player arrow drawn by drawMap */
+ colors[1]=doomMapColor(mpPlayers>1? doom_playerMapColor(mpCur): DOOM_AM_WHITE);
+                                              /* the player arrow drawn by drawMap: its OWN
+						 colour in split, Doom's white when alone */
 
- mapLine[0].x=MINX; mapLine[0].y=MINY;
- mapLine[1].x=MAXX; mapLine[1].y=MINY;
- mapLine[2].x=MAXX; mapLine[2].y=MAXY;
- mapLine[3].x=MINX; mapLine[3].y=MAXY;
+ mapLine[0].x=mapXmin; mapLine[0].y=mapYmin;
+ mapLine[1].x=mapXmax; mapLine[1].y=mapYmin;
+ mapLine[2].x=mapXmax; mapLine[2].y=mapYmax;
+ mapLine[3].x=mapXmin; mapLine[3].y=mapYmax;
  EZ_polygon(ECD_DISABLE|SPD_DISABLE,RGB(0,0,0),mapLine,NULL);
 
  for (s=0;s<level_nmSectors;s++)
@@ -212,13 +230,13 @@ static void doomDrawMapWalls(int cx,int cy,MthXyz *north,MthXyz *east)
 	 mapLine[0].y=f(p1.x*east->x+p1.y*east->y);
 	 mapLine[1].x=f(p2.x*north->x+p2.y*north->y);
 	 mapLine[1].y=f(p2.x*east->x+p2.y*east->y);
-	 if (mapLine[0].x<MINX && mapLine[1].x<MINX)
+	 if (mapLine[0].x<mapXmin && mapLine[1].x<mapXmin)
 	    continue;
-	 if (mapLine[0].x>MAXX && mapLine[1].x>MAXX)
+	 if (mapLine[0].x>mapXmax && mapLine[1].x>mapXmax)
 	    continue;
-	 if (mapLine[0].y<MINY && mapLine[1].y<MINY)
+	 if (mapLine[0].y<mapYmin && mapLine[1].y<mapYmin)
 	    continue;
-	 if (mapLine[0].y>MAXY && mapLine[1].y>MAXY)
+	 if (mapLine[0].y>mapYmax && mapLine[1].y>mapYmax)
 	    continue;
 	 /* GCC14: a wall shorter than a pixel is a dot the neighbouring walls already cover --
 	    zoomed out, most of them are */
@@ -237,8 +255,39 @@ static void doomDrawMapWalls(int cx,int cy,MthXyz *north,MthXyz *east)
    DOOM_AM_ARROWMIN px, or the opening zoom would leave an arrow 5 px long. */
 #define DOOM_AM_R        1198372        /* F(8*16)/7 = 18.29 u */
 #define DOOM_AM_ARROWMIN 7
-static const signed char doomArrow[7][4]=
+const signed char doomArrow[7][4]=       /* not static: PAUSE.OVL's MAP draws the same arrow */
    {{-7,0,8,0},{8,0,4,2},{8,0,4,-2},{-7,0,-9,2},{-7,0,-9,-2},{-5,0,-7,2},{-5,0,-7,-2}};
+
+/* GCC14: THE OTHER PLAYERS, each in the colour its own body wears -- doom_playerMapColor gives
+   the PLAYPAL index of the translation ramp mpSetBanks dressed it in, so the dot on the map and
+   the marine in the view are the same colour by construction.  A CROSS, not a box: at the zoom
+   the map opens on, two marines a few paces apart share a pixel and a cross still reads as two.
+   Drawn after the walls and before the arrow, so the viewer's own arrow stays on top. */
+#define DOOM_AM_MARK 3
+static void doomDrawPlayers(int cx,int cy,MthXyz *north,MthXyz *east)
+{int k;
+ XyInt line[2];
+ for (k=0;k<mpPlayers;k++)
+    {int x,y,tx,ty,c;
+     if (k==mpCur || !mpBody[k])
+	continue;
+     x=f(mpBody[k]->pos.x-cx);
+     y=f(mpBody[k]->pos.z-cy);
+     tx=f(x*north->x+y*north->y);
+     ty=f(x*east->x+y*east->y);
+     if (tx<mapXmin || tx>mapXmax || ty<mapYmin || ty>mapYmax)
+	continue;
+     if (EZ_getCmdRoom()<DOOM_AM_RESERVE)
+	return;
+     c=doomMapColor(doom_playerMapColor(k));
+     line[0].x=tx-DOOM_AM_MARK; line[0].y=ty;
+     line[1].x=tx+DOOM_AM_MARK; line[1].y=ty;
+     EZ_line(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|COMPO_REP,c,line,NULL);
+     line[0].x=tx; line[0].y=ty-DOOM_AM_MARK;
+     line[1].x=tx; line[1].y=ty+DOOM_AM_MARK;
+     EZ_line(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|COMPO_REP,c,line,NULL);
+    }
+}
 
 /* Screen = north up (am_map.c draws the level unturned, following the player): the facing
    (-sin yaw, cos yaw) of DOOM_PLAYER.C doomMoveTic, Z = Doom's y (doom3d.py), goes to
@@ -282,8 +331,13 @@ void drawMap(int cx,int cy,int cz,int yaw,int currentSector)
  east.x=north.y;
  east.y=-north.x;
 
- {mapLine[0].x=MINX+160; mapLine[0].y=MINY+CFG_YCENTER;
-  mapLine[1].x=MAXX+160; mapLine[1].y=MAXY+CFG_YCENTER;
+ if (mpPlayers==1)
+    {mapXmin=MINX; mapXmax=MAXX; mapYmin=MINY; mapYmax=MAXY;}
+ else
+    {mapXmin=(short)viewXmin; mapXmax=(short)viewXmax;
+     mapYmin=(short)viewYmin; mapYmax=(short)viewYmax;}
+ {mapLine[0].x=viewCx+mapXmin; mapLine[0].y=viewCy+mapYmin;
+  mapLine[1].x=viewCx+mapXmax; mapLine[1].y=viewCy+mapYmax;
   EZ_userClip(mapLine);
  }
 #ifndef NDEBUG
@@ -305,6 +359,7 @@ void drawMap(int cx,int cy,int cz,int yaw,int currentSector)
 
 #ifdef GP_GAME_DOOM
  doomDrawMapWalls(cx,cy,&north,&east);
+ doomDrawPlayers(cx,cy,&north,&east);
  (void)cz; (void)currentSector; (void)w; (void)s; (void)color; (void)transp; (void)currentHeight; (void)p1; (void)p2; (void)wallP;
 #else
  currentHeight=level_sector[currentSector].floorLevel;
@@ -354,13 +409,13 @@ void drawMap(int cx,int cy,int cz,int yaw,int currentSector)
 	 mapLine[1].x=f(p2.x*north.x+p2.y*north.y);
 	 mapLine[1].y=f(p2.x*east.x+p2.y*east.y);
 	 /* clip */
-	 if (mapLine[0].x<MINX && mapLine[1].x<MINX)
+	 if (mapLine[0].x<mapXmin && mapLine[1].x<mapXmin)
 	    continue;
-	 if (mapLine[0].x>MAXX && mapLine[1].x>MAXX)
+	 if (mapLine[0].x>mapXmax && mapLine[1].x>mapXmax)
 	    continue;
-	 if (mapLine[0].y<MINY && mapLine[1].y<MINY)
+	 if (mapLine[0].y<mapYmin && mapLine[1].y<mapYmin)
 	    continue;
-	 if (mapLine[0].y>MAXY && mapLine[1].y>MAXY)
+	 if (mapLine[0].y>mapYmax && mapLine[1].y>mapYmax)
 	    continue;
 	 if (transp)
 	    EZ_line(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|COMPO_TRANS,

@@ -463,6 +463,7 @@ void doom_drawSplitHud(int view,int nmViews);         /* DOOM_HUD.C */
 short doom_playerBodySeq(Sprite *body,Sprite *viewer,int health);
 #define CFG_MP_BODYSEQ(b,v,h) doom_playerBodySeq(b,v,h)       /* SRUINS.C mpShowBodies: the frame of a player's body seen from a view */
 const unsigned char *doom_playerTranslation(int k);
+int doom_playerMapColor(int k);                      /* MAP.C: the PLAYPAL index of that same ramp */
 #define CFG_MP_TRANSLATION(k) doom_playerTranslation(k)          /* MPLAYER.C mpSetBanks: player k's palette remap, NULL = none */
 #define CFG_MP_TINT(k)        0                                  /* ... or a colour filter, when the game has no ramp to remap (PowerSlave) */
 #define CFG_MP_BANKS          {7,5,4}                            /* ... the CRAM banks it may take: the sky's, the spectre's, the last fog step */
@@ -521,6 +522,7 @@ int  doom_titleFonts(void);
 void doom_titlePicture(void);
 void doom_titleEnd(void);
 int  doom_menuCursor(int x,int y);
+void doom_deathLook(void);             /* CFG_DEATH_LOOK: the corpse turns to its killer */
 void doom_loadingScreen(int fd);
 void doom_loadingEnd(void);
 #define CFG_LOADING_SCREEN(fd) doom_loadingScreen(fd)
@@ -537,6 +539,18 @@ extern char doomPauseWho;
 #define CFG_PAUSE_ASKED()      doomPauseWho                      /* ... a joined player's START    */
 #define CFG_PAUSE_POLL(j)      (doomPauseWho=(char)((j)+1))      /* SRUINS.C mpPollStart: it asks (-1: nobody, every image) */
 #define CFG_QUIT_ACTION(q)     ((q)==1? 2: (q))                  /* SRUINS.C: runLevel's result    */
+/* GCC14: the title's LOAD GAME list (INTRO.C loadMenu, MENU.C IT_GAMEBUTTON).  Doom's slots name
+   a LEVEL, not a place in one (DOOM_SAVE.C), and its rows start further right so the skull the
+   rest of the title uses has room beside them. */
+int  doom_saveSlotUsed(int slot);                        /* DOOM_SAVE.C (INTRO.C, MENU.C)  */
+void doom_saveDrawSlot(int slot,int x,int y,int selected);
+#define CFG_SAVE_SLOTUSED(i)   doom_saveSlotUsed(i)
+/* LOAD GAME stays on the title even with nothing to load: Doom's menu always shows it, and its
+   list says EMPTY six times.  PowerSlave hides the line, as it always did. */
+#define CFG_SAVE_ALWAYSLOAD    1
+#define CFG_SAVE_X             (-118)
+#define CFG_SAVE_Y0            (-84+30)
+#define CFG_SAVE_PITCH         20
 #define CFG_TITLE_VDP2()       doom_titleVdp2()
 #define CFG_TITLE_FONTS()      doom_titleFonts()
 #define CFG_TITLE_PICTURE()    doom_titlePicture()
@@ -544,7 +558,16 @@ extern char doomPauseWho;
 #define CFG_TITLE_END()        doom_titleEnd()                   /* the menu ends; the fire burns on into the load */
 #define CFG_MENU_CURSOR(x,y)   doom_menuCursor(x,y)
 #define CFG_MENU_Y0            GP_TITLE_MENU_Y0                  /* MULTIPLAYER's line; NEW GAME a pitch above */
-#define CFG_MP_NMLEVELS        9                                 /* MPLAYER.C mpMenu: DOOM_NMLEVELS */
+#include "doom_episodes.h"   /* the disc's own episodes and levels, from params/doom.cfg */
+#define CFG_MP_NMLEVELS        DOOM_NMLEVELS                     /* MPLAYER.C mpMenu */
+/* The episodes NEW GAME offers.  One episode = the row is not shown and nothing changes. */
+#define CFG_MP_NMEPISODES      DOOM_NMEPISODES
+#define CFG_MP_EPISODENAME(e)  doomEpisodeNames[e]
+#define CFG_MP_EPISODEFIRST(e) doomEpisodeFirst[e]
+#define CFG_MP_EPISODEOF(l)    doom_episodeOf(l)
+extern const char *const doomEpisodeNames[];
+extern const short doomEpisodeFirst[];
+int doom_episodeOf(int l);
 #define CFG_MP_LEVELLABEL(l)   doom_levelLabel(l)
 #define CFG_MP_BOSSLEVEL(l)    doom_bossLevel(l)                 /* a level with a boss: the boss battle's */
 #define CFG_MP_BOSSCOUNT(l)    doom_bossCount(l)                 /* ... how many: at most that many boss players */
@@ -557,7 +580,9 @@ extern unsigned char doomSectorDamage[];
 #define CFG_MP_NMSKILLS        4                                 /* Doom's but NIGHTMARE */
 #define CFG_MP_SKILLDEFAULT    2                                 /* HURT ME PLENTY, Doom's own */
 #define CFG_MP_SKILLNAME(s)    doom_skillName(s)
-#define CFG_MP_SPOTSAFE(s)     (!doomSectorDamage[s])            /* no spawn on nukage or E1M8's last room */
+/* no spawn on nukage or E1M8's last room -- but a SECRET's byte is negative (DOOM_GAME.C
+   DOOM_SECRET_BIT) and a secret floor is a perfectly good place to stand */
+#define CFG_MP_SPOTSAFE(s)     ((signed char)doomSectorDamage[s]<=0)
 #define CFG_MP_LEVELSTART()    doom_mpLevelStart()               /* SRUINS.C runLevel, after mpLevelBuild */
 #define CFG_MP_RESPAWNED(k)    doom_mpRespawned(k)               /* SRUINS.C mpRespawn, player k loaded */
 #define CFG_MP_RESPAWN_HOLD(k) doom_mpRespawnHold(k)             /* SRUINS.C mpRespawn: 1 = do not move it */
@@ -660,9 +685,18 @@ void ps_roleFire(void);
 #define CFG_PAUSE_ASKED()      0
 #define CFG_PAUSE_POLL(j)      ((void)0)
 #define CFG_QUIT_ACTION(q)     2
+#define CFG_SAVE_SLOTUSED(i)   (bup_getGameData(i)!=NULL)
+#define CFG_SAVE_ALWAYSLOAD    0
+#define CFG_SAVE_X             (-150)
+#define CFG_SAVE_Y0            (-84+30)
+#define CFG_SAVE_PITCH         20
 #define CFG_MENU_CURSOR(x,y)   0
 #define CFG_MENU_Y0            20
 #define CFG_MP_NMLEVELS        23                                /* PSMULTI.C psMpLevel[]: the 24 .LEV on the disc, less TEST */
+#define CFG_MP_NMEPISODES      1                                 /* PowerSlave has one campaign */
+#define CFG_MP_EPISODENAME(e)  ""
+#define CFG_MP_EPISODEFIRST(e) 0
+#define CFG_MP_EPISODEOF(l)    0
 #define CFG_MP_LEVELLABEL(l)   ps_levelLabel(l)
 #define CFG_MP_BOSSLEVEL(l)    ps_bossLevel(l)                   /* MAGMANTIS, SELKIS, SET */
 #define CFG_MP_BOSSCOUNT(l)    ps_bossCount(l)

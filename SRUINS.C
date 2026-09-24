@@ -1907,6 +1907,7 @@ void stunPlayer(int ticks)
    mpSwitch.  The game registers its own player through CFG_MP_REGISTER. */
 static void mpRegisterEngine(void)
 {MPREG(player); MPREG(camera); MPREG(playerAngle);
+ MPREG(mapOn); mapMpRegister();         /* GCC14: each player opens and zooms its OWN map */
  MPREG(xavel); MPREG(yavel);
  MPREG(keyMask); MPREG(playerIsDead); MPREG(playerMotionEnable); MPREG(stunCounter);
  MPREG(invisibleCounter); MPREG(weaponPowerUpCounter); MPREG(deathTimer);
@@ -2438,7 +2439,13 @@ int runLevel(char *filename,int levelNm)
  initWallRenderer();
  initMap();
  markAnimTiles();
- mapOn=0;
+ {int k,zero=0;                         /* GCC14: for every player, not just the loaded one --
+					   mapOn is registered now (mpRegisterEngine) */
+  mapOn=0;
+  for (k=0;k<MPMAX;k++)
+     if (k!=mpCur)
+	mpPoke(k,&mapOn,sizeof(mapOn),&zero);
+ }
  assert(level_nmSectors<=MAXNMSECTORS);
  assert(level_nmWalls<=MAXNMWALLS);
  initSpriteSystem();
@@ -2670,9 +2677,9 @@ int runLevel(char *filename,int levelNm)
 	    }
 	 mpSwitch(0);
 	}
-     CFG_MAP_TOGGLE();              /* GCC14: before anything of the image is drawn */
      for (mpView=0;mpView<mpPlayers;mpView++)
 	{mpSwitch(mpView);
+	 CFG_MAP_TOGGLE();              /* GCC14: this view's own map, before any of it is drawn */
 	 mpSetViewport(mpView,mpPlayers>1);
 	 MTH_PushMatrix(&viewTransform);
 	 MTH_RotateMatrixZ(&viewTransform, playerAngle.roll );
@@ -2703,7 +2710,7 @@ int runLevel(char *filename,int levelNm)
 	 mpShowBodies(mpView);
 	 if (mpPlayers>1)
 	    mpSkyMoon(mpView,viewTransform.current);
-	 if (!(CFG_MAP_HIDES_VIEW && mapOn && mpPlayers==1))   /* GCC14: drawMap draws instead */
+	 if (!(CFG_MAP_HIDES_VIEW && mapOn))   /* GCC14: drawMap draws instead, in THIS view */
 	    drawWalls(mpView,viewTransform.current);
 	 popProfile();
 
@@ -2813,7 +2820,7 @@ int runLevel(char *filename,int levelNm)
 	     processDelayedMoves();
 	    }
 
-	 if (mapOn && mpPlayers==1)
+	 if (mapOn)                     /* GCC14: in split it lands in this view's half (MAP.C) */
 	    drawMap(camera->pos.x,camera->pos.z,camera->pos.y,playerAngle.yaw,
 		    camera->s);
 
@@ -3427,6 +3434,14 @@ void main(void)
 	    loadAfterDeath=1;
 	    currentState=levStart;
 	    break;
+#ifdef GP_GAME_DOOM
+	 case 7: /* GCC14: the pause's RESTART LEVEL (doom_ovl.h PAUSE_RESTART).  The level named
+	            by CFG_START_LEVEL again, with the arsenal every player had when it began
+	            (doom_playerRestart armed the stash).  This is NOT case 1: that one is a
+	            death, and Doom reborns a dead player with the pistol kit. */
+	    level=CFG_START_LEVEL();
+	    break;
+#endif
 	 case 2: /* quit */
 	    goto intro;
 	    break;

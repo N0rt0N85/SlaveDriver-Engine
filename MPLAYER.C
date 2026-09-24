@@ -170,6 +170,22 @@ void mpPeek(int k,void *addr,int size,void *out)
  mpCopy(out,c? c: (char *)addr,size);
 }
 
+/* GCC14: the mirror of mpPeek -- write ONE registered global into player k's copy without
+   loading it.  A level start has to close every player's automap (SRUINS.C), and mpSwitch would
+   not do: switching through the slots copies the WHOLE loaded player out into each one on the
+   way, which would flatten the state a player carries from the last level. */
+void mpPoke(int k,void *addr,int size,const void *in)
+{char *c;
+ if (k==mpCur)
+    {mpCopy(addr,(void *)in,size);
+     return;
+    }
+ c=mpCopyOf(k,addr,size);
+ assert(c);                     /* not a registered global: there is no per-player copy */
+ if (c)
+    mpCopy(c,(void *)in,size);
+}
+
 int mpPeekInt(int k,int *addr)
 {int *c;
  if (k==mpCur)

@@ -9,6 +9,7 @@
  * is the pickup collision; doom_sectorDamageTic is the 35 Hz level clock plus the nukage damage. */
 #include <string.h>
 #include "util.h"
+#include "pic.h"
 #include "level.h"
 #include "sprite.h"
 #include "walls.h"                      /* GCC14: the light list, for OT_DOOM_LAMP */
@@ -51,6 +52,12 @@
 #define DOOM_WLINE_ONCE  1
 #define DOOM_WLINE_GUN   2       /* P_ShootSpecialLine: fired by a BULLET, never by crossing */
 #define DOOM_DAMAGE_EXIT 0x100
+/* GCC14: a SECRET sector (Doom special 9) rides the same record and the same byte per leaf, with
+   this bit in hp and the secret's number under it (doom_specials.py DAMAGE_SECRET).  The byte
+   becomes 0x80|number, negative as a signed char: the damage paths tell the two apart on the
+   sign, and mpTotal[2] is the highest number placed -- no map has to state its own total. */
+#define DOOM_DAMAGE_SECRET 0x200
+#define DOOM_SECRET_BIT    0x80
 
 typedef struct
 {short type,class;
@@ -998,15 +1005,25 @@ static void doomPoolsLight_func(Object *_this,int message,int param1,int param2)
 #endif
 
 /* contract section 9: 8.3 names at the disc root ('+'), bounded by DOOM_NMLEVELS.  make_e1m1.py
-   checks these against cd_doom/.  Where each level leads is Doom's own order (g_game.c
+   converts exactly this list.  Where each level leads is the .cfg's EPISODEn_MAPS and
+   EPISODEn_SECRET, which for the shareware episode spell out Doom's own order (g_game.c
    G_DoCompleted): the secret exit of E1M3 goes to E1M9, E1M9 comes back to E1M4, and -1 -- after
    E1M8 -- ends the episode (exit_func). */
-const char *doomLevelNames[DOOM_NMLEVELS]=
-{"+E1M1.LEV","+E1M2.LEV","+E1M3.LEV","+E1M4.LEV","+E1M5.LEV","+E1M6.LEV","+E1M7.LEV",
- "+E1M8.LEV","+E1M9.LEV",
-};
-static const signed char doomLevelNext[DOOM_NMLEVELS]  ={1,2,3,4,5,6,7,-1,3};
-static const signed char doomLevelSecret[DOOM_NMLEVELS]={1,2,8,4,5,6,7,-1,3};
+const char *doomLevelNames[DOOM_NMLEVELS]={DOOM_EP_FILES};
+static const signed char doomLevelNext[DOOM_NMLEVELS]  ={DOOM_EP_NEXT};
+static const signed char doomLevelSecret[DOOM_NMLEVELS]={DOOM_EP_SECRET};
+
+/* The episodes NEW GAME offers, and the level each one opens on (MPRULES.C). */
+const char *const doomEpisodeNames[DOOM_NMEPISODES]={DOOM_EP_NAMES};
+const short doomEpisodeFirst[DOOM_NMEPISODES]={DOOM_EP_FIRST};
+
+int doom_episodeOf(int l)
+{int e;
+ for (e=DOOM_NMEPISODES-1;e>0;e--)
+    if (l>=doomEpisodeFirst[e])
+       return e;
+ return 0;
+}
 
 static int doomInitDone;
 static int doomPlaceIdx;       /* objects seen by game_placeObject in this placeObjects() */
@@ -1271,7 +1288,15 @@ int game_placeObject(int ot)
 	{int sectorNm=suckShort();
 	 int hp=suckShort();
 	 assert(sectorNm>=0 && sectorNm<level_nmSectors);
-	 assert(hp>=0 && hp<(256|DOOM_DAMAGE_EXIT));
+	 assert(hp>=0 && hp<(256|DOOM_DAMAGE_EXIT|DOOM_DAMAGE_SECRET));
+	 if (hp & DOOM_DAMAGE_SECRET)
+	    {int idx=hp & (DOOM_SECRET_BIT-1);
+	     assert(!(hp & (DOOM_DAMAGE_EXIT|DOOM_SECRET_BIT)));
+	     doomSectorDamage[sectorNm]=(unsigned char)(DOOM_SECRET_BIT|idx);
+	     if (idx+1>mpTotal[2])
+		mpTotal[2]=(short)(idx+1);
+	     return 1;
+	    }
 	 doomSectorDamage[sectorNm]=(unsigned char)(hp&0xff);
 	 if (hp & DOOM_DAMAGE_EXIT)
 	    doomSectorExit[sectorNm>>3]|=(unsigned char)(1<<(sectorNm&7));
@@ -1670,6 +1695,18 @@ void doom_sectorDamageTic(void)
     return;
  if (camera->floorSector==-1)
     return;                                     /* not on the floor */
+ if (doomSectorDamage[s] & DOOM_SECRET_BIT)
+    {/* A SECRET found (P_PlayerInSpecialSector: secret_count++, then sector->special = 0).
+        Every leaf of the secret carries the same byte and they are all cleared together, so
+        a secret cut into ten leaves counts once.  Doom 1.9 says nothing when one is found,
+        and neither does this: only the pause's STATS line moves. */
+     int i,mark=doomSectorDamage[s];
+     mpStat[mpCur].secrets++;
+     for (i=0;i<level_nmSectors;i++)
+	if (doomSectorDamage[i]==mark)
+	   doomSectorDamage[i]=0;
+     return;
+    }
  if (doomSectorExit[s>>3] & (1<<(s&7)))
     doom_playerGodOff();                        /* case 11: cheats &= ~CF_GODMODE */
  if (!(doomLevelTime & 0x1f))
@@ -1683,7 +1720,7 @@ void doom_sectorDamageTic(void)
    is alive, the tag no line targets (doom2ps doom_specials.BOSS_TAGS) moves -- E1M8: both
    MT_BRUISER dead lowers tag 666 to its lowest neighbour (lowerFloorToLowest), the wall that
    hides the teleporter to the last room.  -1 = no boss rule on that level. */
-static const short doomBossMt[DOOM_NMLEVELS]={-1,-1,-1,-1,-1,-1,-1,MT_BRUISER,-1};
+static const short doomBossMt[DOOM_NMLEVELS]={DOOM_EP_BOSSMT};
 #define DOOM_BOSS_TAG 666
 
 void doom_bossDeath(DoomActor *mo)
@@ -1739,7 +1776,7 @@ int doom_bossLevel(int l)
 /* BOSS BATTLE's screen, before the level is loaded: how many bosses the level holds (E1M8: its
    two Barons, at every skill -- things 3003, flags 7) and what they are */
 int doom_bossCount(int l)
-{static const unsigned char count[DOOM_NMLEVELS]={0,0,0,0,0,0,0,2,0};
+{static const unsigned char count[DOOM_NMLEVELS]={DOOM_EP_BOSSCNT};
  return (l>=0 && l<DOOM_NMLEVELS)? count[l]: 0;
 }
 
@@ -1754,10 +1791,12 @@ const char *doom_bossName(int l)
    start (tag 1) and the Barons' two closets (tag 5).  The boss floor (666) stays up: behind it,
    the teleporter to the last room, which hurts and ends the level. */
 int doom_levelOpenChannel(int i)
-{static const short e1m8[]={1,5,-1};
- if (currentState.currentLevel!=7)
+{static const short bossChans[]={1,5,-1};
+ int l=currentState.currentLevel;
+ /* GCC14: the boss level, whichever one the .cfg made it -- not the literal 7 */
+ if (l<0 || l>=DOOM_NMLEVELS || doomBossMt[l]<0)
     return -1;
- return e1m8[(i<2)? i: 2];
+ return bossChans[(i<2)? i: 2];
 }
 
 /* the mobj type whose death opens this level's way out, -1 = none */

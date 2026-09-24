@@ -215,9 +215,15 @@ LIBS     := -Wl,-b,coff-sh $(LIBDIR)/SEGA_SAT.A -Wl,-b,elf32-sh
 # erases; see the header of SCL_VBLV.C).  Same override pattern as SCL_FUNC vs scl_func.o.
 COMMON4      := LEVEL MEGAINIT SCL_FUNC SCL_VBLV V_BLANK
 INIT_C       := DMA FILE INITMAIN LOCAL MOV PICSET PRINT SOUND SPR UTIL $(COMMON4)
-MAIN_C       := AI AI2 AICOMMON ART BIGMAP BUP DMA FILE HITSCAN INTRO LOCAL MAP MENU OBJECT PIC \
+# GCC14: BUP is PowerSlave's save module.  Doom links game/doom/DOOM_SAVE.C instead, which
+# provides the same bup_* seams: it never writes a POWERSLAVE1 file the game does not use, never
+# asks to format a device at boot, and never exits to the BIOS.  Same pattern as PSMULTI below.
+MAIN_C       := AI AI2 AICOMMON ART BIGMAP DMA FILE HITSCAN INTRO LOCAL MAP MENU OBJECT PIC \
                 PICSET PLAX PRINT PROFILE ROUTE SEQUENCE SOUND SPR SPRITE SRUINS UTIL WEAPON $(COMMON4) WALLS MPLAYER MPRULES MPSKY   CRASH $(PLAYER_C)
 KEYGEN_C     := DMA FILE KEYGEN LOCAL MOV PICSET PRINT SOUND SPR UTIL LEVEL SCL_FUNC SCL_VBLV V_BLANK
+ifneq ($(shell $(PYTHON) tools/gameparams.py --get GAME $(PARAMS)),doom)
+  MAIN_C     += BUP
+endif
 MAIN_C       += $(GAME_C)              # game/doom/*.C when GAME = doom, PSMULTI otherwise
 vpath %.C game/doom
 
@@ -269,6 +275,16 @@ $(GAMEPARAMS_H): $(PARAMS) tools/gameparams.py
 	$(PYTHON) tools/gameparams.py $(PARAMS) $@
 
 $(ALL_OBJS): $(GAMEPARAMS_H)
+
+# --- GAME = doom: the episodes, their maps and their order, from the SAME .cfg (episodes.py).
+# Nothing about which levels exist is in the C any more: a .cfg + a WAD are a whole disc.
+ifeq ($(shell $(PYTHON) tools/gameparams.py --get GAME $(PARAMS)),doom)
+EPISODES_H := $(BUILD)/doom_episodes.h
+$(EPISODES_H): $(PARAMS) tools/doom2ps/episodes.py tools/gameparams.py
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/doom2ps/episodes.py $(PARAMS) $@
+$(ALL_OBJS): $(EPISODES_H)
+endif
 
 # --- GAME = doom: HUD art header (STBAR+STARMS, faces, keys, fonts) generated from the WAD by
 #     tools/doom2ps/wad2hud.py (SPEC_CONVERTER section 3bis).  Until that script exists the rule
@@ -350,7 +366,7 @@ ifneq ($(OVL_FILES),)
 $(OVL_OBJDIR)/%.o: game/doom/ovl/%.C $(BUILD)/pause_art.h | $(OBJDIR)
 	@mkdir -p $(OVL_OBJDIR)
 	$(CC) $(CFLAGS) -Os -c $< -o $@
-$(PAUSE_OBJS): $(GAMEPARAMS_H)
+$(PAUSE_OBJS): $(GAMEPARAMS_H) $(EPISODES_H)
 $(BUILD)/pause_art.h: tools/doom2ps/wad2pause.py $(DOOMWAD) | $(OBJDIR)
 	$(PYTHON) tools/doom2ps/wad2pause.py $(DOOMWAD) $@
 $(OVL_ROOTS): $(PAUSE_OBJS) tools/ovlpack.py

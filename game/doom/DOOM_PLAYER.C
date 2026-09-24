@@ -98,8 +98,17 @@ static const char *GOTMAP="Computer Area Map";                 /* GCC14 */
 
 /* --- init ----------------------------------------------------------------------------------- */
 
-/* Set by an exit (doom_playerFinishLevel), read once by the next doom_playerInit. */
+/* Set by an exit (doom_playerFinishLevel), read once by the next doom_playerInit.
+   1 = keep the arsenal; 2 = put back the one the level began with (the stash below). */
 static char doomCarry;
+
+/* GCC14: THE LEVEL-START STASH -- what the pause's RESTART LEVEL gives back.  It lives in
+   currentState.weaponAmmo[0..6]: PowerSlave's ammo, registered per player (MPREG, SRUINS.C) and
+   written by no Doom path (grep), so it costs not one byte of BSS and it follows mpSwitch by
+   itself.  doom_playerInit fills it at the END of every level start. */
+#define STASH_ARMOR   4                 /* armorPoints | armorType<<16                          */
+#define STASH_HEALTH  5                 /* currentState.health: the stat bar's own copy          */
+#define STASH_WEAPONS 6                 /* weaponOwned | readyWeapon<<8 | backpack<<16           */
 /* A_Saw hit its target: the next tic's move is the saw's pull (doomMoveTic) */
 static char doomSawPull;
 
@@ -119,13 +128,17 @@ void doom_playerFinishLevel(void)
      doomPlayer.keys=0;
     }
  mpSwitch(prev);
+ doomGameSeconds=(unsigned short)(doomGameSeconds+doomLevelTime/35);   /* SAVE's clock */
 }
 
 /* GCC14: local multiplayer (MPLAYER.H).  The Doom player, every copy of it per player: its
    struct, the view bob, and the three flags of this file; the weapon and HUD files register
    theirs. */
+static void doomMapMpRegister(void);    /* below, with the automap's own state */
+
 void doom_mpRegister(void)
-{MPREG(doomPlayer); MPREG(doomViewBob);
+{doomMapMpRegister();
+ MPREG(doomPlayer); MPREG(doomViewBob);
  MPREG(doomCarry); MPREG(doomSawPull);
  doom_weaponMpRegister();
  doom_hudMpRegister();
@@ -135,6 +148,30 @@ void doom_mpRegister(void)
 /* a player with nothing to carry: the next doom_playerInit gives it Doom's starting kit */
 void doom_mpNewPlayer(void)
 {doomCarry=0;
+}
+
+/* GCC14: the pause's RESTART LEVEL (PAUSE.OVL -> quitRequest PAUSE_RESTART -> SRUINS.C's main).
+   Every player plays the level again with the kit it had when the level began.  A DEATH is not
+   this: Doom reborns with the pistol kit, which is the engine's action 1, untouched. */
+/* GCC14: a load has just put an arsenal into doomPlayer -- the next level start must keep it
+   rather than hand out the pistol kit (DOOM_SAVE.C doom_saveApply). */
+void doom_playerCarry(void)
+{doomCarry=1;
+}
+
+/* Doom's own ammo limit, before the backpack doubles it (DOOM_SAVE.C rebuilds maxAmmo from the
+   backpack bit, so no save can carry an impossible one). */
+int doom_maxAmmoOf(int a)
+{return (a>=0 && a<DOOM_NUMAMMO)? doomMaxAmmo[a]: 0;
+}
+
+void doom_playerRestart(void)
+{int k,prev=mpCur;
+ for (k=0;k<mpPlayers;k++)
+    {mpSwitch(k);
+     doomCarry=2;
+    }
+ mpSwitch(prev);
 }
 
 /* Every level (SRUINS.C:2010 after initWeapon(), CFG_LEVEL_PLAYER_INIT): P_SpawnPlayer +
@@ -148,6 +185,26 @@ void doom_mpNewPlayer(void)
 void doom_playerInit(void)
 {int i;
  assert(camera);
+ if (doomCarry==2)
+    {/* the level over again with its own start (doom_playerRestart).  A stash always owns the
+        fist, so an empty array means there is none: Doom's kit then, not a naked player. */
+     const int *st=currentState.weaponAmmo;
+     if (st[STASH_WEAPONS] & (1<<wp_fist))
+	{for (i=0;i<DOOM_NUMAMMO;i++)
+	    doomPlayer.ammo[i]=st[i];
+	 doomPlayer.armorPoints=st[STASH_ARMOR]&0xffff;
+	 doomPlayer.armorType=(st[STASH_ARMOR]>>16)&0xff;
+	 currentState.health=st[STASH_HEALTH];
+	 doomPlayer.weaponOwned=(unsigned char)st[STASH_WEAPONS];
+	 doomPlayer.readyWeapon=(signed char)((st[STASH_WEAPONS]>>8)&0xff);
+	 doomPlayer.backpack=(st[STASH_WEAPONS]>>16)&1;
+	 for (i=0;i<DOOM_NUMAMMO;i++)
+	    doomPlayer.maxAmmo[i]=doomMaxAmmo[i]<<doomPlayer.backpack;
+	 doomCarry=1;
+	}
+     else
+	doomCarry=0;
+    }
  if (!doomCarry)
     {currentState.health=DOOM_MAXHEALTH;       /* G_PlayerReborn */
      doomPlayer.armorPoints=0;
@@ -198,6 +255,18 @@ void doom_playerInit(void)
  playerAngle.pitch=0;
  playerAngle.roll=0;
  doom_bringUpWeapon();
+ {/* THE STASH, written last: this is the level's real start, after the kit, after an exit's
+     carry, after a restart.  The pause's RECOMMENCER LE NIVEAU gives exactly this back. */
+  int *st=currentState.weaponAmmo;
+  for (i=0;i<DOOM_NUMAMMO;i++)
+     st[i]=doomPlayer.ammo[i];
+  st[STASH_ARMOR]=(doomPlayer.armorPoints&0xffff)|(doomPlayer.armorType<<16);
+  st[STASH_HEALTH]=currentState.health;
+  st[STASH_WEAPONS]=doomPlayer.weaponOwned|(((int)doomPlayer.readyWeapon&0xff)<<8)|
+		     ((doomPlayer.backpack&1)<<16);
+ }
+ if (mpCur==0 && mpPlayers==1)
+    doom_saveCapture();                 /* what SAVE writes: this level, as it begins */
 }
 
 /* --- 60 Hz ---------------------------------------------------------------------------------- */
@@ -206,8 +275,15 @@ void doom_playerInit(void)
    neither Y, Z nor L+R went down while it was held: every chord that holds X -- the mipmap
    switch, the hole painter, the cheats -- holds one of them.  The request waits
    for the next image (SRUINS.C CFG_MAP_TOGGLE), so an image is the map or the view, whole.
-   Solo only: drawMap draws one map, on the whole screen. */
+   PER PLAYER: the three below are registered (doomMapMpRegister), as are mapOn and the map's
+   scale (MAP.C mapMpRegister), so in split screen each marine opens, zooms and closes ITS OWN
+   map in ITS OWN half, and the others keep playing.  doom_playerFrame runs under mpSwitch, so
+   this reads the pad of whoever it is called for and nothing else -- that IS the input routing. */
 static char amHeld,amChord,amToggle;
+
+static void doomMapMpRegister(void)
+{MPREG(amHeld); MPREG(amChord); MPREG(amToggle);
+}
 
 int doom_mapToggle(void)
 {int t=amToggle;
@@ -217,10 +293,6 @@ int doom_mapToggle(void)
 
 static void doomMapKey(unsigned short input)
 {unsigned short held=(unsigned short)~input;          /* the pad's bits are active low */
- if (mpPlayers!=1)
-    {amHeld=0;
-     return;
-    }
  if (held & PER_DGT_X)
     {if (!amHeld)
 	{amHeld=1;
@@ -1030,6 +1102,19 @@ int doom_playerGetObject(int mt,int dropped)
    ramp 0x70-0x7f of PLAYPAL read as the grey 0x60, the brown 0x40 and the red 0x20 ramps, for
    players 2, 3, 4.  Player 1 keeps green.  The object palette is PLAYPAL index for index (doom2ps
    rle8.object_palette moves only 0 and 255, outside the ramps). */
+/* GCC14: the PLAYPAL index the automap draws player k with (MAP.C doomDrawPlayers).  The SAME
+   `t` as doom_playerTranslation below, so the dot and the body always agree -- including on a
+   team, where two players share one colour.  +8 is the middle of the sixteen-step ramp, the
+   shade the marine reads as. */
+int doom_playerMapColor(int k)
+{static const unsigned char ramp[MPMAX]={0x70,0x60,0x40,0x20};
+ int t;
+ if (k<0 || k>=MPMAX)
+    return 0x70+8;
+ t=(mpMode==MP_TEAM)? (mpTeam[k]? 3: 0): k;
+ return ramp[t]+8;
+}
+
 const unsigned char *doom_playerTranslation(int k)
 {static unsigned char table[MPMAX][256];
  static const unsigned char ramp[MPMAX]={0x70,0x60,0x40,0x20};

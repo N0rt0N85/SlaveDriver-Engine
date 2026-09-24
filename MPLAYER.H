@@ -33,6 +33,7 @@ int  mpBegin(int k);                    /* mpSwitch(k), returning who was loaded
 #define mpEnd(prev) mpSwitch(prev)
 void mpStoreAs(int k);                  /* copy what is loaded into slot k (a new player's template) */
 void mpPeek(int k,void *addr,int size,void *out);   /* player k's copy of a registered global */
+void mpPoke(int k,void *addr,int size,const void *in);   /* ... and writing it, without loading k */
 int  mpPeekInt(int k,int *addr);
 
 /* Bodies: valid whatever mpCur is.  Set by the engine when a player is built. */

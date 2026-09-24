@@ -16,14 +16,19 @@
 char doomPauseWho;
 
 int doom_pause(void)
-{static signed char err;               /* a refusal is final: no disc read on the next START */
+{/* GCC14: only a STALE overlay is refused for good -- that one cannot get better without a new
+    disc, and retrying would read the CD at every START.  A file that did not answer (a read that
+    failed, a drive still seeking) is retried the next time: it used to latch the same way, and
+    one unlucky read left the pause dead for the rest of the session. */
+ static signed char err;
  static char msg[]="PAUSE.OVL ERROR 0"; /* 1 not on the disc, 2 another build's, 3 no room */
  int k=doomPauseWho? doomPauseWho-1: 0,r=err;
  if (!r)
     r=ovl_run(PAUSE_FILE,OVL_SCRATCH,PAUSE_MENU,k);
  if (r>=0)
     return r;
- err=(signed char)r;
+ if (r==OVL_STALE)
+    err=(signed char)r;
  msg[sizeof(msg)-2]=(char)('0'-r);
  doom_setMessage(msg);                  /* Start does nothing: the message says why ... */
  while (!(lastInputSampleP[k] & PER_DGT_S))

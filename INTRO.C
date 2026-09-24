@@ -374,11 +374,11 @@ static int loadMenu(int hx,int hy,int lx,int ly)
 #endif
 
  for (i=0;i<6;i++)
-    if (bup_getGameData(i))
-       dlg_addGameButton(-150,-84+30+20*i,i);
+    if (CFG_SAVE_SLOTUSED(i))
+       dlg_addGameButton(CFG_SAVE_X,CFG_SAVE_Y0+CFG_SAVE_PITCH*i,i);
     else
        dlg_addFontString(-getStringWidth(2,emptyText)/2,
-			 -84+30+20*i,2,(char *)emptyText);
+			 CFG_SAVE_Y0+CFG_SAVE_PITCH*i,2,(char *)emptyText);
 
 #ifndef JAPAN
  dlg_addBigWavyButton(100,0,-84+30+20*7,getText(LB_PROMPTS,1));
@@ -542,7 +542,7 @@ void playIntro(void)
      {dlg_clear();
       for (i=0;i<3;i++)
 	 {int len;
-	  if (i==1 && !canLoad)
+	  if (i==1 && !canLoad && !CFG_SAVE_ALWAYSLOAD)
 	     {dlg_addText(10,10,10,"");
 	      continue;
 	     }

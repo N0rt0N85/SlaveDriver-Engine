@@ -141,7 +141,10 @@ void mpLevelReset(void)
    turns -- but MR_BOSS, which only says what the boss battle's map holds.  MAP sits under MODE:
    the mode says which maps may be played.  bigFont (2), like the
    title's buttons: capitals, digits, spaces and '-' only. */
-enum {MR_MODE,MR_MAP,MR_BOSS,MR_SKILL,MR_PLAYERS,MR_FRAGS,MR_TIME,MR_P1,MR_START=MR_P1+MPMAX,MR_BACK,MR_NM};
+/* GCC14: MR_EPISODE first -- a disc with several episodes (params/<game>.cfg EPISODEn_*) offers
+   the choice above everything else, and picking one moves the starting level to its first map.
+   A disc with one episode never shows the row, so nothing changes for the shareware disc. */
+enum {MR_EPISODE,MR_MODE,MR_MAP,MR_BOSS,MR_SKILL,MR_PLAYERS,MR_FRAGS,MR_TIME,MR_P1,MR_START=MR_P1+MPMAX,MR_BACK,MR_NM};
 static const char *const mpModeName[MP_NMMODES]=
    {"COOPERATIVE","DEATHMATCH","TEAM DEATHMATCH",CFG_MP_MONSTERS_NAME,"BOSS BATTLE","HORDE"};
 static const unsigned char mpFragChoice[5]={0,10,20,30,50};
@@ -156,7 +159,9 @@ static int mpMenuPlayers;       /* the count the screen showed last: mpArmed goe
 int mpSkill=CFG_MP_SKILLDEFAULT;
 
 static int mpRowShown(int r,int players,int multi)
-{if (!multi)
+{if (r==MR_EPISODE)
+    return CFG_MP_NMEPISODES>1;
+ if (!multi)
     return (r==MR_SKILL && CFG_MP_NMSKILLS>1) || r==MR_PLAYERS || r==MR_START || r==MR_BACK;
  if (r==MR_BOSS)
     return mpMode==MP_BOSS;
@@ -238,7 +243,8 @@ static int mpNextLevel(int l,int d)
 static void mpMenuLine(int r,int players,int level,char *text)
 {int k;
  switch (r)
-    {case MR_MODE:    sprintf(text,"MODE  %s",mpModeName[mpMode]); break;
+    {case MR_EPISODE: sprintf(text,"%.38s",CFG_MP_EPISODENAME(CFG_MP_EPISODEOF(level))); break;
+     case MR_MODE:    sprintf(text,"MODE  %s",mpModeName[mpMode]); break;
      case MR_SKILL:   sprintf(text,"SKILL  %s",CFG_MP_SKILLNAME(mpSkill)); break;
      case MR_PLAYERS: sprintf(text,"PLAYERS  %d",players); break;
      case MR_MAP:     sprintf(text,"MAP  %s",CFG_MP_LEVELLABEL(level)); break;
@@ -284,8 +290,9 @@ static int mpGameMenu(int multi)
  players=(mpMenuPlayers>1)? mpMenuPlayers: (multi && mpPadsPresent>1)? mpPadsPresent: lo;
  if (players>MPMAX)
     players=MPMAX;
- level=multi? mpStartLevel: 0;
- row=multi? MR_MODE: MR_SKILL;
+ /* NEW GAME starts on the first map of an episode -- the one last chosen, or the first */
+ level=multi? mpStartLevel: CFG_MP_EPISODEFIRST(CFG_MP_EPISODEOF(mpStartLevel));
+ row=multi? MR_MODE: (CFG_MP_NMEPISODES>1)? MR_EPISODE: MR_SKILL;
  fadeEnd=-150;                  /* the title picture dims behind the lines, as for a submenu */
  fadeDir=-5;
  SCL_SetFrameInterval(0xfffe);
@@ -359,7 +366,9 @@ static int mpGameMenu(int multi)
 	continue;
      playSound(0,1);
      switch (row)
-	{case MR_MODE:    mpMode=mpCycle(mpMode,CFG_MP_NMMODES,d); break;   /* a game may not have them all (SPRITE.H) */
+	{case MR_EPISODE: level=CFG_MP_EPISODEFIRST(mpCycle(CFG_MP_EPISODEOF(level),CFG_MP_NMEPISODES,d));
+			  break;                                           /* its first map */
+	 case MR_MODE:    mpMode=mpCycle(mpMode,CFG_MP_NMMODES,d); break;   /* a game may not have them all (SPRITE.H) */
 	 case MR_SKILL:   mpSkill=mpCycle(mpSkill,CFG_MP_NMSKILLS,d); break;
 	 case MR_PLAYERS: players=lo+mpCycle(players-lo,MPMAX+1-lo,d); break;
 	 case MR_MAP:     level=mpNextLevel(level,d); break;

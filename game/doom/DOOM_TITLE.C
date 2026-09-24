@@ -9,7 +9,8 @@
  * space), M_SKULL1/2, PLAYPAL -- no retail art, no byte of MAIN.
  *
  * The VDP2 (320x224, CFG_SCL_LINES), VRAM B partitioned:
- *   NBG1 = the logo, 512x256 8 bpp bitmap in B0, zoomed x2 (M_DOOM 123x60 -> 246x120, screen lines
+ *   NBG1 = the logo, 512x256 8 bpp bitmap in B0, 1:1 (M_DOOM 123x60 UPSCALED to 246x120 by the
+ *          converter -- wad2title.agrandir_logo; screen lines
  *          12..131), CRAM bank 0 = PLAYPAL.
  *   NBG0 = the fire, 512x256 8 bpp bitmap in B1, 1:1, bitmap rows 8..223 = the band and its base,
  *          CRAM bank 1 = the PSX ramp's 37 colours, exact (N0CAOS 1).  Level 0 is pixel 0: it is
@@ -132,22 +133,49 @@
 #define FIRE_SRC    1                   /* the last row: the white source, never written          */
 #define FIRE_MAX    36                  /* levels 0..36: the PSX ramp's 37 colours                */
 #define FIRE_SLOTS  40                  /* the level -> pixel tables of the logo block            */
-#define FIRE_DARK   247                 /* PLAYPAL's opaque black (PAUSE.C VEIL_INDEX): the
-					   letters' outline.  Index 0 is TRANSPARENT here, so it
-					   would show the logo through the outline           */
-#define FIRE_RED    176                 /* PLAYPAL's pure red (31,0,0), the menus' own ink: the
+#define FIRE_DARK   191                 /* THE MENUS' OWN OUTLINE.  A Doom menu glyph is not a
+					   silhouette: its body is PLAYPAL 176..186 and its edge --
+					   the hole of the O, the counters of the A and the D --
+					   PLAYPAL 191, (67,0,0).  The word was edged in opaque
+					   BLACK (247) instead, which is not a colour the menus
+					   ever use.  Index 0 would have been transparent and
+					   shown the picture through the edge, which is why it
+					   was not 0.                                          */
+#define FIRE_RED    176                 /* PLAYPAL's pure red (255,0,0), the menus' own ink: the
 					   letters themselves.  Measured on the disc's PLAYPAL */
+#define FIRE_WORD   64                  /* THE WORD'S OWN FIRE, marked in the CELL and not in the
+					   column.  Bit 6 of a level says "this cell came out of
+					   the word", and P maps 64|level through the MENUS' red
+					   ramp (FIRE_DARK..FIRE_RED, its sixteen steps) instead
+					   of the PSX one -- so the red follows the FLAME, its
+					   sideways scatter included, and tapers with it.  A
+					   colour chosen by COLUMN instead drew hard vertical red
+					   BARS, the fire's own shape having nothing to do with
+					   the column edges (simulated, 2026-09-24).
+					   The tag rides the spread for free: level|64 minus one
+					   is (level-1)|64 while the level is above zero, so the
+					   only change to the cell loop is that a cell is alive
+					   when `p & 63` rather than when `p > 0`.              */
 #define DIGIT_BYTES 3                   /* a percentage cell: 24 cells wide, byte-aligned      */
 #define PCT_CELLS   4                   /* "100%"                                              */
 #define PCT_NMGLYPH 12                  /* '0'..'9', '%', ' '                                  */
 #define MASK_H      16                  /* "LOADING": STCFN x2, 16 rows ...                       */
-#define WORD_Y0     (224-MASK_H-5)      /* ... on SCREEN rows 203..218, in the solid base below
-					   the band.  The word lived INSIDE the band and the slave
-					   painted it through a stencil, over rows the fire rewrites
-					   at every step: the letters came out in pieces (photo,
-					   2026-09-23).  The base is written once, by fireBase, and
-					   nothing walks over it -- so the master paints there.   */
-#define LOGO_ROWS   112                 /* NBG1 bitmap rows on screen: 224 lines at x2            */
+#define WORD_Y0     FIRE_H              /* ... on the FIRST SOLID ROW under the band (a load puts
+					   the band at yOff 0, so that row is 198): screen 198..213,
+					   ten rows of base left below.  The word lived INSIDE the
+					   band and the slave painted it through a stencil, over rows
+					   the fire rewrites at every step: the letters came out in
+					   pieces (photo, 2026-09-23).  The base is written once, by
+					   fireBase, and nothing walks over it -- so the master
+					   paints there.  Sitting right under the source row is what
+					   lets the word BURN (fireSeedRow): the tongues leave its
+					   top edge with no white gap between.                    */
+#define FIRE_WORDLVL FIRE_MAX           /* THE WORD BURNS, as hot as the rest of the band: with
+					   FIRE_WORD marking the cell, the level no longer chooses
+					   the COLOUR, only how far the tongue reaches.  So the
+					   word's flames are the same fire as the sheet around
+					   them, in the menus' red -- which is what mixes.       */
+#define LOGO_ROWS   224                 /* NBG1 bitmap rows on screen: 1:1, so all 224 of them    */
 #define VRAM_B0     (SCL_VDP2_VRAM+0x40000)     /* NBG1: the logo */
 #define VRAM_B1     (SCL_VDP2_VRAM+0x60000)     /* NBG0: the fire */
 
@@ -194,9 +222,19 @@ struct fireArea
  signed char F[FIRE_H][FIRE_W];         /* slave: levels 0..FIRE_MAX, the reference's layout */
  struct fireCtl ctl;
  unsigned char R[256],U[256];           /* master: R = the reference's rndtable (its low 2 bits) */
- unsigned char P[64];                   /* master: level -> pixel, read with LOOK_MAP      */
+ unsigned char P[128];                  /* master: level -> pixel, read with LOOK_MAP.  0..36 is
+					   the load's PSX ramp (LB_PLOAD); 64|1..64|36 the MENUS'
+					   red, for the cells the word threw (FIRE_WORD)       */
  unsigned char M[MASK_H][FIRE_W/8];     /* master: LOADING's BODY, one BIT a cell           */
  unsigned char MD[MASK_H][FIRE_W/8];    /* master: the whole glyph grown by a cell: the ink */
+ unsigned char C[FIRE_W/8];             /* master: the columns the word's TOP ROW covers, one bit
+					   a column -- MD's row 0 and nothing else (fireWord).  The
+					   slave seeds the source row from it, so a flame only ever
+					   leaves a column where the first line of the word has ink:
+					   seeded from the whole glyph, tongues rose out of plain
+					   white base wherever a letter only reached down there.
+					   Written while the slave reads it, like M and MD: a torn
+					   column for one field is not worth a lock.             */
 };
 typedef char fireAreaFits[sizeof(struct fireArea)<=MAXNMWALLS*12? 1: -1];   /* doorwayCache */
 /* what the title lends: everything below the first row it burns */
@@ -280,6 +318,26 @@ static void fireBase(struct fireArea *a,int look,int yOff)
     }
 }
 
+/* THE SOURCE ROW, one level a column: white, but FIRE_WORDLVL over the columns the word covers,
+   so a red tongue leaves every stroke of "LOADING 42%" and mixes into the white beside it.  Only
+   a load has a word (LOOK_MAP); the title's source row is white from end to end, as it was.  Run
+   at every step rather than once: it is 320 bytes against the blit's 63 000, and it costs the
+   master no hand-over to say the percentage changed. */
+static void fireSeedRow(struct fireArea *a,int look)
+{int x;
+ signed char *S=a->F[FIRE_H-1];
+ if (!(look&LOOK_MAP))
+    {for (x=0;x<FIRE_W;x++)
+	S[x]=FIRE_MAX;
+     return;
+    }
+ for (x=0;x<FIRE_W;x+=8)
+    {int m=a->C[x>>3],k;
+     for (k=0;k<8;k++)
+	S[x+k]=(signed char)((m & (0x80>>k))? (FIRE_WORD|FIRE_WORDLVL): FIRE_MAX);
+    }
+}
+
 /* the fire back to its start: every level 0, the source row white, in the buffer and in VRAM */
 static void fireReset(struct fireArea *a,int look,int top,int yOff)
 {int y,x;
@@ -288,6 +346,7 @@ static void fireReset(struct fireArea *a,int look,int top,int yOff)
  for (y=top;y<FIRE_H;y++)
     for (x=0;x<FIRE_W;x++)
        a->F[y][x]=(signed char)((y>=FIRE_H-FIRE_SRC)? FIRE_MAX: 0);
+ fireSeedRow(a,look);
  fireBlit(a,look,top,yOff);
  fireBase(a,look,yOff);
 }
@@ -320,7 +379,7 @@ static void __attribute__((optimize("O2"))) fireSpread(struct fireArea *a,int *r
     {int src=(top+1)*FIRE_W+x;
      for (y=top+1;y<FIRE_H;y++,src+=FIRE_W)
 	{int p=F[src],dst=src,nv=0;
-	 if (p>0)
+	 if (p & (FIRE_WORD-1))         /* alive: the LEVEL, with FIRE_WORD's tag masked off */
 	    {ri=(ri+1)&255;
 	     dst=src-(R[ri]&3)+1;
 	     /* the reference loses a level on the odd draws, one row in two.  Here the chance is
@@ -389,6 +448,7 @@ static void fireSlaveMain(void)
 	 c->shown=look;
 	}
      q8=c->pQ8;                         /* the load grows the flames from one step to the next */
+     fireSeedRow(a,look);               /* the word's own columns burn red (FIRE_WORDLVL) */
      fireSpread(a,&rk,q8,top);
      fireBlit(a,look,top,yOff);
     }
@@ -438,7 +498,12 @@ static void setLayers(int loading)
     bit as the level's set-up leaves it (under the black framebuffer) */
  Scl_s_reg.dispenbl=(loading? Scl_s_reg.dispenbl&~0x0303: 0)|0x0003;
  Scl_w_reg.wincontrl[0]=0;              /* no window on either (dontDisplayVDP2Pic hid NBG0) */
- SCL_Open(SCL_NBG1); SCL_MoveTo(0,0,0); SCL_Scale(FIXED(2),FIXED(2)); SCL_Close();
+ /* GCC14: 1:1, not x2.  The logo is shipped at its SCREEN size (246x120) instead of half of it,
+    so its diagonals step by a pixel and its bevels are antialiased.  A 256-colour bitmap costs
+    the SAME 2 VRAM accesses unreduced as enlarged (VDP2 table 3.3), and the cycle table below
+    already gives NBG1 two in B0 -- this is free.  Its contour cannot be antialiased: 8 bpp
+    indexed, index 0 transparent, no per-pixel alpha. */
+ SCL_Open(SCL_NBG1); SCL_MoveTo(0,0,0); SCL_Scale(FIXED(1),FIXED(1)); SCL_Close();
  SCL_Open(SCL_NBG0); SCL_MoveTo(0,0,0); SCL_Scale(FIXED(1),FIXED(1)); SCL_Close();
  if (SclProcess==0)
     SclProcess=1;
@@ -640,6 +705,12 @@ static void fireWord(struct fireArea *a,int pct)
     return;
  fireShownPct=pct;
  firePct(a,pct);
+ /* the columns the word's FIRST ROW covers, for the flames it throws (fireSeedRow).  Row 0 of
+    MD alone, not the sixteen OR-ed: a flame must leave the TOP of a letter, and a stroke that
+    only reaches the lower rows would otherwise have thrown one out of plain white base.  MD and
+    not M, so the tongue leaves the letter's edge and a stroke one cell wide still lights. */
+ for (x=0;x<FIRE_W/8;x++)
+    a->C[x]=a->MD[0][x];
  /* GCC14: THE OUTLINE IS BACK.  The word is written in the menus' own shape: the letter's body
     in PLAYPAL 176, the pure red every menu line is drawn in, sitting inside the glyph GROWN by a
     cell in PLAYPAL 247's opaque black.  The converter ships both planes already grown (LB_MASK
@@ -684,7 +755,7 @@ void doom_loadingScreen(int fd)
  if (loadAfterDeath)                    /* no logo over a death: NBG1 out of the way */
     Scl_s_reg.dispenbl&=~0x0002;
  if (loadAfterDeath || !fireOn || !w)   /* B0 after a level (a split sky), or no logo wanted */
-    for (i=0;i<LOGO_ROWS*512;i+=4)      /* what NBG1 shows: 112 rows, x2 */
+    for (i=0;i<LOGO_ROWS*512;i+=4)      /* what NBG1 shows: 224 rows, 1:1 */
        POKE(VRAM_B0+i,0);
  if (!fireOn)                           /* NBG0 above the fire (fireReset does the rest) */
     for (i=0;i<FIRE_Y0*512;i+=4)
@@ -695,11 +766,20 @@ void doom_loadingScreen(int fd)
     fs_read(fd,(char *)VRAM_B0+((y+j)<<9)+x,w);
  /* the fire's tables: R and U are the title's own bytes, so the running slave may read them
     while they are rewritten; P and M it reads only once the look below asks for them */
+ memset(a->P,0,sizeof(a->P));
  memcpy(a->P,b+LB_PLOAD,FIRE_SLOTS);
+ /* ... and the MENUS' red ramp for the word's own cells (FIRE_WORD): its sixteen steps, hot at
+    the source and dark at the tip, so a tongue fades exactly as the sheet beside it does.  Level
+    0 keeps index 0, transparent, like the rest of the fire: that is how the picture comes back
+    through the cold cells. */
+ for (i=1;i<=FIRE_MAX;i++)
+    a->P[FIRE_WORD|i]=(unsigned char)(FIRE_DARK-((i-1)*(FIRE_DARK-FIRE_RED))/(FIRE_MAX-1));
  memcpy(a->R,b+LB_R,256);
  memcpy(a->U,b+LB_U,256);
  memcpy(a->M,b+LB_MASK,MASK_H*(FIRE_W/8));      /* the body, and the ink already grown */
  memcpy(a->MD,b+LB_MASKG,MASK_H*(FIRE_W/8));
+ memset(a->C,0,sizeof(a->C));           /* no burning column until fireWord says which: doorwayCache
+					   holds whatever the last level left in it */
  memcpy(fireDigits,b+LB_DIGITS,sizeof(fireDigits));
  firePctX=*(const short *)(b+LB_PCTX);
  fireShownPct=-1;

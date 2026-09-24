@@ -95,7 +95,8 @@ def static_summary(data):
                 wseq_bytes=(size + 3) & ~3)
 
 
-def verify(data, tiles_expected=96, ids=None, wad=None, families=None):
+def verify(data, tiles_expected=96, ids=None, wad=None, families=None, logo="M_DOOM",
+           rows=0, logo_y=None):
     r = Reader(data)
     rep = {}
     # 1 : le bloc logo, sans cadre (doom_loadingScreen lit LB_PIXELS puis w*h octets)
@@ -104,7 +105,7 @@ def verify(data, tiles_expected=96, ids=None, wad=None, families=None):
     rep["screen"] = dict(logo=blk["logo"], mask_bits=blk["mask_bits"])
     if wad is not None:
         black = blk["logo"][2] == 0
-        assert rep["logo_block"] == wad2title.logo_block(wad, "black" if black else "TITLEPIC"), \
+        assert rep["logo_block"] == wad2title.logo_block(wad, "black" if black else "TITLEPIC", logo, rows, logo_y), \
             "bloc 1 != wad2title.logo_block(WAD)"
     # (pas de bloc 2)
     # 3
@@ -278,7 +279,7 @@ def read_logo_block(b, empty_ok=False):
             "bloc logo vide : %s" % ((lh, lx, ly),)
     else:
         assert lw > 0 and lh > 0 and not (lw & 3) and not (lx & 3), (lw, lx)
-        assert lx + lw <= t.BITMAP_W and ly + lh <= t.SCREEN_H // 2, \
+        assert lx + lw <= t.BITMAP_W and ly + lh <= t.SCREEN_H, \
             "logo hors bitmap (%d,%d %dx%d)" % (lx, ly, lw, lh)
         assert any(mask), "masque LOADING vide"
         # le CORPS de la lettre est strictement inclus dans le GLYPHE, et strictement plus petit :
@@ -305,8 +306,9 @@ def read_logo_block(b, empty_ok=False):
                 maskg_bits=sum(bin(v).count("1") for v in maskg))
 
 
-def verify_title(data, wad=None):
-    """DTITLE.DAT (wad2title.py) relu comme DOOM_TITLE.C le lit -> rapport."""
+def verify_title(data, wad=None, logo="M_DOOM", rows=0, logo_y=None):
+    """DTITLE.DAT (wad2title.py) relu comme DOOM_TITLE.C le lit -> rapport.
+    `logo` : le lump du logo, la cle TITLE_LOGO du .cfg (tools/doom2ps/episodes.py)."""
     t = wad2title
     r = Reader(data)
     assert r.take(4) == t.TITLE_MAGIC, "DTITLE.DAT : magie"
@@ -340,14 +342,14 @@ def verify_title(data, wad=None):
         from doomtiles import bgr555
         assert list(pal) == [bgr555(c) for c in pp], "PLAYPAL du bloc != WAD"
         assert p_load[:nlev] == t.fire_palette(pp), "P_load != boucle de m_fire.c"
-        x, y, w, h, px = t.logo(wad)
+        x, y, w, h, px = t.logo(wad, logo, rows, logo_y)
         assert (x, y, w, h) == (lx, ly, lw, lh) and px == pixels, "logo != M_DOOM du WAD"
-        mw, mh, _pix, msk = wad.patch("M_DOOM")
+        mw, mh, _pix, msk = t.logo_shape(wad, logo, rows)
         x0 = (t.BITMAP_W - mw) // 2 - lx
         assert all(pixels[j * lw + x0 + i] for j in range(mh) for i in range(mw) if msk[j * mw + i]), \
             "logo : pixel opaque devenu transparent"
         assert sk == t.skulls(wad), "cranes != M_SKULL1/2 du WAD"
-        assert data == t.title_file(wad)[0], "DTITLE.DAT != wad2title.title_file(WAD)"
+        assert data == t.title_file(wad, logo, rows, logo_y)[0], "DTITLE.DAT != wad2title.title_file(WAD)"
     return dict(total=len(data), block=bsize, block_bytes=data[8:8 + bsize], levels=nlev,
                 p_load=p_load[:nlev], logo=(lx, ly, lw, lh),
                 fonts=(small[0], big[0]), glyphs=(len(small[3]), len(big[3])), skulls=(sw, sh),
@@ -365,6 +367,9 @@ def main(argv=None):
     ap.add_argument("--e1m1-weapons", action="store_true")
     ap.add_argument("--no-cross", action="store_true", help="sans croisement WAD/etats")
     ap.add_argument("--no-title", action="store_true", help="sans DTITLE.DAT (ecran titre)")
+    ap.add_argument("--logo", default="M_DOOM", help="le lump du logo (cle TITLE_LOGO du .cfg)")
+    ap.add_argument("--logo-rows", type=int, default=0, help="lignes d'ecran gardees (0 = tout)")
+    ap.add_argument("--logo-y", type=int, default=None, help="la ligne d'ecran ou il commence")
     a = ap.parse_args(argv)
     data = open(a.dat, "rb").read()
     ids = wad = None
@@ -373,7 +378,7 @@ def main(argv=None):
         ids = json.load(open(a.ids))
         wad = wadmod.Wad(a.wad)
     fams = wad2static.E1M1_FAMILIES if a.e1m1_weapons else wad2static.WEAPON_FAMILIES
-    rep = verify(data, 49 if a.e1m1_weapons else a.tiles, ids, wad, fams)
+    rep = verify(data, 49 if a.e1m1_weapons else a.tiles, ids, wad, fams, a.logo, a.logo_rows, a.logo_y)
     assert sum(rep["blocks"]) == rep["total"]
     print("%s : %d o, blocs %s : OK" % (a.dat, rep["total"], rep["blocks"]))
     print("bloc logo %d o %s ; sons %s ; tuiles %s" % (len(rep["logo_block"]), rep["screen"], rep["sounds"],
@@ -385,7 +390,7 @@ def main(argv=None):
     if not a.no_title:
         tpath = os.path.join(os.path.dirname(os.path.abspath(a.dat)), "DTITLE.DAT")
         assert os.path.exists(tpath), "DTITLE.DAT absent a cote de %s" % a.dat
-        t = verify_title(open(tpath, "rb").read(), wad)
+        t = verify_title(open(tpath, "rb").read(), wad, a.logo, a.logo_rows, a.logo_y)
         sb = rep["logo_block"]
         if rep["screen"]["logo"][2]:
             assert sb == t["block_bytes"], "STATIC.DAT bloc 1 != bloc logo de DTITLE.DAT"

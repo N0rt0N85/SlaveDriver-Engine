@@ -56,7 +56,8 @@ typedef struct
 {unsigned int magic;
  unsigned char version,slots;
  unsigned short sum;                    /* over the records only */
- unsigned char spare[8];
+ unsigned short levels;                 /* saveLevelStamp(): WHICH disc's level list */
+ unsigned char spare[6];
  DoomSaveRec rec[DOOM_NMSAVES];
 } DoomSaveFile;
 
@@ -121,6 +122,23 @@ static void selPart(int d)
 }
 
 /* ----------------------------------------------------------------- the file */
+/* GCC14: the disc's own level list, in one word.  A record carries a level INDEX, and the list
+   is no longer the C's but the .cfg's (tools/doom2ps/episodes.py) -- so the same index means a
+   different map on a disc built from a different .cfg, and a save made on one would send the
+   game to the wrong level.  The stamp says which list the file was written against; a file that
+   does not match is left ALONE on the card and read as an empty list, exactly as a file from an
+   unknown version is.  0 means a file written before the list could change at all, which can
+   only be the shareware one: those are still read. */
+static unsigned short saveLevelStamp(void)
+{unsigned short s=0;
+ const char *p;
+ int i;
+ for (i=0;i<DOOM_NMLEVELS;i++)
+    for (p=doomLevelNames[i];*p;p++)
+       s=(unsigned short)(s*31+(unsigned char)*p);
+ return s? s: 1;                        /* never 0: that value means "no stamp" */
+}
+
 static unsigned short saveSum(const DoomSaveFile *f)
 {const unsigned char *p=(const unsigned char *)f->rec;
  int i,n=DOOM_NMSAVES*(int)sizeof(DoomSaveRec);
@@ -135,6 +153,7 @@ static void saveEmpty(void)
  saveFile.magic=SAVE_MAGIC;
  saveFile.version=SAVE_VER;
  saveFile.slots=DOOM_NMSAVES;
+ saveFile.levels=saveLevelStamp();
 }
 
 /* -> 1 = a file of ours, read and sound.  Anything else leaves an empty list: a file another
@@ -159,6 +178,10 @@ int doom_saveRead(int device)
     {saveEmpty();
      return 0;
     }
+ if (saveFile.levels && saveFile.levels!=saveLevelStamp())
+    {saveEmpty();                       /* another disc's levels: the indices mean other maps */
+     return 0;
+    }
  return 1;
 }
 
@@ -173,6 +196,7 @@ int doom_saveWrite(int device)
  saveFile.magic=SAVE_MAGIC;
  saveFile.version=SAVE_VER;
  saveFile.slots=DOOM_NMSAVES;
+ saveFile.levels=saveLevelStamp();
  saveFile.sum=saveSum(&saveFile);
  memset(&dir,0,sizeof(dir));
  strcpy((char *)dir.filename,SAVE_FILE);

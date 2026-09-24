@@ -12,6 +12,8 @@
 /* what the pause returns: SRUINS.C main loop, quitRequest (CFG_PAUSE_MENU, CFG_QUIT_ACTION) */
 #define PAUSE_RESUME   0
 #define PAUSE_QUIT     1                /* -> runLevel returns 2: the title */
+#define PAUSE_RESTART  7                /* -> SRUINS.C main case 7: CFG_START_LEVEL over again,
+                                           with the arsenal it began with (doom_playerRestart) */
 
 int  doom_pause(void);                  /* DOOM_PAUSE.C, resident */
 void doom_titleLights(void);            /* ... the title's OPTIONS -> LIGHTS (CFG_LIGHT_MENU) */

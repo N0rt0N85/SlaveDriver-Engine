@@ -137,9 +137,10 @@ static const char *const items[]={"RESUME","MAP","STATS","WEAPONS","OPTIONS","SA
 #define ITEM_RESTART 6
 #define ITEM_QUIT    7
 
-/* Doom's own par times for episode 1, in seconds (g_game.c pars[1]).  The STATS page shows them
-   next to the time played, as the intermission does. */
-static const short parTime[DOOM_NMLEVELS]={30,75,120,90,165,180,180,30,165};
+/* The reference times, in seconds -- the .cfg's EPISODEn_PAR (episodes.py); for the shareware
+   episode they are Doom's own (g_game.c pars[1]).  The STATS page shows them next to the time
+   played, as the intermission does.  0 = the level has none. */
+static const short parTime[DOOM_NMLEVELS]={DOOM_EP_PAR};
 
 /* The eight weapons in slot order (doom_weapontype_t), what Doom's rules do to a target, and the
    ammo each spends.  The damage is FIXED TEXT: these are Doom v1.9's numbers (p_pspr.c, info.c),

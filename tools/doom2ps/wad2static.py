@@ -157,12 +157,12 @@ def serialize_weapon_sequences(frames, chunks, sequence):
 
 
 # ----------------------------------------------------------------------------- assemblage
-def build_static(wad, ids, loading="TITLEPIC", families=None):
+def build_static(wad, ids, loading="TITLEPIC", families=None, logo=None, rows=0, logo_y=None):
     """-> (bytes, info). `families` : liste de familles d'armes (defaut : les 10)."""
     if families is None:
         families = WEAPON_FAMILIES
     _pal, remap = rle8.object_palette(wad.playpal(0))
-    b1 = wad2title.logo_block(wad, loading)             # "black" : sans logo ni masque
+    b1 = wad2title.logo_block(wad, loading, logo, rows, logo_y)   # "black" : sans logo ni masque
     b3 = wad2snd.static_sound_block(wad)
     tiles, by_lump = weapon_tiles(wad, families, remap)
     b4 = serialize_tiles(tiles)
@@ -183,12 +183,13 @@ def build_static(wad, ids, loading="TITLEPIC", families=None):
     return b"".join([b1, b3, b4, b5]), info
 
 
-def write_static(path, wad, ids, *, loading="TITLEPIC", weapons=None):
+def write_static(path, wad, ids, *, loading="TITLEPIC", weapons=None, logo=None, rows=0, logo_y=None):
     """STATIC.DAT, puis DTITLE.DAT dans le meme repertoire (info title_path, title_bytes)."""
-    data, info = build_static(wad, ids, loading, weapons)
+    data, info = build_static(wad, ids, loading, weapons, logo, rows, logo_y)
     atomic_write(path, data)
     info["path"] = path
-    tinfo = wad2title.write_title(os.path.join(os.path.dirname(os.path.abspath(path)), "DTITLE.DAT"), wad)
+    tinfo = wad2title.write_title(os.path.join(os.path.dirname(os.path.abspath(path)), "DTITLE.DAT"),
+                                  wad, logo, rows, logo_y)
     info["title_path"], info["title_bytes"] = tinfo["path"], tinfo["bytes"]
     return info
 
@@ -199,12 +200,16 @@ def main(argv=None):
     ap.add_argument("--ids", default=DEFAULT_IDS)
     ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--loading", default="TITLEPIC", help="lump 320x200 ou `black`")
+    ap.add_argument("--logo", default=None, help="le lump du logo (cle TITLE_LOGO du .cfg)")
+    ap.add_argument("--logo-rows", type=int, default=0, help="lignes d'ecran gardees (0 = tout)")
+    ap.add_argument("--logo-y", type=int, default=None, help="la ligne d'ecran ou il commence")
     ap.add_argument("--e1m1-weapons", action="store_true", help="5 familles (48 tuiles) au lieu de 10")
     a = ap.parse_args(argv)
     w = wadmod.Wad(a.wad)
     ids = json.load(open(a.ids))
     fams = E1M1_FAMILIES if a.e1m1_weapons else WEAPON_FAMILIES
-    info = write_static(a.out, w, ids, loading=a.loading, weapons=fams)
+    info = write_static(a.out, w, ids, loading=a.loading, weapons=fams, logo=a.logo,
+                        rows=a.logo_rows, logo_y=a.logo_y)
     print("%s : %d o = blocs %s" % (info["path"], info["total"], info["blocks"]))
     print("%s : %d o" % (info["title_path"], info["title_bytes"]))
     print("tuiles d'armes : n = tileBase = %d (%d lumps, %d distinctes par sha1), RLE %d o, max %d o"

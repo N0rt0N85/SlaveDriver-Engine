@@ -4,6 +4,9 @@
 Lu par game/doom/DOOM_TITLE.C (doom_titleFonts, doom_titlePicture). Tout vient du WAD SHAREWARE
 (M_DOOM, STCFN*, M_SKULL1/2, PLAYPAL) : jamais d'art retail. Gros-boutiste, comme le reste du disque.
 
+Le logo lui-meme est le lump TITLE_LOGO du .cfg, coupe a TITLE_LOGO_ROWS lignes d'ecran et
+pose a TITLE_LOGO_Y (episodes.py) : M_DOOM agrandi x2, ou TITLEPIC entiere a x1 sans son logo id.
+
 Bloc logo (LOGO_BLOCK_HEAD + w*h octets, w multiple de 4 : pas de remplissage). Le MEME bloc est le
 bloc 1 de STATIC.DAT (wad2static.build_static), lu par doom_loadingScreen : l'ecran de chargement
 reprend le logo et le feu du titre, LOADING en pochoir. `logo_block(wad, "black")` (--loading black) :
@@ -19,13 +22,13 @@ logo 0x0 et masque vide, le reste identique.
                   pendant un chargement la banque 1 ne survit pas (loadPalletes), la 0 si
   680   u8[256]   R : octets aleatoires (LCG, graine 1) -- derive (R & 3) et, a pQ8 = 128, decroissance
   936   u8[256]   U : 2e flux (graine 2) -- decroissance U < pQ8 quand pQ8 != 128
-  1192  i16 x4    logoW, logoH, logoX, logoY : rectangle du logo dans la bitmap NBG1 (zoom x2)
+  1192  i16 x4    logoW, logoH, logoX, logoY : rectangle du logo dans la bitmap NBG1 (1:1)
   1200  u8[16][40] masque "LOADING" CORPS (1 bit/cellule, bit fort a gauche, 1 = cellule claire) :
   1840  u8[16][40] masque "LOADING" GLYPHE DILATE (le contour, deja grossi d'une cellule) :
   2480  i16 colonne du champ du POURCENTAGE (multiple de 8), i16 0 :
   2484  12 x (corps, glyphe dilate) x 16 x 2 octets : '0'..'9', '%', ' ' a largeur fixe 16 :
                   STCFN x2, centre sur 320 ; pochoir de l'ecran de chargement (lignes de feu 126..141)
-  1840  u8[w*h]   M_DOOM, indices PLAYPAL, 0 = transparent (masque du patch)
+  1840  u8[w*h]   le logo, indices PLAYPAL, 0 = transparent (masque du patch)
   1840 + w*h      fin (multiple de 4)
 
 DTITLE.DAT :
@@ -42,6 +45,7 @@ Ecriture atomique (temp + os.replace). make_e1m1 l'ecrit par wad2static.write_st
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import struct
 import sys
@@ -69,8 +73,12 @@ DIGIT_W, DIGIT_BYTES = 24, 3                           # une case du pourcentage
 PCT_CELLS = 4                                          # "100%" : trois chiffres et le signe
 PCT_GLYPHS = "0123456789% "                            # dans cet ordre dans le DAT
 PCT_GAP = 16                                           # px entre "LOADING" et le champ
-BITMAP_W, SCREEN_H = 160, 224                          # NBG1 zoom x2 : 320 px -> 160 ; 224 lignes
-LOGO_Y = 6                                             # bitmap -> ecran 12
+BITMAP_W, SCREEN_H = 320, 224                          # NBG1 en 1:1 : la bitmap EST l'ecran
+LOGO_Y = 12                                            # la ligne d'ecran du haut du logo, par defaut
+LOGO_OPAQUE = 247                                      # PLAYPAL 247 = (0,0,0) OPAQUE : l'indice 0
+                                                       # est transparent dans la bitmap, donc un
+                                                       # pixel noir du WAD passe par la (TITLEPIC
+                                                       # en a 845 dans ses 133 premieres lignes)
 SKULL_W, SKULL_H = 24, 19                              # EZ_setChar : largeur multiple de 8
 SMALL_SPACE, BIG_SPACE = 4, 6
 BIG_XSCALE = 1.5                                       # grande police : x1,5 en x, x2 en y
@@ -182,24 +190,113 @@ def rand_bytes(seed):
 
 
 # ----------------------------------------------------------------------------- logo
-def logo(wad, lump="M_DOOM"):
-    """-> (x, y, w, h, pixels) dans la bitmap NBG1 (160 x 112 visibles au zoom x2). Le patch est
-    centre a la colonne 80, puis elargi a un rectangle aligne sur 4 (x et w) par des colonnes
-    transparentes : le maitre le copie en mots longs. 0 = transparent ; un pixel opaque d'indice 0
-    est refuse (il deviendrait transparent)."""
+def _proche(pal, cache, rgb):
+    """L'index PLAYPAL le plus proche de rgb. 0 est TRANSPARENT dans la bitmap : jamais rendu."""
+    v = cache.get(rgb)
+    if v is None:
+        r, g, b = rgb
+        best, bd = 1, 1 << 30
+        for j in range(1, 256):
+            pr, pg, pb = pal[j]
+            d = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2
+            if d < bd:
+                best, bd = j, d
+        cache[rgb] = v = best
+    return v
+
+
+def agrandir_logo(w, h, pix, msk, pal, scale=2):
+    """(w, h, pix, msk) -> le meme logo a `scale` fois la definition. La FORME du WAD, rien
+    d'invente : le patch est reechantillonne en bilineaire, une fois pour le masque et une fois
+    pour la couleur, et le resultat est requantifie sur la PLAYPAL.
+
+    Le masque est seuille a la moitie de la couverture, ce qui a trois proprietes qui sont tout
+    l'interet de la methode : une arete DROITE ne bouge pas d'un pixel (les poids valent 3/4 et
+    1/4, jamais 1/2), un decrochement d'un pixel devient un CHANFREIN a 45 degres au lieu d'une
+    marche de deux pixels -- c'est la fin du crenelage gros -- et un detail d'un seul pixel garde
+    son aire (il ressort en 2x2). L'escalier des diagonales garde son pas du WAD mais en marches
+    deux fois plus fines.
+
+    La couleur, elle, est vraiment ANTIALIASEE : la moyenne ne porte que sur les points opaques
+    (`cov`), donc le fond transparent ne deteint jamais sur le bord du logo, et a l'interieur les
+    aretes du biseau dore sortent adoucies. Le CONTOUR, lui, ne peut pas l'etre : la bitmap NBG1
+    est en 8 bpp indexes, l'index 0 est transparent et il n'y a pas d'alpha par pixel -- un bord
+    a demi couvert n'existe pas. C'est la seule limite de la methode, et elle tient au materiel.
+    """
+    w2, h2 = w * scale, h * scale
+    out = bytearray(w2 * h2)
+    cache = {}
+    inv = 1.0 / scale
+    for y2 in range(h2):
+        v = (y2 + 0.5) * inv - 0.5
+        j0 = int(math.floor(v))
+        fy = v - j0
+        for x2 in range(w2):
+            u = (x2 + 0.5) * inv - 0.5
+            i0 = int(math.floor(u))
+            fx = u - i0
+            cov = nr = ng = nb = 0.0
+            for dj, wy in ((0, 1.0 - fy), (1, fy)):
+                jj = j0 + dj
+                if wy == 0.0 or not (0 <= jj < h):
+                    continue
+                for di, wx in ((0, 1.0 - fx), (1, fx)):
+                    ii = i0 + di
+                    if wx == 0.0 or not (0 <= ii < w) or not msk[jj * w + ii]:
+                        continue
+                    wt = wx * wy
+                    r, g, b = pal[pix[jj * w + ii]]
+                    nr += wt * r
+                    ng += wt * g
+                    nb += wt * b
+                    cov += wt
+            if cov < 0.5:                              # moins de la moitie couverte : transparent
+                continue
+            out[y2 * w2 + x2] = _proche(pal, cache, (int(nr / cov + 0.5),
+                                                     int(ng / cov + 0.5),
+                                                     int(nb / cov + 0.5)))
+    return w2, h2, bytes(out), bytes(1 if v else 0 for v in out)
+
+
+def logo_shape(wad, lump="M_DOOM", rows=0):
+    """(w, h, pix, msk) du lump APRES agrandissement et coupe -- ce que `logo` va cadrer, et ce
+    que verif_static recoupe.
+
+    L'AGRANDISSEMENT est le plus grand multiple ENTIER qui tienne encore dans l'ecran : M_DOOM
+    123x60 passe a x2 (246x120, x3 deborderait en largeur) et TITLEPIC 320x200 reste a x1 -- son
+    art est DEJA a la definition de l'ecran, l'agrandir puis le requantifier ne ferait que l'abimer.
+
+    `rows` coupe le bas, en lignes d'ECRAN (0 = tout le lump). C'est ce qui garde de TITLEPIC le
+    logo et le marine sans le logo id (qui commence a sa ligne 148) ni le bandeau de texte."""
     w, h, pix, msk = wad.patch(lump)
-    x0 = (BITMAP_W - w) // 2                           # 123 -> 18 (ecran 36..281)
+    scale = max(1, min(BITMAP_W // w, SCREEN_H // h))
+    if scale > 1:
+        w, h, pix, msk = agrandir_logo(w, h, pix, msk, wad.playpal(0), scale)
+    if rows and rows < h:
+        h = rows
+        pix, msk = pix[:w * h], msk[:w * h]
+    return w, h, pix, msk
+
+
+def logo(wad, lump="M_DOOM", rows=0, y=None):
+    """-> (x, y, w, h, pixels) dans la bitmap NBG1 (320 x 224, 1:1). Le lump, agrandi et coupe
+    (logo_shape), est centre puis elargi a un rectangle aligne sur 4 (x et w) par des colonnes
+    transparentes : le maitre le copie en mots longs.
+
+    0 est TRANSPARENT dans la bitmap, donc un pixel opaque d'indice 0 prend LOGO_OPAQUE, qui est
+    le MEME noir (0,0,0) mais opaque. Une image pleine comme TITLEPIC en est faite."""
+    w, h, pix, msk = logo_shape(wad, lump, rows)
+    y0 = LOGO_Y if y is None else y
+    x0 = (BITMAP_W - w) // 2                           # 246 -> 37 (ecran 36..283 apres alignement)
     x = x0 & ~3
     ww = (x0 - x + w + 3) & ~3
-    assert x + ww <= BITMAP_W and LOGO_Y + h <= SCREEN_H // 2, (x, ww, h)
+    assert x + ww <= BITMAP_W and y0 + h <= SCREEN_H, (x, ww, y0, h)
     out = bytearray(ww * h)
     for j in range(h):
         for i in range(w):
             if msk[j * w + i]:
-                v = pix[j * w + i]
-                assert v != 0, "%s : pixel opaque d'indice 0 en (%d, %d)" % (lump, i, j)
-                out[j * ww + x0 - x + i] = v
-    return x, LOGO_Y, ww, h, bytes(out)
+                out[j * ww + x0 - x + i] = pix[j * w + i] or LOGO_OPAQUE
+    return x, y0, ww, h, bytes(out)
 
 
 MASK_CLAIR = 0.35           # part de la luminance MAXIMALE a partir de laquelle une couleur
@@ -330,15 +427,16 @@ def mask_font(wad):
 
 
 # ----------------------------------------------------------------------------- assemblage
-def logo_block(wad, loading="TITLEPIC"):
-    """Le bloc logo ; `loading == "black"` : sans logo ni masque (ecran de chargement noir + feu)."""
+def logo_block(wad, loading="TITLEPIC", lump=None, rows=0, y=None):
+    """Le bloc logo ; `loading == "black"` : sans logo ni masque (ecran de chargement noir + feu).
+    `lump`, `rows`, `y` : les cles TITLE_LOGO / TITLE_LOGO_ROWS / TITLE_LOGO_Y du .cfg."""
     # --loading ne prend plus de lump (etape 3) : un ancien argument (INTERPIC...) echoue ici
     assert loading in ("TITLEPIC", "black"), "--loading %s : TITLEPIC ou black" % loading
     pal = wad.playpal(0)
     if loading == "black":
         x, y, w, h, pixels = 0, 0, 0, 0, b""
     else:
-        x, y, w, h, pixels = logo(wad)
+        x, y, w, h, pixels = logo(wad, lump or "M_DOOM", rows, y)
     p_load = fire_palette(pal)
     assert p_load[0] == 0 and 255 not in p_load, p_load
     out = BLOCK_MAGIC + struct.pack(">hh", FIRE_LEVELS, 0)
@@ -365,9 +463,9 @@ def pad4(b):
     return b + bytes(-len(b) & 3)
 
 
-def title_file(wad):
+def title_file(wad, lump=None, rows=0, y=None):
     """-> (bytes de DTITLE.DAT, info)."""
-    block = logo_block(wad)
+    block = logo_block(wad, lump=lump, rows=rows, y=y)
     small, big = fonts(wad)
     s1, s2 = skulls(wad)
     out = TITLE_MAGIC + struct.pack(">i", len(block)) + block
@@ -379,8 +477,8 @@ def title_file(wad):
     return out, info
 
 
-def write_title(path, wad):
-    data, info = title_file(wad)
+def write_title(path, wad, lump=None, rows=0, y=None):
+    data, info = title_file(wad, lump, rows, y)
     atomic_write(path, data)
     info["path"] = path
     return info
@@ -390,8 +488,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--wad", default=DEFAULT_WAD)
     ap.add_argument("--out", default=DEFAULT_OUT)
+    ap.add_argument("--logo", default="M_DOOM", help="le lump du logo (cle TITLE_LOGO du .cfg)")
+    ap.add_argument("--logo-rows", type=int, default=0, help="lignes d'ecran gardees (0 = tout)")
+    ap.add_argument("--logo-y", type=int, default=None, help="la ligne d'ecran ou il commence")
     a = ap.parse_args(argv)
-    info = write_title(a.out, wadmod.Wad(a.wad))
+    info = write_title(a.out, wadmod.Wad(a.wad), a.logo, a.logo_rows, a.logo_y)
     print("%s : %d o (bloc logo %d, polices %d + %d, cranes 2 x %d)"
           % (info["path"], info["bytes"], info["logo_block"], info["small"], info["big"], info["skull"]))
     return 0

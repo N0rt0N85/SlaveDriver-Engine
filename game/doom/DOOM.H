@@ -18,7 +18,12 @@
 #include "doom_tables.h"
 
 /* --- levels (contract section 9) ------------------------------------------------------------ */
-#define DOOM_NMLEVELS 9                 /* size of doomLevelNames[]: the shareware episode (section 9) */
+/* GCC14: WHICH levels exist, where each leads and what they are called is the .cfg's, not the
+   C's: tools/doom2ps/episodes.py turns the EPISODEn_* keys into $(BUILD)/doom_episodes.h, and
+   the tables below are filled from its macros.  DOOM_NMLEVELS comes from there too -- it is the
+   length of the whole list, every episode's maps end to end, the secret ones after the normal
+   ones of their own episode.  That order IS the level index the engine and the saves use. */
+#include "doom_episodes.h"
 
 /* --- object types that are not mobjs (contract section 1) ----------------------------------- */
 #define OT_DOOM_EXIT        176         /* params: channel (900)                                  */
@@ -149,6 +154,11 @@ void        doom_sectorDamageTic(void);        /* 35 Hz from doom_playerTic: lev
 void        doom_wlineTic(void);               /* 35 Hz from doom_playerTic: walk-over lines crossed (OT_DOOM_WLINE) */
 extern int  doomLevelTime;                     /* THE 35 Hz level clock (Doom leveltime)         */
 extern const char *doomLevelNames[DOOM_NMLEVELS];      /* "+E1M1.LEV", ... (8.3, root)           */
+/* The episodes NEW GAME offers (DOOM_GAME.C, from the .cfg): their names and the level index
+   each one opens on.  One episode = no list to show, and the menu skips the row. */
+extern const char *const doomEpisodeNames[DOOM_NMEPISODES];
+extern const short doomEpisodeFirst[DOOM_NMEPISODES];
+int doom_episodeOf(int l);                    /* which episode a level index belongs to */
 int         doom_wallIsSecret(int w);          /* OT_DOOM_SECRETWALL: 1 = monsters do not press it */
 int         doom_monsterUseDoor(int w);        /* doomBlocked: 1 = the door wall answers (P_UseSpecialLine) */
 int         doom_nearDoor(Sprite *s);          /* a door's sector under it, or within its radius */
@@ -278,6 +288,52 @@ int         doom_hordeWave(void);              /* the wave reached -- the mode's
 int         doom_exiting(void);                /* the level is over                              */
 void        doom_endRound(void);               /* a fighting game's limit: the next round        */
 const char *doom_levelLabel(int l);            /* "E1M1"                                         */
+extern const char *const doomMapTitles[DOOM_NMLEVELS]; /* "E1M1: Hangar" (DOOM_HUD.C; PAUSE.OVL reads it) */
+void doom_playerRestart(void);                 /* the pause's RESTART LEVEL: every player replays */
+void doom_playerCarry(void);                   /* keep the arsenal into the next level start     */
+int  doom_maxAmmoOf(int a);                    /* Doom's limit before the backpack doubles it    */
+
+/* --- SAVE / LOAD: DOOM_SAVE.C, in place of the engine's BUP.C in the Doom link --------------
+       A save is the START of a level: map, skill, health, armour, weapons, ammo, backpack --
+       what G_PlayerFinishLevel carries between levels, and what a PlayStation Doom password
+       held.  LOAD and the pause's RESTART LEVEL apply the same record through the same path. */
+#define DOOM_NMSAVES 6                  /* the rows INTRO.C loadMenu already lays out */
+
+typedef struct                          /* 32 bytes; one compiler, one endianness, both ends */
+{unsigned char used,level,skill,weaponOwned;
+ signed char   readyWeapon;
+ unsigned char armorType,backpack,serial;
+ short health,armorPoints;
+ short ammo[DOOM_NUMAMMO];              /* am_clip, am_shell, am_cell, am_misl */
+ unsigned short gameSeconds;            /* play time up to this level's start (18 h) */
+ unsigned char year,month,day,hour,min; /* the RTC when it was written */
+ unsigned char pad[5];
+} DoomSaveRec;
+
+extern DoomSaveRec doomLevelStartRec;   /* the level being played, as it began */
+extern unsigned short doomGameSeconds;
+extern char doomSaveAny;                /* a file of ours was found at boot */
+extern char doomSaveDevices;            /* devices that answered: 1 = no device line to show */
+
+void doom_bupOpen(void *lib,void *work);       /* NULL,NULL = from the pool (boot, title)       */
+void doom_bupClose(void);
+int  doom_saveDevices(void);
+int  doom_saveDevicePresent(int d);
+int  doom_saveRead(int device);                /* -> 1 = a sound file of ours was read          */
+int  doom_saveWrite(int device);               /* -> 0, or a BUP error code                     */
+int  doom_saveRoom(int device,int *shortBy);   /* 0, BUP_UNFORMAT, BUP_NOT_ENOUGH_MEMORY        */
+int  doom_saveFormat(int device);
+const DoomSaveRec *doom_saveSlot(int slot);    /* NULL = empty                                  */
+int  doom_saveSlotUsed(int slot);
+int  doom_saveNewest(void);                    /* the slot with the highest serial, or -1       */
+void doom_saveCapture(void);                   /* the level start -> doomLevelStartRec          */
+void doom_saveApply(const DoomSaveRec *r);     /* LOAD: the next level start keeps this         */
+int  doom_saveStore(int device,int slot);      /* SAVE: the record into a slot, then the file   */
+int  doom_saveLoadDevice(void);
+void doom_saveSetDevice(int d);
+void doom_saveDrawSlot(int slot,int x,int y,int selected);   /* the title's list (MENU.C)      */
+
+
 int         doom_bossLevel(int l);             /* 1 = a level with a boss                        */
 int         doom_levelBossMt(void);            /* this level's boss type, -1 = none               */
 int         doom_bossCount(int l);             /* the bosses level l holds                        */

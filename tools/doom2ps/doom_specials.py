@@ -177,6 +177,15 @@ EXIT_W = {52: CHANNEL_EXIT, 124: CHANNEL_SECRETEXIT}
 # d'episode (E1M8 : la salle ou l'on arrive par le teleporteur) : 20 hp et la carte se termine des
 # que la sante passe a 10 ou moins -- le bit DAMAGE_EXIT du parametre hp de OT_DOOM_DAMAGE.
 SECTOR_DAMAGE = {7: 5, 5: 10, 16: 20, 4: 20, 11: 20}
+# LES SECRETS (special 9, P_PlayerInSpecialSector « secret_count++ ; sector->special = 0 »). Ils
+# passent par le MEME enregistrement que les degats -- le moteur tient deja un octet par feuille --
+# mais avec le bit DAMAGE_SECRET dans hp et, dessous, le NUMERO du secret dans l'ordre du WAD. Le
+# moteur en tire le total (mpTotal[2]) sans que la carte ait a le lui dire, et efface d'un coup
+# toutes les feuilles qui portent le meme numero : un secteur decoupe en dix feuilles compte UNE
+# fois, comme le `sector->special = 0` de Doom. 128 secrets par carte au plus (E1M5 en a 9).
+SECTOR_SECRET = 9
+DAMAGE_SECRET = 0x200
+SECRETS_MAX = 128
 SECTOR_EXIT = {11}
 DAMAGE_EXIT = 0x100
 # Sols qui MONTENT, un aller (p_floor.c EV_DoFloor, p_plats.c EV_DoPlat ; declencheurs de
@@ -292,7 +301,7 @@ FASTDARK, SLOWDARK = 15, 35
 # rampe du monde n'a qu'une famille de bandes (UTIL.H).
 SECTEURS_DEGATS = frozenset((4, 5, 7, 11, 16))
 SATURATION_MIN = 0.35
-TEINTE_ADOUCIT = 0.625   # part du chemin vers le blanc : la couleur BRUTE d'un flat est bien trop
+TEINTE_ADOUCIT = 0.75   # part du chemin vers le blanc : la couleur BRUTE d'un flat est bien trop
                          # forte sur un mur (le nukage sort a k = 8, 16, 5 et peint la salle en
                          # vert pomme -- mesure a l'ecran). Adoucie, elle donne 13, 16, 12, ce
                          # qui est la teinte reglee a la main et acceptee le 2026-09-23.
@@ -654,11 +663,12 @@ def specials_of(M):
     wswitch : {line, channel}                       lignes W -> OT_SECTORSWITCH (par feuille bordante)
     sswitch : {line, channel, special}              lignes S -> OT_SW1..4
     exits   : {line, channel, secret}
-    damage  : {sector, hp}
+    damage  : {sector, hp}   (hp | DAMAGE_SECRET + numero = un secteur SECRET, special 9)
     ignored : Counter des spéciaux non traités (scroll 48, lumières, escaliers...)"""
     sides, sects = M["sidedefs"], M["sectors"]
     doors, lifts, floors, wsw, ssw, exits, damage = [], [], [], [], [], [], []
     raises, teleports = [], []
+    nm_secrets = 0
     ignored = defaultdict(int)
     by_tag = defaultdict(list)
     for si, s in enumerate(sects):
@@ -667,6 +677,11 @@ def specials_of(M):
         if s.special in SECTOR_DAMAGE:
             damage.append(dict(sector=si, hp=SECTOR_DAMAGE[s.special], special=s.special,
                                exit=s.special in SECTOR_EXIT))
+        elif s.special == SECTOR_SECRET:
+            assert nm_secrets < SECRETS_MAX, (si, nm_secrets)
+            damage.append(dict(sector=si, hp=DAMAGE_SECRET | nm_secrets, special=s.special,
+                               exit=False, secret=nm_secrets))
+            nm_secrets += 1
         elif s.special in SECTOR_FX:
             pass                       # anime : emis par special_objects (OT_DOOM_SECTORFX)
         elif s.special:

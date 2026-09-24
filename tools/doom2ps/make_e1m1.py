@@ -53,6 +53,7 @@ import doom_specials as sp                             # noqa: E402
 import things2objects as t2o                           # noqa: E402
 import wad2snd                                         # noqa: E402
 import wad2sprites                                     # noqa: E402
+import episodes                                         # noqa: E402
 import wad2static                                      # noqa: E402
 import wad2hud                                         # noqa: E402
 
@@ -68,6 +69,7 @@ BUILD_DIR = os.path.join(ROOT, "build", "doom2ps")
 # carres 4x4 puis 2x2 la mettent a 1 274 (sonde sols_grossiers). Degradation accordee le 18-09.
 OPTIM_CARTE = {"E1M8": "defaut,grossiers"}
 DOOM_GAME_C = os.path.join(ROOT, "game", "doom", "DOOM_GAME.C")
+DEFAULT_PARAMS = os.path.join(ROOT, "params", "doom.cfg")
 RETAIL_COPIES = ["INITLOAD.DAT", "INTRO.PCS"]                 # DOOM_ABI §9, jamais commites
 TILE_GEOM = 0x32                                              # 64x64 | 16BPP | PALLETE
 SKY_W, SKY_H = 512, 256                                       # PLAX.C:91-93
@@ -146,6 +148,16 @@ def build_objects(W, M, ids, G, *, skill, lift_contact):
 
 
 # ----------------------------------------------------------------------------- etape 5
+def ciel_de_carte(carte):
+    """Ciel de Doom 2 (g_game.c G_InitNew) : MAP01-11 SKY1, MAP12-20 SKY2, MAP21+ SKY3 ; ExMy : SKYx."""
+    m = re.fullmatch(r"MAP(\d\d)", carte.upper())
+    if m:
+        n = int(m.group(1))
+        return "SKY1" if n < 12 else "SKY2" if n < 21 else "SKY3"
+    m = re.fullmatch(r"E(\d)M\d", carte.upper())
+    return "SKY%s" % m.group(1) if m else "SKY1"
+
+
 def sky_block(W, retail_path, lump="SKY1", horizon=SKY_HORIZON):
     """Ciel PLAX.C:84-115 : 256 u16 BGR555 (PLAYPAL), 512x256 indices, table de rotation K (320 ints)
     recopiee d'un .LEV retail -- identique sur les 24 niveaux du disque (meme sha1). L'indice 0 reste
@@ -170,6 +182,12 @@ def sky_block(W, retail_path, lump="SKY1", horizon=SKY_HORIZON):
     la que parce que la texture fait 128. Au-DESSUS, la ligne 0 se repete (le ciel, pas le sol)."""
     tm = doomtiles.TileMaker(W)
     w, h, px = tm.texture(lump)
+    # Doom 2 / TNT / Plutonia : ciels de 1024 colonnes = UN tour sans repetition. Le bitmap n'a que
+    # 256 lignes pour 90 degres (PLAX.C:28) : on garde le PREMIER QUART a l'echelle exacte, repete
+    # 4 fois comme SKY1 de Doom 1 -- couture tous les 90 degres plutot qu'un ciel ecrase x4.
+    if w > SKY_H and w % SKY_H == 0:
+        px = bytes(px[r * w + c] for r in range(h) for c in range(SKY_H))
+        w = SKY_H
     assert w == SKY_H, "SKY1 attendu 256 de large : un tour = 4 x 256 colonnes (PLAX.C:28)"
     noir = {i for i, c in enumerate(W.playpal(0)) if max(c) < 8}
     hv = h
@@ -284,14 +302,25 @@ def assemble_doom(G, T, sprites, sounds, objects, params, sky, palette, switches
 
 
 # ----------------------------------------------------------------------------- etape 7
-def level_names_from_c(path=DOOM_GAME_C):
-    """Les chaines de `doomLevelNames[...] = {"+E1M1.LEV", ...};` (DOOM_ABI §9)."""
-    with open(path, encoding="latin-1") as f:
-        src = f.read()
-    m = re.search(r"doomLevelNames\s*\[[^\]]*\]\s*=\s*\{(.*?)\}\s*;", src, re.S)
-    if not m:
+def level_names_from_cfg(path=DEFAULT_PARAMS):
+    """Les .LEV que le disque doit porter (DOOM_ABI §9) -- la MEME source que doomLevelNames[] :
+    les cles EPISODEn_MAPS / EPISODEn_SECRET du .cfg, que le Makefile compile en doom_episodes.h
+    (tools/doom2ps/episodes.py). Le C ne porte plus la liste, donc elle ne peut plus diverger."""
+    try:
+        return ["+%s.LEV" % m for m in episodes.tables(path)["order"]]
+    except Exception as e:
+        log("  AVERT : %s illisible (%s)" % (os.path.relpath(path, ROOT), e))
         return []
-    return re.findall(r'"([^"]+)"', m.group(1))
+
+
+def logo_opts(path=DEFAULT_PARAMS):
+    """Les cles TITLE_LOGO / TITLE_LOGO_ROWS / TITLE_LOGO_Y du .cfg : l'image que l'ecran titre
+    et l'ecran de chargement montrent, ses lignes gardees et sa ligne de depart."""
+    try:
+        t = episodes.tables(path)
+        return dict(logo=t["logo"], rows=t["logo_rows"], logo_y=t["logo_y"])
+    except Exception:
+        return dict(logo=None, rows=0, logo_y=None)
 
 
 def align4(n):
@@ -450,6 +479,8 @@ def main(argv=None):
                     help="geometrie de controle : portes ouvertes en dur, sans push blocks ni speciaux")
     ap.add_argument("--name", default="E1M1.LEV", help="nom du .LEV (celui de doomLevelNames[])")
     ap.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
+    ap.add_argument("--params", default=DEFAULT_PARAMS,
+                    help="le .cfg du disque : ses episodes et son logo (episodes.py)")
     ap.add_argument("--retail", default=DEFAULT_RETAIL, help=".LEV retail donnant la table K du ciel")
     ap.add_argument("--build-dir", default=BUILD_DIR, help="JSON intermediaires")
     ap.add_argument("--no-verify", action="store_true")
@@ -494,14 +525,15 @@ def main(argv=None):
     # savoir combien de tuiles il reste de place (budget_tuiles). Les sprites seuls sont refaits
     # apres, leurs chunks etant decales du nombre FINAL de tuiles de geometrie.
     fams = wad2static.E1M1_FAMILIES if a.e1m1_weapons else wad2static.WEAPON_FAMILIES
-    _sdata, sinfo0 = wad2static.build_static(W, ids, loading=a.loading, families=fams)
+    _sdata, sinfo0 = wad2static.build_static(W, ids, loading=a.loading, families=fams,
+                                             **logo_opts(a.params))
     playpal = W.playpal(0)
     palette, remap = rle8.object_palette(playpal)
     present = wad2snd.present_mobj_types(W, ids, a.map, a.skill)
     spawn = wad2snd.spawnable_mobj_types(ids, present)
     sounds, snd_names = wad2snd.sound_model(W, ids, spawn)
     objects, params, oinfo = build_objects(W, M, ids, G, skill=a.skill, lift_contact=a.lift_contact)
-    sky, (skw, skh) = sky_block(W, a.retail)
+    sky, (skw, skh) = sky_block(W, a.retail, lump=ciel_de_carte(a.map))
 
     log("== 2b. budget de tuiles (octet et memoire)")
     budget, bd = budget_tuiles(G, W, ids, sinfo0, sky, palette, remap, objects, params, sounds,
@@ -608,7 +640,8 @@ def main(argv=None):
                                                             probs or "aucun"))
 
     log("== 6. STATIC.DAT, doom_art.h, copies retail")
-    sinfo = wad2static.write_static(static_path, W, ids, loading=a.loading, weapons=fams)
+    sinfo = wad2static.write_static(static_path, W, ids, loading=a.loading, weapons=fams,
+                                    **logo_opts(a.params))
     tile_base = sinfo["tileBase"]
     log("  STATIC.DAT : %d o = blocs %s ; tuiles d'armes n = tileBase = %d (RLE %d o) ; wseq %d"
         % (sinfo["total"], sinfo["blocks"], tile_base, sinfo["bytes_rle"], sinfo["sequences"]))
@@ -622,18 +655,18 @@ def main(argv=None):
         else:
             fails.append("asset retail absent : cd/%s" % nm)
             log("  ECHEC : cd/%s absent" % nm)
-    names = level_names_from_c()
+    names = level_names_from_cfg(a.params)
     if not names:
-        log("  AVERT : doomLevelNames[] introuvable dans %s" % os.path.relpath(DOOM_GAME_C, ROOT))
+        log("  AVERT : aucun EPISODEn_MAPS dans %s" % os.path.relpath(a.params, ROOT))
     for n in names:
         fn = n.lstrip("+")
         ok = os.path.exists(os.path.join(a.out_dir, fn))
-        log("  doomLevelNames %-14s -> %s/%s : %s" % (n, os.path.relpath(a.out_dir, ROOT), fn,
+        log("  episode %-14s -> %s/%s : %s" % (n, os.path.relpath(a.out_dir, ROOT), fn,
                                                      "present" if ok else "ABSENT"))
         if not ok:
-            fails.append("doomLevelNames %s absent de %s" % (n, a.out_dir))
+            fails.append("%s absent de %s (EPISODEn_MAPS du .cfg)" % (n, a.out_dir))
     if names and ("+" + a.name) not in names and a.name not in [n.lstrip("+") for n in names]:
-        log("  AVERT : --name %s n'est pas dans doomLevelNames[] %s (disque de controle ?)" % (a.name, names))
+        log("  AVERT : --name %s n'est dans aucun EPISODEn_MAPS %s (disque de controle ?)" % (a.name, names))
 
     # budget geometrie u8 (LEVEL.C:69-72) et pool memoire (UTIL.C:352-359)
     if n_geo + tile_base > 255:
@@ -673,6 +706,11 @@ def main(argv=None):
     if rc:
         fails.append("verif_doom.py rc %d" % rc)
     vargs = ["tools/doom2ps/verif_static.py", static_path, "--ids", a.ids, "--wad", a.wad]
+    _lo = logo_opts(a.params)
+    if _lo["logo"]:
+        vargs += ["--logo", _lo["logo"], "--logo-rows", str(_lo["rows"])]
+        if _lo["logo_y"] is not None:
+            vargs += ["--logo-y", str(_lo["logo_y"])]
     if a.e1m1_weapons:
         vargs.append("--e1m1-weapons")
     rc, out = run_tool(vargs)

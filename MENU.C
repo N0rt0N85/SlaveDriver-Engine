@@ -733,6 +733,12 @@ static void dlg_draw(int currentButton,int pressed)
 	    }
 #endif
 	 case IT_GAMEBUTTON:
+#ifdef GP_GAME_DOOM
+/* GCC14: a Doom save names a level and the kit it started with -- not a PowerSlave inventory, and
+   above all not the six retail icons of INTRO.PCS.  The whole line is DOOM_SAVE.C's. */
+	    doom_saveDrawSlot(dlgItem[i].color,f(dlgItem[i].xp),f(dlgItem[i].yp),i==currentButton);
+	    break;
+#else
 	    {char buff1[80],buff2[80];
 	     int a;
 	     XyInt pos;
@@ -790,6 +796,7 @@ static void dlg_draw(int currentButton,int pressed)
 		 }
 	     }
 	    }
+#endif
 	   }
     }
 }
