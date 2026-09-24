@@ -1184,18 +1184,35 @@ def main(argv=None):
             if (W[wi]["normal"][1] > 0) if up else (W[wi]["normal"][1] < 0):
                 return V[W[wi]["v"][0]]["y"]
         return None
+    def seg2d(w):
+        a, b = V[w["v"][0]], V[w["v"][1]]
+        return tuple(sorted(((a["x"], a["z"]), (b["x"], b["z"]))))
     pleins = []
     for si, s_ in enumerate(S):
-        for wi in range(s_["firstWall"], s_["lastWall"] + 1):
-            n = W[wi]["nextSector"]
-            if n < 0 or W[wi]["normal"][1] != 0:
+        murs = [(wi, W[wi]) for wi in range(s_["firstWall"], s_["lastWall"] + 1)]
+        for wi, w_ in murs:
+            n = w_["nextSector"]
+            if n < 0 or w_["normal"][1] != 0:
                 continue
-            ys = [V[i]["y"] for i in W[wi]["v"]]
+            ys = [V[i]["y"] for i in w_["v"]]
             f0, c0, f1, c1 = flat_y(si, 1), flat_y(si, 0), flat_y(n, 1), flat_y(n, 0)
             if None in (f0, c0, f1, c1) or (f0, c0) == (f1, c1):
                 continue
-            if min(ys) == f0 and max(ys) == c0 and (f1 > f0 or c1 < c0):
-                pleins.append((si, wi, n))
+            if not (min(ys) == f0 and max(ys) == c0 and (f1 > f0 or c1 < c0)):
+                continue
+            # ... sauf si un mur PLEIN du meme segment bouche la difference : c'est le cas d'une
+            # porte, dont la fente couvre toute sa hauteur FERMEE pendant que sa contremarche, elle,
+            # a la vraie hauteur de la marche (E1M3 secteur 134 vers l'escalier a 176). Le controle
+            # cherche un trou, pas une forme : un bouchon compte, ou qu'il vienne.
+            seg = seg2d(w_)
+            def bouche(a, b):
+                return any(ww["nextSector"] < 0 and seg2d(ww) == seg
+                           and min(V[i]["y"] for i in ww["v"]) <= a
+                           and max(V[i]["y"] for i in ww["v"]) >= b
+                           for _wj, ww in murs)
+            if (f1 <= f0 or bouche(f0, f1)) and (c1 >= c0 or bouche(c1, c0)):
+                continue
+            pleins.append((si, wi, n))
     put("aucun portail pleine hauteur vers une feuille plus haute / plus basse", not pleins,
         f"{len(pleins)} portails, ex. {pleins[:4]}" if pleins else "0")
 

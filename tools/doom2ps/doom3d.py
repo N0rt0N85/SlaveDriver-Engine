@@ -1318,7 +1318,17 @@ class DoomConverter:
         elif nfh > fh:                                 # marche montante : contremarche
             name = side.lower if side and side.lower != "-" else "BROWN1"
             h = self.tex_h(name)
-            hb = min(nfh, ch)
+            # GCC14: LE MUR QUI S'ETEND. Une PORTE est emise fermee, plafond a 1 u de son sol, et
+            # ce plafond est temporaire. Clamper la contremarche dessus la faisait finir sur CE
+            # plafond, donc own() lui donnait le role `top` et elle montait AVEC la porte : un mur
+            # plein de toute la course, dresse exactement la ou l'ouverture devait apparaitre. Vu
+            # sur console 2026-09-24 (« j'entends l'action, mais un mur s'etend la ou je devrais
+            # voir un portail »), E1M3 secteur 134 et E1M5 secteurs 50, 52, 64, 82, 122. Le plafond
+            # qui borne une contremarche est celui de la porte OUVERTE : la marche a sa vraie
+            # hauteur, fixe, et si le voisin est une plate-forme elle la suit (cas mn_lift ci-
+            # dessous, qui ne pouvait pas se declencher tant que hb etait coince a 1 u).
+            plafond = ms.upper if (ms is not None and ms.kind == "door") else ch
+            hb = min(nfh, plafond)
             # bas : `mid` = sol du voisin (defaut) ou plafond de devant (DONTPEGBOTTOM)
             v = ((ch - hb) % h if pegbot else 0) + yoff
             tex, pic = self.wall_tex(name, hb - fh, v, cadre)
@@ -1427,6 +1437,31 @@ class DoomConverter:
                         self._secret_ids.add(id(w))
                         self.secret_walls.append(w)
             self.stats["portails_ligne"] += 1
+        elif top <= bot and nbi >= 0 and (
+                (ms is not None and ms.kind == "door" and top == ch and nfh < ms.upper)
+                or (mn_door and top == nch and fh < mn.upper)):
+            # OUVERTURE FERMEE PAR LE PLAFOND D'UNE PORTE, et non par un sol. Le voisin d'une porte
+            # n'est pas toujours plus bas qu'elle : quand SON sol est au-dessus du plafond ferme de
+            # la porte, les deux volumes ne se touchent pas et il n'y avait ici ni portail (mur
+            # plein) ni portail mobile (fente posee au sol du voisin, qui ne suit que LUI). La porte
+            # s'ouvrait donc d'un seul cote : on l'entend, on voit l'ouverture depuis la salle, et
+            # de l'autre on fait face a un mur -- E1M3 secteur 134 (la porte secrete en haut de
+            # l'escalier, voisin a 176 contre un plafond ferme a 121), E1M5 secteurs 50, 52, 64, 82
+            # et la porte 122 (captures console 2026-09-24).
+            # La fente va donc AU PLAFOND DE LA PORTE (top - 1 .. top), pas au sol du voisin, et son
+            # haut entre dans le push block de cette porte : il monte avec elle, et l'ouverture est
+            # exactement celle de Doom -- min(plafond ouvert, plafond voisin). _tag_walls en fait un
+            # DOORWALL, donc ce cote se presse aussi. Quand le sol du voisin bouge lui aussi (E1M3 :
+            # l'ascenseur 133), c'est la PORTE qui gagne : le bas cale sur le sol de la porte donne
+            # les quatre etats justes (ferme/ouvert x haut/bas), le bas cale sur l'ascenseur en
+            # donnait deux faux.
+            # le garde `sol du voisin < plafond OUVERT` compte : sans lui, une porte dont le
+            # voisin reste au-dessus d'elle meme ouverte gagnerait un passage que Doom n'a pas
+            # (aucun cas dans l'episode 1 -- mesure du 24-09 -- mais un autre WAD en aura).
+            mob = ([(ms, "top")] if (ms is not None and ms.kind == "door" and top == ch) else [])                 + ([(mn, "top")] if (mn_door and top == nch) else [])
+            emit_wall(P, Q, top - DOOR_SLIT, top, next_sector=nbi, tex=None, picnum=0,
+                           light=light, invisible=True, centre=cen, mob=mob)
+            self.stats["portails_fente_porte"] = self.stats.get("portails_fente_porte", 0) + 1
         elif top <= bot and nbi >= 0 and (
                 (ms is not None and ms.kind != "door" and bot == fh)
                 or (mn_lift and bot == nfh)):
