@@ -2323,12 +2323,21 @@ static void probeSample(int lines)
  if (probeFrozen)
     return;
  probeImg++;
- /* the FRC is 16 bit at phi/32: it wraps after 65536 ticks, which is 1228 lines at 26.87 MHz
-    and 1153 at 28.64.  An image past 1100 lines could have wrapped, so it is thrown away, and
-    the ticks-per-line band catches what the length test cannot (the sample that straddles
-    initProfiler's FRC clear).  A wrap cannot alias back into the band: it subtracts 65536. */
- if (probeHave && probeImg>PROBE_SKIP && lines>=200 && lines<=1100)
-    {int q=(((int)(unsigned short)(t-probeLast))*1000)/lines;
+ /* The FRC is 16 bit at phi/32, so it wraps after 65536 ticks -- 78.0 ms at 26.87 MHz, 73.2 at
+    28.64.  Throwing those images away would blind the probe exactly where it is wanted: a 15 fps
+    spawn is already 66.7 ms and a 12 fps one wraps every image.  So the wrap is UNFOLDED instead.
+    The line count is exact and clock-independent, and the two clocks are only 6.6 % apart, so
+    lines*55.117 predicts the true tick count to about 3 %, far inside the 65536 it has to choose
+    between: the number of wraps is simply the rounded difference.  The band below then judges
+    the unfolded value, and still catches the sample that straddles initProfiler's FRC clear. */
+ if (probeHave && probeImg>PROBE_SKIP && lines>=200 && lines<=8000)
+    {int raw=(int)(unsigned short)(t-probeLast);
+     int expect=(lines*55117)/1000;         /* midway between the two clocks */
+     int n=(expect-raw+32768)>>16;
+     int q;
+     if (n<0)
+	n=0;
+     q=((raw+(n<<16))*1000)/lines;
      if (q>=45000 && q<=70000)
 	{probeQ+=q; probeLineSum+=lines; probeOk++;}
      else
@@ -3034,7 +3043,9 @@ int runLevel(char *filename,int levelNm)
 		frm : the frame period in hblank lines, averaged -- the WHOLE loop, including
 			everything time:'s c leaves out (Tile Flush, the pipe kick, the VBlank
 			wait).  Clock-independent and continuous, unlike fps: 60/N.
-		ok/no : sample windows kept / thrown away by the FRT wrap guard.
+		ok/no : sample windows kept / thrown away.  The 16-bit FRT wrap is unfolded from
+			the line count, not refused, so a 12 fps spawn still measures; no: counts
+			what fell outside the plausible rate band anyway.
 	 The row counts down (wait:N images) and then FREEZES, so one photograph of a spawn is
 	 representative.  Read the two arms as a RATIO: 28.64/26.87 = 1.0656. */
      if (!probeFrozen)
