@@ -122,6 +122,7 @@ static const Uint16 regList[]=
  0x80,0x82,0x84,0x86,0x88,0x8a,0x8c,0x8e,   /* NBG1 */
  0x98,0x9a,0xd0,                        /* ZMCTL, SCRCTL, WCTLA */
  0xe4,0xe8,0xea,0xec,0xee,              /* CRAOFA, LNCLEN, SFPRMD, CCCTL, SFCCMD */
+ 0xf0,0xf2,0xf4,0xf6,                   /* PRISA..PRISD: the sprites' priorities */
  0xf8,0x108,0x110,0x112};               /* PRINA, CCRNA, CLOFEN, CLOFSL */
 #define NREGS (sizeof(regList)/sizeof(regList[0]))
 
@@ -211,6 +212,8 @@ static Uint16 bufReg(int o)
     p=(const Uint16 *)&Scl_w_reg+((o-0xc0)>>1);
  else if (o<0xf0)
     p=(const Uint16 *)&SclOtherPri+((o-0xe0)>>1);
+ else if (o<0xf8)
+    p=(const Uint16 *)&SclSpPriNum+((o-0xf0)>>1);
  else if (o<0x100)
     p=(const Uint16 *)&SclBgPriNum+((o-0xf8)>>1);
  else if (o<0x110)
@@ -244,7 +247,9 @@ static Uint16 pauseReg(int o,int v)
      case 0xea: return b&~0x000f;       /* priority per screen, not per pixel */
      case 0xec: return (b&~0xff03)|0x0002;  /* NBG1 mixed, by its own ratio; NBG0 opaque */
      case 0xee: return b&~0x000f;       /* colour calculation per screen */
-     case 0xf8: return 0x0607;          /* NBG0 7 (the menu), NBG1 6 (the veil); SP0 is 4 */
+     case 0xf0: case 0xf2: case 0xf4: case 0xf6:
+	return 0x0101;                  /* every sprite register down to 1: see below */
+     case 0xf8: return 0x0607;          /* NBG0 7 (the menu), NBG1 6 (the veil) */
      case 0x108: return (b&0x001f)|(v<<8);
      case 0x110:                        /* colour offset: never on the menu; on the veil as on */
      case 0x112:                        /* SP0, the view under it (it applies to the mixed    */
@@ -265,15 +270,18 @@ static void vblankIn(void)
    too, so the whole frozen frame, status bar and all, sat ON TOP of the page.  It showed: the
    help line could be read through the holes in the HUD font's own glyphs, which is the frozen
    bar in front of the menu and not behind it (photo, 2026-09-23).  Every earlier attempt at
-   hiding the bar wrote into a plane nothing could see.
-   PRISA..PRISD are not in regList and cannot be: bufReg maps 0xf8 upwards to the background
-   priorities and would index before its own array.  They are taken from the chip and put back
-   on the chip, which needs no SCL buffer at all.  Under the menu (7) and under the veil (6), a
-   sprite at 1 is what the veil was written to darken. */
-#define PAUSE_PRIS0 0x00f0              /* PRISA: 0xf0, 0xf2, 0xf4, 0xf6 */
-#define PAUSE_NPRIS 4
-static Uint16 savedPriS[PAUSE_NPRIS];
-static char priSaved;
+   hiding the bar wrote into a plane nothing could see.  So PRISA..PRISD go down to 1 with the
+   rest: under the menu (7) and under the veil (6), a sprite at 1 is what the veil was written
+   to darken.
+   THE WAY BACK IS THE BUFFER, NOT THE CHIP.  They were first taken from the chip at the top of
+   the menu and put back at the bottom, and a priority register cannot be read: "a WRITE-ONLY
+   16-bit register located at addresses 1800F0H through 1800F6H" (VDP2 p.209).  What came back
+   was not the game's 0x0704,0x0707,0x0707,0x0707 (SRUINS.C setVDP2: all eight at 7, SP0 at 4)
+   but whatever the bus held, and a 3-bit field that lands on 0 is read as TRANSPARENT, not as
+   the back: the game resumed with no image at all -- playable, black, the pause opening again
+   over it (reported 2026-09-24).  SCL's own buffer holds what the game asked for, and SCL is
+   the only thing that writes those registers (SCL_PriIntProc, when SCL_SetPriority dirties
+   them), so bufReg gives the state the chip is in -- as it does for every other register here. */
 
 /* at the next vblank: the pause's registers (on), or the game's (off) */
 static void setRegs(int on)
@@ -281,21 +289,6 @@ static void setRegs(int on)
  vblankIn();
  for (i=0;i<(int)NREGS;i++)
     VDP2R(regList[i])=on? pauseReg(regList[i],31): bufReg(regList[i]);
- if (on)
-    {if (!priSaved)                     /* the game's own, whatever it set them to */
-	{for (i=0;i<PAUSE_NPRIS;i++)
-	    savedPriS[i]=VDP2R(PAUSE_PRIS0+i*2);
-	 priSaved=1;
-	}
-     for (i=0;i<PAUSE_NPRIS;i++)
-	VDP2R(PAUSE_PRIS0+i*2)=0x0101;
-    }
- else
-    if (priSaved)
-       {for (i=0;i<PAUSE_NPRIS;i++)
-	   VDP2R(PAUSE_PRIS0+i*2)=savedPriS[i];
-	priSaved=0;
-       }
 }
 
 /* ------------------------------------------------------------------------ letters */
