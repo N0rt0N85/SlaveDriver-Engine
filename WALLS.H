@@ -61,6 +61,20 @@ extern int lodFar;
    vdp1WalkProbe: all cells / the cells over VDP1BIGWALK / the same walk with the walls drawn
    from patterns turned a quarter, in units of 64 pixels */
 int vdp1Walk,vdp1Big,vdp1BigWalk,vdp1RotWalk;
+/* GCC14: and the same walk split by the class of surface that carries it -- 0 wall, 1 floor,
+   2 ceiling, 3 the slave's cells, whose class is gone by the time the master replays their
+   records.  Six studies contradicted each other on whether the floor or the walls dominate;
+   this answers it.  vdp1Cls is set once per wall in buildLightList/sbuildLightList, which is
+   the one place both the master's and the slave's paths pass through per wall. */
+int vdp1ClsWalk[4],vdp1Cls;
+
+/* GCC14: where the HARDWARE stops -- past the drawing plane the console hangs -- and, separately,
+   where vdp1Fit CUTS a quad in V.  They were the same constant and that was a category error:
+   the screen shows |y| <= 112 in solo, so everything out to 767 was walked by the VDP1 and then
+   thrown away.  vdp1VCut is live (L+R+C) so the two can be compared on one binary.  Full story
+   and the console figures: WALLASM.H, above vdp1Fit. */
+#define VDP1LIM 767
+extern int vdp1VCut;
 /* The same for the list the VDP1 is drawing, the previous image's: saved by drawWalls before it
    counts the next one, for the freeze report (CRASH.C) */
 int vdp1PrevWalk,vdp1PrevMaxX,vdp1PrevMaxY;

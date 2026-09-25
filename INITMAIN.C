@@ -588,8 +588,11 @@ void main(void)
  SetVblank();
  abcResetEnable=1;
 
- /* GCC14: the 352-dot arm.  Hold X+Y+Z through the logo to ask MAIN for the 28.6364 MHz clock
-    (SMPC CKCHG352) instead of 26.8741.  Sampled HERE because SetVblank() above is what starts
+ /* GCC14: the clock arm.  28.6364 MHz (352 dots) is now the DEFAULT -- it is 6.56 % of every
+    frame for no drawn pixel, measured on console: the picture stays 320 wide inside the wider
+    raster, so the extra dots are never paid for.  Hold X+Y+Z through the logo to fall BACK to
+    26.8741 (320), which is the control arm for any measurement.
+    Sampled HERE because SetVblank() above is what starts
     the continuous peripheral fetch: a hand-rolled PER_LInit before it can leave the SMPC mid
     INTBACK and kill the pad on both arms.  controlerPresent guards the active-low sample --
     lastInputSample is .bss-zero before the first fetch, which reads as every button down. */
@@ -605,7 +608,7 @@ void main(void)
       else
 	 held=0;
      }
-  POKE(CLK352_ADDR,seen? CLK352_TOKEN: 0);
+  POKE(CLK352_ADDR,seen? 0: CLK352_TOKEN);      /* the chord asks for the SLOW clock now */
  }
 
  token=PEEK(0x02ffffc);

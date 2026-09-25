@@ -137,6 +137,7 @@ void project_point(MthXyz *v,XyInt *p)
 int viewXmin=-160,viewXmax=160,viewYmin=CFG_YMIN,viewYmax=CFG_YMAX;
 int viewCx=160,viewCy=CFG_YCENTER;
 int focalDist=FOCALDIST;       /* read by the asm projection too (wallasm_gnu.s, 3 sites) */
+int vdp1VCut=VDP1LIM;          /* GCC14: the V-cut bound (WALLASM.H); L+R+C cycles it in game */
 #define XMIN        viewXmin
 #define YMIN        viewYmin   /* GP_GAME_DOOM: -112 (3D window = screen lines 0..191, SPEC_PLAYER 3.1) */
 #define XMAX        viewXmax
@@ -838,13 +839,15 @@ static signed char wallLightIdx[MAXNMLIGHTSOURCES];
    assembler indexes the ramp with that byte untouched, so a green wall costs nothing and keeps
    its LODs; only the lit path below has to take the byte apart. */
 static void buildLightList(sWallType *wall,int sector)
-{nmWallLights=nmLights? lightListFor(wall,sector,wallLightIdx): 0;
+{WALLCLS(wall);
+ nmWallLights=nmLights? lightListFor(wall,sector,wallLightIdx): 0;
 }
 
 static int snmWallLights;
 static signed char swallLightIdx[MAXNMLIGHTSOURCES];
 static void sbuildLightList(sWallType *wall,int sector)
-{snmWallLights=nmLights? lightListFor(wall,sector,swallLightIdx): 0;
+{WALLCLS(wall);
+ snmWallLights=nmLights? lightListFor(wall,sector,swallLightIdx): 0;
 }
 
 #define NEARCLIP F(GP_NEAR_CLIP) /* MUST stay under the player radius: SPRITE.C:141 parks the eye exactly there */
@@ -1315,7 +1318,7 @@ static int fitCorner(const MthXyz *A,const MthXyz *N,XyInt *s)
  projectWide(&E,&ex,&ey);
  projectWide(&Q,&qx,&qy);
  p=(viewYmax>-viewYmin)? viewYmax: -viewYmin;
- rz=(A->z/VDP1LIM)*p;                   /* rho z_A */
+ rz=(A->z/vdp1VCut)*p;                  /* rho z_A -- follows the V-cut bound, WALLASM.H */
  num=ze-rz;
  den=MTH_Mul(rz,k);
  lam=(num<=0)? 0: (num>=den)? F(1): MTH_Div(num,den);
@@ -3302,6 +3305,9 @@ void drawSlaveWalls(void)
 	 c->dummy=0;
 	}
 #ifdef WALKPROBE
+     /* GCC14: the slave's records carry no class -- they are replayed here, long after the wall
+	they came from -- so they go to their own bucket rather than pollute the other three. */
+     vdp1Cls=3;
      if (!(c->control&CTRL_SKIP) && (c->control&CTRL_FUNC)!=FUNC_UCLIP)
 	VDP1WALK((XyInt *)&c->ax);
 #endif
@@ -4049,6 +4055,7 @@ void drawWalls(int k,MthMatrix *view)
     {/* one count per image, every view: the last one is what the VDP1 is drawing now */
      vdp1PrevWalk=vdp1Walk; vdp1PrevMaxX=vdp1MaxX; vdp1PrevMaxY=vdp1MaxY;
      vdp1Walk=0; vdp1Big=0; vdp1BigWalk=0; vdp1MaxX=0; vdp1MaxY=0; vdp1RotWalk=0;
+     vdp1ClsWalk[0]=vdp1ClsWalk[1]=vdp1ClsWalk[2]=vdp1ClsWalk[3]=0;
     }
 #endif
  autoTarget=NULL;

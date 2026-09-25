@@ -376,7 +376,10 @@ void EZ_sysClip(void)
 {struct cmdTable *cmd;
  cmd=getCmdTable();
  cmd->control=FUNC_SCLIP;
- cmd->cx=319;
+ /* GCC14: the drawing area is the RASTER, not the picture -- at 352 the erase polygon and the
+    centred picture both reach past 319, and a system clip left at 319 walks those columns and
+    then throws them away, leaving them unerased. */
+ cmd->cx=SYS_GETSYSCK? 351: 319;
  cmd->cy=239;
 }
 

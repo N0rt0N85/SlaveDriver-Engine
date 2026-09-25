@@ -1931,9 +1931,18 @@ static void mpRegisterEngine(void)
    much of the vertical cone a view shows, so a taller view adds sky and floor and stretches
    nothing.  The horizon sits where solo puts it, 7/12 of the way down. */
 typedef struct {short x0,y0,w,h,cy;} MpView;
+/* GCC14: the 352-dot raster is 32 dots wider than the picture, which stayed 320 (the projection
+   is isotropic -- one focalDist for x and y -- so no width/focal pair reproduces the 320 image at
+   352, and widening it would move the workload by more than the clock saves).  Centring the
+   picture costs NOTHING: the local origin is an additive offset per command, so moving it moves
+   the world, the things, the gun, the HUD and the text together.  SOLO ONLY: in 2p the right
+   view's origin would reach 256, and 256+VDP1LIM = 1023 is the last legal value of the drawing
+   plane -- zero margin, and past the plane the console HANGS (the freeze of 2026-09-18). */
+int viewOrgOff;                 /* 16 on the 352 arm in solo, 0 everywhere else */
+
 static void mpViewGeometry(int k,MpView *v)
 {if (mpPlayers==1)
-    {v->x0=0; v->y0=0; v->w=320; v->h=192; v->cy=CFG_YCENTER;}
+    {v->x0=viewOrgOff; v->y0=0; v->w=320; v->h=192; v->cy=CFG_YCENTER;}
  else if (mpPlayers==2)
     {/* the horizon stays on the line solo puts it on: a taller view adds FLOOR below it */
      v->x0=160*k; v->y0=0; v->w=160; v->h=CFG_SPLIT_H; v->cy=CFG_YCENTER;}
@@ -2439,7 +2448,7 @@ static void probeSample(int lines)
 }
 
 int runLevel(char *filename,int levelNm)
-{XyInt noUserClip[2]={{0,0},{320-1,240-1}};
+{XyInt noUserClip[2]={{0,0},{320-1,240-1}};   /* GCC14: shifted by viewOrgOff below */
  int i,monsterMoveCounter,musicMark;
  int nmWeaponTiles,nmStaticSounds;
  int lastDraw=0,lastCalc=0;
@@ -2451,6 +2460,10 @@ int runLevel(char *filename,int levelNm)
 
  MthMatrixTbl viewTransform;
  MthMatrix matstack[4];
+
+ /* GCC14: the full-screen clip follows the centred picture (mpViewGeometry) */
+ noUserClip[0].x=viewOrgOff;
+ noUserClip[1].x=320-1+viewOrgOff;
 
  dPrint("vroom!\n");
 #ifdef STATUSTEXT
@@ -2784,6 +2797,24 @@ int runLevel(char *filename,int levelNm)
       else
 	 holeChord=0;
      }
+     {/* GCC14: L+R+C cycles the V-CUT BOUND (WALLASM.H vdp1VCut), the last free L+R chord.
+	 767 is where the HARDWARE stops; the screen shows |y| <= 112, so everything between is
+	 walked by the VDP1 and thrown away -- 33 windows for one shown, measured on console.
+	 Live, so the same binary gives the A/B on the spot, which is the only valid form
+	 (a rebuild moves the frame by more than the lever does). */
+      static char cutChord=0;
+      if ((((~lastInputSample)&(PER_DGT_TL|PER_DGT_TR|PER_DGT_C)))==
+	  (PER_DGT_TL|PER_DGT_TR|PER_DGT_C))
+	 {if (!cutChord)
+	     {vdp1VCut=(vdp1VCut==VDP1LIM)? 256: (vdp1VCut==256)? 200: VDP1LIM;
+	      changeMessage((vdp1VCut==VDP1LIM)? "VCUT 767 (ENGINE)":
+			    (vdp1VCut==256)? "VCUT 256": "VCUT 200");
+	      cutChord=1;
+	     }
+	 }
+      else
+	 cutChord=0;
+     }
      {/* hold L+R+Y -- or A+B+C, for pads whose triggers report only analog values --
 	 to show the per-frame profile tree (PROFILE.C) */
       static char profChord=0;
@@ -2844,7 +2875,7 @@ int runLevel(char *filename,int levelNm)
 			-camera->pos.z);
 	 if (mpPlayers==1)
 	    {EZ_userClip(noUserClip);
-	     EZ_localCoord(320/2,CFG_YCENTER);
+	     EZ_localCoord(320/2+viewOrgOff,CFG_YCENTER);
 	    }
 	 pushProfile("Walls");
 #if WALLPIPE
@@ -2992,7 +3023,7 @@ int runLevel(char *filename,int levelNm)
      mpSwitch(0);
      if (mpPlayers>1)
 	{mpSetViewport(0,0);
-	 EZ_localCoord(320/2,CFG_YCENTER);
+	 EZ_localCoord(320/2+viewOrgOff,CFG_YCENTER);
 	 EZ_userClip(noUserClip);
 	 drawMessage(framesElapsed);
 	}
@@ -3157,6 +3188,17 @@ int runLevel(char *filename,int levelNm)
 			the 30 fps pin costs the arm being played, and hld's second number over
 			f:'s first is the fluidity available for no drawing at all. */
      drawStringf(-158,-10,1,"nog:%d hld:%d/%d",wkNog,wkHeld,wkHeldF);
+
+#ifdef WALKPROBE
+     /* LEGEND  vc  : the V-cut bound in force (WALLASM.H vdp1VCut), cycled live by L+R+C.
+		cls : the same walk as the row above, split by what carries it, in units of 1024
+		      px -- WALL / FLOOR / CEILING / the slave's cells, whose class is gone by
+		      the time the master replays their records.  The 3D window is 60 units.
+		      Six studies disagreed on whether the floor or the walls dominate; this is
+		      the row that settles it. */
+     drawStringf(-158,0,1,"vc:%d cls:%d/%d/%d/%d",vdp1VCut,
+		 vdp1ClsWalk[0]>>4,vdp1ClsWalk[1]>>4,vdp1ClsWalk[2]>>4,vdp1ClsWalk[3]>>4);
+#endif
 
 #ifdef WALKPROBE
      /* LEGEND  walk : what the VDP1 steps through for the cells, in thousands of pixels:
@@ -3376,8 +3418,8 @@ int runLevel(char *filename,int levelNm)
 	     plaxBBymax=CFG_YMAX;
 	    }
 	 SCL_SetWindow(SCL_W1,0,SCL_RBG0,0xfffffff,
-		       plaxBBxmin+160,plaxBBymin+CFG_YCENTER,
-		       plaxBBxmax+160,plaxBBymax+CFG_YCENTER);
+		       plaxBBxmin+160+viewOrgOff,plaxBBymin+CFG_YCENTER,
+		       plaxBBxmax+160+viewOrgOff,plaxBBymax+CFG_YCENTER);
 	 updateVDP2Pic();
 	}
      lastYaw=playerAngle.yaw; lastPitch=playerAngle.pitch;
@@ -3467,6 +3509,7 @@ void main(void)
  POKE(CLK352_ADDR,0);
  SCL_SetDisplayMode(SCL_NON_INTER,CFG_SCL_LINES,clk352? SCL_NORMAL_B: SCL_NORMAL_A);
  displayEnable(0);
+ viewOrgOff=clk352? 16: 0;      /* centre the 320 picture in the 352 raster (mpViewGeometry) */
 
  enable_stereo=1;
  enable_music=1;

@@ -102,13 +102,18 @@ static void vdp1WalkProbe(XyInt *q)
      vdp1BigWalk+=walk>>6;
     }
  vdp1Walk+=walk>>6;
+ vdp1ClsWalk[vdp1Cls&3]+=walk>>6;               /* GCC14: and which CLASS carries it */
  if (q[0].x==q[3].x && q[1].x==q[2].x)
     walk=vdp1WalkEdges(q,q+1,q+3,q+2,&big);     /* a wall, turned: from A-B to D-C */
  vdp1RotWalk+=walk>>6;
 }
 #define VDP1WALK(q) vdp1WalkProbe(q)
+/* GCC14: the engine's normal points into the leaf, so +Y is a FLOOR and -Y a ceiling (the
+   converter emits (0,65536,0) and (0,-65536,0) for the flats, doom2ps).  Zero is a wall. */
+#define WALLCLS(w)  (vdp1Cls=(w)->normal[1]>0? 1: (w)->normal[1]<0? 2: 0)
 #else
 #define VDP1WALK(q)
+#define WALLCLS(w)
 #endif
 
 #define VDP1DIAG 0      /* 1 = diagnostic disc: paints out-of-range cells */
@@ -116,7 +121,16 @@ static void vdp1WalkProbe(XyInt *q)
    and that origin reaches (240,168) in split screen (SRUINS.C mpSetViewport): 1023 - 240, with a
    margin, keeps every view's command inside the plane.  The freeze of 2026-09-18 (vdp1Range) sat
    on a cell windowed to y 1022 -- 1134 on the plane in solo -- as well as at x 3017. */
-#define VDP1LIM  767
+/* VDP1LIM and vdp1VCut now live in WALLS.H: SRUINS.C needs them for the L+R+C chord.
+   GCC14: VDP1LIM is where the HARDWARE stops -- past the drawing plane the console hangs, so
+   vdp1Range clamps to it and nothing may leave for the VDP1 beyond it.  It was also serving as
+   the threshold at which vdp1Fit cuts a quad in V, and that was a category error: the screen only
+   shows |y| <= 112 (solo) or 56 (3/4p), so everything between the window and 767 was being walked
+   by the VDP1 and then thrown away by the clip.  Console 2026-09-25, WALK=1 at a slow spot of
+   E1M3: 1972k units = 2.02 Mpx stepped to show a 61440 px window -- 33 windows, 91 % of it in 14
+   cells each stepping 2.1 windows.  The V cut now has its own bound, and it is live (L+R+C) so it
+   can be judged in place against the same binary.  rho (WALLS.C) follows it: rho is what keeps the
+   cut OUTSIDE the window, and a cut bound without it opens a hole at the top of near cells. */
 #define VCLIPONE 1024   /* cut fractions in 1/1024: (30000<<10) fits in an int */
 
 /* GCC14: past -1024..1023 the manual only says "operation cannot be guaranteed" (HW_VDP1.md:184).
@@ -189,9 +203,35 @@ static int vdp1Range(XyInt *q)
    pattern; (2) the gouraud table is not re-interpolated on the cut quad.
    charNm < 0: the tile cache refused the cell (PIC.H mapWallPic), a polygon in `colour` takes its
    place, same outline and gouraud. */
+/* GCC14: limit (2) above, now that the cut is the normal case for near cells.  vdp1Fit moved the
+   corners along the V edges -- poly[0]->poly[3] and poly[1]->poly[2] -- so the gouraud corners
+   must move the same way, or the shading of a cut cell is the shading of a quad that no longer
+   exists.  While the bound was 767 the cut corners stayed far off screen and the error never
+   reached the window; at 256 it does.  RGB 5:5:5, one lerp a channel, on a copy: the caller's
+   table is built per cell but nothing promises it is not reused. */
+static __inline__ void gourCut(struct gourTable *d,const struct gourTable *s,int t0,int t1)
+{int i;
+ for (i=0;i<2;i++)
+    {int j=3-i,c;
+     unsigned a=s->entry[i],b=s->entry[j],r0=0,r1=0;
+     for (c=0;c<15;c+=5)
+	{int va=(a>>c)&31,vb=(b>>c)&31;
+	 r0|=(unsigned)(va+(((vb-va)*t0)>>10))<<c;
+	 r1|=(unsigned)(va+(((vb-va)*t1)>>10))<<c;
+	}
+     d->entry[i]=(Uint16)r0;
+     d->entry[j]=(Uint16)r1;
+    }
+}
+
 static __inline__ void cellOut(short charNm,short colour,int t0,int t1,XyInt *poly,
 			       struct gourTable *g)
-{if (charNm<0)
+{struct gourTable cut;
+ if (g && (t0>0 || t1<VCLIPONE))
+    {gourCut(&cut,g,t0,t1);
+     g=&cut;
+    }
+ if (charNm<0)
     EZ_polygon(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|DRAW_GOURAU,colour,poly,g);
  else if (t0>0 || t1<VCLIPONE)
     EZ_specialDistSpr2V(charNm,t0,t1,poly,g);
@@ -218,7 +258,7 @@ static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
 #if VDP1PROBE
      if (a>vdp1MaxY) vdp1MaxY=a; if (a>vdp1MaxCoord) vdp1MaxCoord=a;
 #endif
-     if (a>VDP1LIM) over=1;
+     if (a>vdp1VCut) over=1;
      a=poly[i].x; if (a<0) a=-a;
      if (a>VDP1LIM) wide=1;
     }
@@ -237,8 +277,8 @@ static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
 					   to window in V, it is an overflow along U -- slid there */
 	 continue;
 	}
-     sp=(( VDP1LIM-ya)<<10)/d;
-     sm=((-VDP1LIM-ya)<<10)/d;
+     sp=(( vdp1VCut-ya)<<10)/d;
+     sm=((-vdp1VCut-ya)<<10)/d;
      lo=sp<sm? sp: sm;
      hi=sp<sm? sm: sp;
      if (lo>t0) t0=lo;
