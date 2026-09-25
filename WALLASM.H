@@ -105,9 +105,19 @@ static void vdp1WalkProbe(XyInt *q)
  vdp1ClsWalk[vdp1Cls&3]+=walk>>6;               /* GCC14: and which CLASS carries it */
  /* GCC14: EVERY cell turned, not just the walls.  This test used to ask for vertical V edges --
     a wall -- and added a flat at its AS-DRAWN cost, so rot: read back as walk: and six studies
-    read that as "turning is worth nothing".  It is worth x0.49: at a slow spot the flats carry
-    79-94 % of the stepped pixels, and a flat's fan runs ALONG depth, which is where the waste is
-    (2026-09-25, simulated on the .LEV geometry). */
+    read that as "turning is worth nothing".  It is not nothing: at a slow spot the flats carry
+    79-94 % of the stepped pixels, and a flat's fan runs ALONG depth, which is where the waste is.
+    How much it is worth is NOT settled -- the x0.49 first simulated on 2026-09-25 came from a
+    model still carrying the exact V cut this engine no longer has, and that cut DROPS a turned
+    cell.  Re-measured hole-free, turning the flats alone is a TRADE, not a win: x1.045 on the
+    mean (28.0 -> 28.5 ms) against E1M3's worst frame 197.5 -> 173.6 ms and its p99 87.2 -> 80.8,
+    because the flats are dearest at exactly the yaws where turning helps them.  Buying the tail
+    with the mean may be the right trade for a game; it is not a free one, and it has to be said
+    that way.  Turning the WALLS as well moves their large screen
+    extent from V, the only axis the hardware can window, onto U, which it cannot -- vdp1Fit then
+    returns an empty interval and the cell is dropped outright (19-48 near-wall cells a map, one
+    of them covering the whole 3D window).  Walls are not turnable without a second, unrotated
+    copy of every wall tile, which the tile budget cannot pay. */
  walk=vdp1WalkEdges(q,q+1,q+3,q+2,&big);        /* turned: from A-B to D-C */
  vdp1RotWalk+=walk>>6;
 }
@@ -267,7 +277,8 @@ static __inline__ void cellOut(short charNm,short colour,int t0,int t1,XyInt *po
    it, at the plane, where its job is to WINDOW a cell too tall for the plane instead of letting
    vdp1Range squeeze it.  The waste is not across the lines, it is ALONG them, and the lever is
    WALLS.C's pattern order: turned a quarter, a flat's fan runs across depth and the pre-clip
-   takes the off-window spans for nothing (x0.49 of the stepped pixels, simulated). */
+   takes the off-window spans for nothing.  What that is worth is measured above, at
+   vdp1WalkProbe -- and it is a good deal less than the first simulation said. */
 static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
 {int i,a,over=0,wide=0,tall=0,t0,t1;
  XyInt src[4];
