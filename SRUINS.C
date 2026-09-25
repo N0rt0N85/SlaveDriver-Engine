@@ -2326,11 +2326,41 @@ static int probeMHz100,probeFrm10;
    The one thing it cannot model: work that is wall-clock bound rather than CPU bound (a CD read)
    does not shrink with the clock, so a level that streams heavily will read slightly optimistic. */
 static int wkImg,wkF0,wkF1,wkUp,wkWait,wkH0;
+static int wkNog,wkHeld,wkHeldF;
+
+/* GCC14: and the counterfactual must obey the engine's OWN frame-pacing floor, or it credits a
+   saving the loop refuses to deliver.  smoothVTime (:3267-3296, Lobotomy's, upstream) is the least
+   number of fields an image may take: it rises to min(fields-1,2) the moment ONE image overruns,
+   and falls again only after ELEVEN consecutive images that finished early.  So once anything has
+   stuttered the game is pinned at 30 fps, and the 2->1 field saving a faster clock would buy is
+   simply not given.  Counting it is what made the two arms disagree on console -- 4.7 % measured
+   from the 320 arm against 12.9 % from the 352 one, each reproducible twice.  One state per
+   hypothesis, the same state machine.  Approximate in one respect: the engine lowers the floor on
+   the vtimer it reads BEFORE the wait, this reads the work's own field count. */
+static int wkSv[2],wkCnt[2];
+
+static int wkGovern(int h,int n)
+{int d;
+ if (n<wkSv[h])
+    {if (++wkCnt[h]>10)
+	{wkSv[h]=n; wkCnt[h]=0;}
+    }
+ else
+    wkCnt[h]=0;
+ d=(n>wkSv[h])? n: wkSv[h];
+ if (d-1>wkSv[h])
+    {wkSv[h]=(d-1>2)? 2: d-1;
+     wkCnt[h]=0;
+    }
+ return d;
+}
 
 static void probeReset(void)
 {probeImg=0; probeQ=0; probeLineSum=0; probeOk=0; probeNo=0;
  probeHave=0; probeFrozen=0; probeMHz100=0; probeFrm10=0;
  wkImg=0; wkF0=0; wkF1=0; wkUp=0; wkWait=0; wkH0=0;
+ wkNog=0; wkHeld=0; wkHeldF=0;
+ wkSv[0]=wkSv[1]=1; wkCnt[0]=wkCnt[1]=0;
 }
 
 /* the lines this image spent asleep on the vblank, read around that wait */
@@ -2359,9 +2389,17 @@ static void probeSample(int lines)
      f1=(wLo*2+524)/525;
      if (f0<1) f0=1;
      if (f1<1) f1=1;
-     wkImg++; wkF0+=f0; wkF1+=f1;
      if (f1<f0)
-	wkUp++;
+	wkNog++;                        /* what the ungoverned counter used to say */
+     {int d0=wkGovern(0,f0),d1=wkGovern(1,f1);
+      int nPlay=SYS_GETSYSCK? f1: f0;   /* the arm actually being played */
+      int dPlay=SYS_GETSYSCK? d1: d0;
+      wkImg++; wkF0+=d0; wkF1+=d1;
+      if (d1<d0)
+	 wkUp++;
+      if (dPlay>nPlay)                  /* the floor held an image that was ready */
+	 {wkHeld++; wkHeldF+=dPlay-nPlay;}
+     }
     }
  if (probeFrozen)
     {probeLast=t;
@@ -2974,7 +3012,7 @@ int runLevel(char *filename,int levelNm)
 		       before views 1..: a gun is refused only when view 0's things alone
 		       filled every slot.  Before, the slots were given over under the list.
 	 The fps line used nine of the ~40 readable columns, and -50 to -28
-	 are taken (time, mem, clk, lvl, then the profile tree): the LOD fits here. */
+	 are taken (time, mem, clk, lvl, nog, then the profile tree): the LOD fits here. */
      CFG_PROF("Overlay"); drawStringf(-158,-60,1,"fps:%d lod:%d/%d/%d th:%d/%d",
 				      60/framesElapsed,lodFused,lodCells,lodFlat,
 				      picLastSpriteOut,picSpriteLod);
@@ -2986,7 +3024,7 @@ int runLevel(char *filename,int levelNm)
 	 GCC14: row -100 and solo only.  It used to sit on -80 and wrote over obj:, both every
 	 image.  -100 is the row the shipping build leaves free, and the three that borrow it
 	 win over this one: the split screen's c: line, the walk probe (WALK=1), the ASSERT
-	 build's extra:.  Before moving any line, check the row -- SRUINS.C draws eleven. */
+	 build's extra:.  Before moving any line, check the row -- SRUINS.C draws twelve. */
 #if defined(NDEBUG) && !defined(WALKPROBE)
      if (mpPlayers==1)
 	CFG_STATUS_SECTOR();
@@ -3111,6 +3149,14 @@ int runLevel(char *filename,int levelNm)
 			ratio is the honest whole-level answer -- play a level end to end on
 			either arm and read it once at the exit. */
      drawStringf(-158,-20,1,"lvl:%d up:%d f:%d/%d",wkImg,wkUp,wkF0,wkF1);
+
+     /* LEGEND  nog : what up: would read WITHOUT the engine's frame floor -- the gap between the
+			two is the saving smoothVTime refuses to hand over.
+		hld : images the floor held back although their work was already done, and the
+			FIELDS that cost.  This one has nothing to do with the clock: it is what
+			the 30 fps pin costs the arm being played, and hld's second number over
+			f:'s first is the fluidity available for no drawing at all. */
+     drawStringf(-158,-10,1,"nog:%d hld:%d/%d",wkNog,wkHeld,wkHeldF);
 
 #ifdef WALKPROBE
      /* LEGEND  walk : what the VDP1 steps through for the cells, in thousands of pixels:
