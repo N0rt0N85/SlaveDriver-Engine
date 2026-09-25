@@ -393,6 +393,26 @@ def quad_point(quad, s, t):
 # ------------------------------------------------------------------------------------------
 # emetteur
 # ------------------------------------------------------------------------------------------
+def tourner_anneau(v):
+    """Quart de tour de l'anneau d'une face : poly'[k] = poly[k+1].
+
+    Rotation cyclique PURE -- l'enroulement est garde, donc aucun miroir n'entre en jeu et le
+    back-face du moteur voit la meme normale. Accompagne de tourner_tuile (doomtiles), l'image
+    rendue est identique au texel pres : on ne fait que changer l'axe sur lequel le VDP1 range
+    son eventail de lignes."""
+    return [v[1], v[2], v[3], v[0]]
+
+
+def tourner_motif(pat):
+    """Le meme quart de tour pour une CELLULE DE GRILLE, qui porte un octet de motif.
+
+    pattern[p] place le coin de grille j en poly[pattern[p][j]] (WALLS.C:1196-1206), donc
+    poly'[k] = poly[k+1] demande pattern'[j] = pattern[p][j] - 1 : le motif PRECEDENT DANS SA
+    FAMILLE (0-3 direct, 4-7 miroir). 0->3, 1->0, 2->1, 3->2, 4->7, 5->4, 6->5, 7->6.
+    Les huit motifs existent deja dans le moteur : rien a ajouter cote C."""
+    return (pat & 4) | ((pat + 3) & 3)
+
+
 class Emitter:
     """Accumule sommets, faces, textures et lumieres dans les tableaux du .LEV."""
 
@@ -632,6 +652,90 @@ class Emitter:
         w["firstFace"] = len(self.faces)
         self.faces.extend(faces)
         w["lastFace"] = len(self.faces) - 1
+
+    def tourner_tout(self, quoi="plats"):
+        """QUART DE TOUR sur les cellules du niveau, A LA TOUTE FIN de l'emission.
+
+        A la fin, et nulle part ailleurs : tout l'amont (cell_tile, _gros_carres, bandes.ranger,
+        les verificateurs) continue de travailler sur l'anneau d'origine, et le tour est UNE
+        permutation appliquee une fois.
+
+        POURQUOI. Le VDP1 dessine une cellule comme un EVENTAIL DE LIGNES allant de l'arete
+        poly[0]-poly[3] a l'arete poly[1]-poly[2], et son cout est lignes x largeur. Le pre-
+        clipping materiel (Pclp = 0 sur toutes nos commandes) saute gratuitement une ligne dont
+        les DEUX bouts sont hors cadre du meme cote. Sur un plat, l'eventail court LE LONG de la
+        profondeur : chaque ligne va du proche au lointain et n'est donc presque jamais entiere-
+        ment hors cadre. Tourne, il court EN TRAVERS : chaque ligne devient une bande a
+        profondeur constante, et les bandes au-dessus ou en-dessous de la fenetre partent au
+        pre-clip pour rien.
+
+        CE QUE CA VAUT, mesure hors console en rejouant la geometrie des .LEV dans une copie
+        fidele du moteur (2026-09-25). C'est un ECHANGE, pas un gain : x1,045 sur la moyenne
+        (28,0 -> 28,5 ms de liste VDP1 modelisee sur E1M3) contre la queue -- p99 87,2 -> 80,8 et
+        la PIRE image 197,5 -> 173,6 ms. Les plats sont chers exactement aux lacets ou les
+        tourner aide.
+
+        POURQUOI PAS LES MURS. `quoi="murs"` existe et semble gagner davantage, mais il OUVRE UN
+        TROU : le tour deplace la grande extension d'ecran d'un mur de V, le seul axe que le
+        VDP1 sait fenetrer, vers U, qu'il ne sait pas. vdp1Fit rend alors un intervalle vide et
+        JETTE la cellule -- 19 a 48 cellules de mur proche par carte, dont une qui couvre toute
+        la fenetre 3D sur E1M1. La seule version sans trou demanderait une seconde copie non
+        tournee de chaque tuile de mur, et E1M3 obtient deja 114 des 414 tuiles qu'il demande.
+        Le bras est garde pour l'etude, il ne doit pas etre livre.
+
+        COTE MOTEUR, `plats` exige weldFaceStrip (WALLS.C) : le tour envoie sa direction 1 sur
+        un troisieme cas (a[1]==c[0] && a[2]==c[3]) que le moteur n'avait pas, faute de quoi 42 a
+        57 % des bandes cessent de souder (3017 -> 1754 sur E1M3).
+
+        -> les index de tuile a stocker TOURNEES (les autres restent droites)."""
+        tournees, droites = set(), set()
+        murs = quoi in ("murs", "tout")
+        plats = quoi in ("plats", "tout")
+        for w in self.walls:
+            if w["firstFace"] < 0:
+                continue
+            # normal[1] != 0 : sol ou plafond (le convertisseur emet (0,+-65536,0) pour les plats)
+            tourne = plats if w["normal"][1] else murs
+            if not tourne:
+                for fi in range(w["firstFace"], w["lastFace"] + 1):
+                    droites.add(self.faces[fi]["tile"])
+                continue
+            tranche = self.faces[w["firstFace"]:w["lastFace"] + 1]
+            for f in tranche:
+                f["v"] = tourner_anneau(f["v"])
+                tournees.add(f["tile"])
+            # ET ON RE-RANGE. bandes.ranger a travaille en amont (push_faces) sur l'anneau
+            # d'origine ; or le tour envoie la direction 2 sur la 1 et la 1 sur la 3, mais il ne
+            # conserve PAS une bande batie sur la direction 3 d'origine -- celle-la ne correspond
+            # plus a aucun cas du moteur apres le tour. Ranger une seconde fois, ici, dans la
+            # convention qui part sur le disque, est la seule facon d'etre au plafond : sans ca
+            # E1M3 perd 24 soudures sur 3019 (mesure 2026-09-25). Les faces ne sont jamais
+            # adressees qu'a travers firstFace..lastFace, donc permuter la tranche est sans effet
+            # de bord.
+            # ordonner n'est pas idempotent : relance sur une liste deja rangee, il trouve
+            # parfois un joint de plus, et le critere de verif_doom exige d'etre AU plafond
+            # qu'il recalcule lui-meme. On boucle donc jusqu'au point fixe (2 a 3 passes).
+            if self.bandes:
+                meilleur = bandes.jointures_moteur([f["v"] for f in tranche])
+                for _ in range(4):
+                    cand, _av, ap, _cy = bandes.ranger(tranche)
+                    if ap <= meilleur:
+                        break
+                    tranche, meilleur = cand, ap
+                self.faces[w["firstFace"]:w["lastFace"] + 1] = tranche
+        # Une cellule de grille appartient TOUJOURS a un mur parallelogramme : add_flat n'emet
+        # jamais de parallelogramme texture, il pose des faces.
+        for i in range(0, len(self.texture), 2):
+            if murs:
+                self.texture[i] = tourner_motif(self.texture[i])
+                tournees.add(self.texture[i + 1])
+            else:
+                droites.add(self.texture[i + 1])
+        melees = tournees & droites
+        assert not melees, ("tuile(s) demandee(s) tournee ET droite : %s -- doomtiles decide sur "
+                            "la famille ('flat' / 'tex'), elle doit rester disjointe"
+                            % sorted(melees)[:8])
+        return sorted(tournees)
 
     def _faces_from_quad(self, w, quad, tl, th, picnum, light, tex=None, stats=None):
         """Mur non parallelogramme : grille (tl x th) par interpolation bilineaire sur le quad,

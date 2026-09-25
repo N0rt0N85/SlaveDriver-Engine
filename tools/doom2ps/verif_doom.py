@@ -639,7 +639,7 @@ def main(argv=None):
     #     ne permute rien (WALLS.C:1223-1231) ; Doom veut la ligne 0 au NORD et la colonne 0 a
     #     l'OUEST (R_DrawSpan : u = x & 63, v = -y & 63). Tout carre 64x64 aligne doit donc etre
     #     NO, NE, SE, SO. MESURE avant correctif : 0 sur ~1 100, tournes ET en miroir.
-    mal, carres = [], 0
+    mal, carres, sens = [], 0, set()
     for si, s_ in enumerate(S):
         for wi in range(s_["firstWall"], s_["lastWall"] + 1):
             w = W[wi]
@@ -655,11 +655,23 @@ def main(argv=None):
                         and sorted(q) == sorted([(x0, z0), (x0, z1), (x1, z0), (x1, z1)])):
                     continue
                 carres += 1
-                if q != [(x0, z1), (x1, z1), (x1, z0), (x0, z0)]:
+                droit = [(x0, z1), (x1, z1), (x1, z0), (x0, z0)]
+                #     QUART DE TOUR (geom3d.tourner_tout) : poly'[k] = poly[k+1], donc le meme
+                #     carre s'ecrit NE, SE, SO, NO. L'image rendue est identique -- la tuile est
+                #     cuite tournee d'autant (doomtiles.tourner_tuile) -- et ce qui change est
+                #     l'axe sur lequel le VDP1 range son eventail de lignes. Les deux conventions
+                #     sont donc valides ; ce qui ne l'est PAS, c'est de les melanger sur une meme
+                #     carte, parce que doomtiles decide de tourner une tuile sur sa seule famille.
+                if q == droit:
+                    sens.add(0)
+                elif q == droit[1:] + droit[:1]:
+                    sens.add(1)
+                else:
                     mal.append((si, fi))
-    put("flats orientes NO-NE-SE-SO", not mal,
+    put("flats orientes NO-NE-SE-SO (ou son quart de tour)", not mal and len(sens) <= 1,
         f"{len(mal)}/{carres} carres mal orientes, ex. {mal[:3]}" if mal
-        else f"{carres} carres alignes, tous orientes")
+        else f"DEUX conventions melangees sur {carres} carres alignes" if len(sens) > 1
+        else f"{carres} carres alignes, tous {'tournes' if 1 in sens else 'droits'}")
 
     # 15. PUSH BLOCKS (SPEC_CONVERTER 7, --mobile). Rejoue les asserts de registerPBObject
     #     (OBJECT.C:141-152 : PBWall dans [0, nmWalls)), d'updatePushBlockPositions (SPRITE.C:863 :

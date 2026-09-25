@@ -44,6 +44,12 @@ def direction(a, b):
         return 1
     if a[0] == b[1] and a[3] == b[2]:
         return 2
+    # QUART DE TOUR (geom3d.tourner_tout) : tourner l'anneau d'un cran envoie la direction 2
+    # ci-dessus sur la 1 et la 1 sur CELLE-CI. Une carte tournee n'emploie donc que {1, 3} la ou
+    # une carte droite emploie {1, 2} -- toujours DEUX familles, jamais trois, ce dont ordonner
+    # se sert. Le moteur a le meme troisieme cas (WALLS.C weldFaceStrip).
+    if a[1] == b[0] and a[2] == b[3]:
+        return 3
     return 0
 
 
@@ -81,18 +87,23 @@ def _successeurs(quads):
     donc lineaires en nombre de faces -- une arete est partagee par deux faces, pas par toutes."""
     par01 = defaultdict(list)
     par12 = defaultdict(list)
+    par03 = defaultdict(list)
     for j, q in enumerate(quads):
         par01[(q[0], q[1])].append(j)
         par12[(q[1], q[2])].append(j)
-    s1, s2 = [], []
+        par03[(q[0], q[3])].append(j)
+    s1, s2, s3 = [], [], []
     for i, q in enumerate(quads):
         a = set(par01.get((q[3], q[2]), ()))          # dir 1 : a[3]==b[0] et a[2]==b[1]
         b = set(par12.get((q[0], q[3]), ()))          # dir 2 : a[0]==b[1] et a[3]==b[2]
+        c = set(par03.get((q[1], q[2]), ()))          # dir 3 : a[1]==b[0] et a[2]==b[3]
         a.discard(i)
         b.discard(i)
+        c.discard(i)
         s1.append(sorted(a))
         s2.append(sorted(b))
-    return s1, s2
+        s3.append(sorted(c))
+    return s1, s2, s3
 
 
 def _couplage(succ):
@@ -193,15 +204,20 @@ def ordonner(quads):
     """-> la permutation des faces qui maximise les jointures que le moteur CONSOMME, et le
     nombre de cycles casses.
 
-    Les deux directions sont essayees en tete a tour de role et on garde la meilleure, jugee a
+    Les directions sont essayees en tete a tour de role et on garde la meilleure, jugee a
     `jointures_moteur` -- pas a `jointures`, qui compte des joints que la boucle laissera tomber.
-    Deterministe : a graphe egal, meme sortie."""
+    Deterministe : a graphe egal, meme sortie.
+
+    Il y a TROIS familles depuis le quart de tour (direction ci-dessus), mais une carte donnee
+    n'en peuple jamais que deux -- droite {1, 2}, tournee {1, 3} -- donc essayer les six couples
+    ordonnes trouve le meme optimum qu'avant sur une carte droite, et le vrai optimum sur une
+    carte tournee. Les couples dont une famille est vide coutent une passe et ne gagnent rien."""
     n = len(quads)
     if n < 3:
         return list(range(n)), 0
-    s1, s2 = _successeurs(quads)
+    s1, s2, s3 = _successeurs(quads)
     meilleur = None
-    for premier, second in ((s1, s2), (s2, s1)):
+    for premier, second in ((s1, s2), (s2, s1), (s1, s3), (s3, s1), (s2, s3), (s3, s2)):
         apres, avant, casses = _monochrome(premier, second, n)
         ordre = _chemins(apres, avant, n)
         assert len(ordre) == n, (len(ordre), n)

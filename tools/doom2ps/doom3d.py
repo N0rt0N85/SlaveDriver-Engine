@@ -2706,6 +2706,14 @@ def main(argv=None):
     ap.add_argument("--gros-bloc", type=int, default=GROS_BLOC,
                     help="avec `--optim ...,grossiers` : plus gros bloc, en carres de %d u (defaut %d)"
                          % (TILESIZE, GROS_BLOC))
+    ap.add_argument("--quart-de-tour", choices=("non", "plats", "murs", "tout"), default="plats",
+                    help="tourne l'anneau des cellules d'un quart et stocke leur tuile tournee "
+                         "d'autant : l'image est IDENTIQUE, seul change l'axe sur lequel le VDP1 "
+                         "range son eventail de lignes (geom3d.tourner_tout). `plats` (defaut) "
+                         "echange la moyenne contre la queue : x1,045 sur l'image moyenne, mais "
+                         "la pire image d'E1M3 passe de 197,5 a 173,6 ms. `murs` et `tout` "
+                         "OUVRENT UN TROU (vdp1Fit jette la cellule) : etude seulement, jamais "
+                         "livre. `non` = comme avant.")
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
     if a.partition:
@@ -2833,6 +2841,13 @@ def main(argv=None):
             s["rejectClass"] = c
         print(f"  rejet : {len(M['sectors'])} secteurs Doom -> {rejet['classes']} classes, "
               f"{len(rejet['table'])} o (lump {(len(M['sectors']) ** 2 + 7) // 8} o)")
+    # QUART DE TOUR : la toute derniere passe sur la geometrie (geom3d.tourner_tout), APRES
+    # `check`, qui lit la carte dans la convention d'origine.
+    tournees = []
+    if a.quart_de_tour != "non":
+        tournees = em.tourner_tout(a.quart_de_tour)
+        print(f"  quart de tour ({a.quart_de_tour}) : {len(tournees)} tuiles sur {len(em.tiles)} "
+              f"a stocker tournees")
     out = dict(format="doom2ps/e3-geom3d v1",
                source=dict(wad=os.path.basename(a.wad), map=a.map, optim=sorted(OPTIM_ACTIFS),
                            **(dict(gros_bloc=GROS_BLOC) if "grossiers" in OPTIM_ACTIFS else {})),
@@ -2841,6 +2856,7 @@ def main(argv=None):
                                 tuile=f"TILESIZE {TILESIZE}",
                                 placage="E4.1b : cellule = une repetition de la texture"),
                stats=dict(conv.stats), criteres=crit, tiles=em.tiles,
+               quart_de_tour=a.quart_de_tour,
                picnames=conv.picnames,
                sectors=em.sectors, walls=em.walls, vertices=em.vertices, faces=em.faces,
                cutPlane=cutplane, orderPairs=[list(p) for p in paires],

@@ -39,8 +39,31 @@ def bgr555(rgb):
     return 0x8000 | ((b >> 3) << 10) | ((g >> 3) << 5) | (r >> 3)
 
 
+def tourner_tuile(px):
+    """Quart de tour d'une tuile 64x64, pour accompagner geom3d.tourner_anneau.
+
+    Le VDP1 pose le coin (0,0) du motif sur poly[0], (63,0) sur poly[1], (63,63) sur poly[2] et
+    (0,63) sur poly[3] (SPR.C EZ_specialDistSpr2 : ax..dy = poly[0..3], DIR_NOREV) et remplit
+    entre les deux aretes. Le point monde a la fraction (s,t) de l'ancien anneau se retrouve a
+    (t, 1-s) du nouveau, donc le texel demande est (u', v') = (v, 63-u) :
+        new[v][u] = old[u][63-v]   -- un quart de tour trigonometrique.
+    voff, cv, cu, uoff et le masque d'ajourage sont DEJA cuits dans l'image 64x64 par
+    tile_from_wall / tile_from_flat : les tourner apres ne fait que reetiqueter les memes texels,
+    donc l'image rendue est identique au texel pres."""
+    out = bytearray(CELL * CELL)
+    for v in range(CELL):
+        src = CELL - 1 - v
+        for u in range(CELL):
+            out[v * CELL + u] = px[u * CELL + src]
+    return bytes(out)
+
+
 class TileMaker:
-    def __init__(self, wad):
+    def __init__(self, wad, quart=None):
+        # Bras du quart de tour porte par la geometrie ("plats", "murs", "tout" ou None) :
+        # geom3d.tourner_tout a verifie que la famille tournee et la famille droite sont
+        # DISJOINTES, donc une tuile est tournee ou non selon sa seule famille.
+        self.quart = quart
         self.w = wad
         self.pal = wad.playpal(0)
         # entree de substitution pour l'indice 0 : la plus proche du noir parmi 1..255
@@ -203,9 +226,12 @@ class TileMaker:
             key = tuple(key[:list(key).index("mask")])
         pic = key[0]
         kind, name = picnames[pic]
+        tourne = self.quart == "tout" or self.quart == ("plats" if kind == "flat" else "murs")
         if kind == "flat":
-            return (self.tile_from_flat(name),
-                    dict(pic=pic, kind=kind, name=name, w=64, h=64, cu=64, cv=64))
+            px = self.tile_from_flat(name)
+            return (tourner_tuile(px) if tourne else px,
+                    dict(pic=pic, kind=kind, name=name, w=64, h=64, cu=64, cv=64,
+                         quart=bool(tourne)))
         w, h = sizes.get(name, (64, 128))
         cu = max(CELL_MIN_U, min(CELL_MAX_U, int(w)))
         if len(key) >= 7:                     # cle E4.1c : (pic,cx,cy,ncx,ncy,cv,voff)
@@ -216,9 +242,10 @@ class TileMaker:
         uoff = 0
         if len(key) >= 9:                     # + fenetre (cu, u0) : mur plus etroit que la texture
             cu, uoff = key[7], key[8]
-        return (self.tile_from_wall(name, cu, cv, voff, uoff, masked),
+        px = self.tile_from_wall(name, cu, cv, voff, uoff, masked)
+        return (tourner_tuile(px) if tourne else px,
                 dict(pic=pic, kind=kind, name=name, w=w, h=h, cu=cu, cv=cv, voff=voff, uoff=uoff,
-                     masked=masked))
+                     masked=masked, quart=bool(tourne)))
 
 
 def reduire(G, wad, budget, trace=print):
@@ -228,7 +255,7 @@ def reduire(G, wad, budget, trace=print):
     animes. Reecrit texture, faces, interrupteurs, animations et la liste des tuiles. -> info."""
     import numpy as np
     import tuiles
-    tm = TileMaker(wad)
+    tm = TileMaker(wad, G.get("quart_de_tour"))
     sizes = {nm: (t["width"], t["height"]) for nm, t in wad.textures().items()}
     pal = np.array([tm.pal[i] for i in range(256)], dtype=np.float32)
     keys = G["tiles"]
@@ -284,7 +311,7 @@ def main(argv=None):
 
     G = json.load(open(a.geom, encoding="utf-8"))
     W = wadmod.Wad(a.wad)
-    tm = TileMaker(W)
+    tm = TileMaker(W, G.get("quart_de_tour"))
     sizes = {nm: (t["width"], t["height"]) for nm, t in W.textures().items()}
 
     tiles = []

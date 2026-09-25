@@ -1501,6 +1501,13 @@ static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,struct g
 	dir=1;                     /* strip runs v0 -> v3 */
      else if (a[0]==c[1] && a[3]==c[2])
 	dir=2;                     /* ... the other way */
+     /* GCC14: and ALONG U, v0 -> v1.  The converter's quart de tour (geom3d tourner_tout) turns a
+	flat's ring by one -- poly'[k] = poly[k+1] -- which maps the dir 2 above onto the dir 1
+	above and the dir 1 onto THIS case, which the engine did not have.  Without it 42 to 57 %
+	of a Doom level's strips stop welding (3017 -> 1754 on E1M3, counted on the emitted
+	faces).  Purely additive: nothing that welds today stops. */
+     else if (a[1]==c[0] && a[2]==c[3])
+	dir=3;
      else
 	dir=0;
      g=f;
@@ -1509,7 +1516,8 @@ static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,struct g
 	 if (!WELDS(g+1))
 	    break;
 	 if (dir==1 ? !(a[3]==c[0] && a[2]==c[1])
-		    : !(a[0]==c[1] && a[3]==c[2]))
+	    : dir==2 ? !(a[0]==c[1] && a[3]==c[2])
+		     : !(a[1]==c[0] && a[2]==c[3]))
 	    break;
 	 g++;
 	}
@@ -1537,6 +1545,17 @@ static int weldFaceStrip(sWallType *wall,int f,struct vCalc *V,XyInt *q,struct g
 	       !nearSegment(q+3,q+2,V[level_face[j].v[3]].x,V[level_face[j].v[3]].y))
 	      {dir=0; break;}
        }
+    else
+       if (dir==3)
+	  {LODVXYG(q[0],gq->entry[0],V,level_face[f].v[0]);
+	   LODVXYG(q[1],gq->entry[1],V,level_face[g].v[1]);
+	   LODVXYG(q[2],gq->entry[2],V,level_face[g].v[2]);
+	   LODVXYG(q[3],gq->entry[3],V,level_face[f].v[3]);
+	   for (j=f;j<g;j++)   /* the shared edge of j and j+1 is (v1,v2) */
+	      if (!nearSegment(q+0,q+1,V[level_face[j].v[1]].x,V[level_face[j].v[1]].y) ||
+		  !nearSegment(q+3,q+2,V[level_face[j].v[2]].x,V[level_face[j].v[2]].y))
+		 {dir=0; break;}
+	  }
  if (!dir)
     {LODVXYG(q[0],gq->entry[0],V,level_face[f].v[0]);
      LODVXYG(q[1],gq->entry[1],V,level_face[f].v[1]);
