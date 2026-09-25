@@ -79,14 +79,6 @@ int vdp1ClsWalk[4],vdp1Cls;
    the console figures: WALLASM.H, above vdp1Hidden. */
 #define VDP1LIM 767
 extern int vdp1VCut;
-/* GCC14: PROBE (WALKPROBE) -- console 2026-09-25 said the exact cut removes NOTHING: the same
-   walk, to the kilopixel, as the engine's 767.  The rule is right (simulated), so what is wrong
-   is its firing, and only these four numbers can say which:
-     vdp1FitSaw   the vdp1VCut that vdp1Fit READ -- the slave builds the cells and has its own
-                  cache, so this may not be the vdp1VCut the overlay prints
-     vdp1FitN     calls, vdp1FitOver: how many found a corner past the view, vdp1FitCut: how
-                  many actually came back with a window.  Reset each image by drawWalls. */
-int vdp1FitSaw,vdp1FitN,vdp1FitOver,vdp1FitCut;
 /* The same for the list the VDP1 is drawing, the previous image's: saved by drawWalls before it
    counts the next one, for the freeze report (CRASH.C) */
 int vdp1PrevWalk,vdp1PrevMaxX,vdp1PrevMaxY;

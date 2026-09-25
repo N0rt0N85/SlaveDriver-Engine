@@ -2803,26 +2803,6 @@ int runLevel(char *filename,int levelNm)
       else
 	 holeChord=0;
      }
-     {/* GCC14: L+R+C cycles the V CUT (WALLASM.H vdp1Fit), the last free L+R chord.
-	 0 is the exact rule -- drop only the lines whose two ends lie past one side of the view,
-	 on a pattern row.  767 is where the HARDWARE stops: the engine's own behaviour, 33
-	 windows walked for one shown.  256 is the fixed bound measured on 2026-09-25, kept so
-	 its frame can be reproduced beside the other two: it is fast and it is WRONG (holes in
-	 the flats, swim on the walls).  Live, so the same binary gives the A/B on the spot,
-	 which is the only valid form (a rebuild moves the frame by more than the lever does). */
-      static char cutChord=0;
-      if ((((~lastInputSample)&(PER_DGT_TL|PER_DGT_TR|PER_DGT_C)))==
-	  (PER_DGT_TL|PER_DGT_TR|PER_DGT_C))
-	 {if (!cutChord)
-	     {vdp1VCut=(vdp1VCut==0)? VDP1LIM: (vdp1VCut==VDP1LIM)? 256: 0;
-	      changeMessage((vdp1VCut==0)? "VCUT EXACT (WINDOW)":
-			    (vdp1VCut==VDP1LIM)? "VCUT 767 (ENGINE)": "VCUT 256 (HOLES)");
-	      cutChord=1;
-	     }
-	 }
-      else
-	 cutChord=0;
-     }
      {/* hold L+R+Y -- or A+B+C, for pads whose triggers report only analog values --
 	 to show the per-frame profile tree (PROFILE.C) */
       static char profChord=0;
@@ -3204,9 +3184,7 @@ int runLevel(char *filename,int levelNm)
 		      the time the master replays their records.  The 3D window is 60 units.
 		      Six studies disagreed on whether the floor or the walls dominate; this is
 		      the row that settles it. */
-     drawStringf(-158,0,1,"vc:%d/%d fit:%d/%d/%d",vdp1VCut,vdp1FitSaw,
-		 vdp1FitN,vdp1FitOver,vdp1FitCut);
-     drawStringf(-158,10,1,"cls:%d/%d/%d/%d",
+     drawStringf(-158,0,1,"cls:%d/%d/%d/%d",
 		 vdp1ClsWalk[0]>>4,vdp1ClsWalk[1]>>4,vdp1ClsWalk[2]>>4,vdp1ClsWalk[3]>>4);
 #endif
 

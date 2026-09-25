@@ -137,7 +137,7 @@ void project_point(MthXyz *v,XyInt *p)
 int viewXmin=-160,viewXmax=160,viewYmin=CFG_YMIN,viewYmax=CFG_YMAX;
 int viewCx=160,viewCy=CFG_YCENTER;
 int focalDist=FOCALDIST;       /* read by the asm projection too (wallasm_gnu.s, 3 sites) */
-int vdp1VCut;                  /* GCC14: 0 = the exact V cut (WALLS.H); L+R+C cycles it in game */
+int vdp1VCut=VDP1LIM;          /* GCC14: where vdp1Fit windows a cell (WALLASM.H) */
 #define XMIN        viewXmin
 #define YMIN        viewYmin   /* GP_GAME_DOOM: -112 (3D window = screen lines 0..191, SPEC_PLAYER 3.1) */
 #define XMAX        viewXmax
@@ -1318,10 +1318,7 @@ static int fitCorner(const MthXyz *A,const MthXyz *N,XyInt *s)
  projectWide(&E,&ex,&ey);
  projectWide(&Q,&qx,&qy);
  p=(viewYmax>-viewYmin)? viewYmax: -viewYmin;
- /* GCC14: rho exists to keep the OLD cut out of the window, so it follows that bound -- and under
-    the exact cut (vdp1VCut 0) there is nothing to keep out: the cut is at the window by
-    construction.  VDP1LIM there leaves fitCorner exactly as the engine shipped it. */
- rz=(A->z/(vdp1VCut? vdp1VCut: VDP1LIM))*p;
+ rz=(A->z/vdp1VCut)*p;                  /* rho z_A -- follows the V-cut bound, WALLASM.H */
  num=ze-rz;
  den=MTH_Mul(rz,k);
  lam=(num<=0)? 0: (num>=den)? F(1): MTH_Div(num,den);
@@ -4070,7 +4067,6 @@ void drawWalls(int k,MthMatrix *view)
      vdp1PrevWalk=vdp1Walk; vdp1PrevMaxX=vdp1MaxX; vdp1PrevMaxY=vdp1MaxY;
      vdp1Walk=0; vdp1Big=0; vdp1BigWalk=0; vdp1MaxX=0; vdp1MaxY=0; vdp1RotWalk=0;
      vdp1ClsWalk[0]=vdp1ClsWalk[1]=vdp1ClsWalk[2]=vdp1ClsWalk[3]=0;
-     vdp1FitN=0; vdp1FitOver=0; vdp1FitCut=0;
     }
 #endif
  autoTarget=NULL;

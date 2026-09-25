@@ -103,8 +103,12 @@ static void vdp1WalkProbe(XyInt *q)
     }
  vdp1Walk+=walk>>6;
  vdp1ClsWalk[vdp1Cls&3]+=walk>>6;               /* GCC14: and which CLASS carries it */
- if (q[0].x==q[3].x && q[1].x==q[2].x)
-    walk=vdp1WalkEdges(q,q+1,q+3,q+2,&big);     /* a wall, turned: from A-B to D-C */
+ /* GCC14: EVERY cell turned, not just the walls.  This test used to ask for vertical V edges --
+    a wall -- and added a flat at its AS-DRAWN cost, so rot: read back as walk: and six studies
+    read that as "turning is worth nothing".  It is worth x0.49: at a slow spot the flats carry
+    79-94 % of the stepped pixels, and a flat's fan runs ALONG depth, which is where the waste is
+    (2026-09-25, simulated on the .LEV geometry). */
+ walk=vdp1WalkEdges(q,q+1,q+3,q+2,&big);        /* turned: from A-B to D-C */
  vdp1RotWalk+=walk>>6;
 }
 #define VDP1WALK(q) vdp1WalkProbe(q)
@@ -247,62 +251,27 @@ static __inline__ void cellOut(short charNm,short colour,int t0,int t1,XyInt *po
     EZ_specialDistSpr2(charNm,poly,g);
 }
 
-/* GCC14: the run of V where BOTH V edges lie past the bound c -- above it when `above`, below it
-   otherwise -- kept only where it touches an end of [0,VCLIPONE).
-   The VDP1 draws the cell as lines from edge poly[0]-poly[3] to edge poly[1]-poly[2]
-   (vdp1WalkProbe above), and y is affine along a line, so a line whose TWO ends lie past one
-   side of the view cannot show a pixel: that run is free.  A run in the MIDDLE is not taken --
-   dropping it would split the cell in two, which one command cannot express -- so only the
-   prefix and the suffix move the caller's [t0,t1).
-   This is exact, and that is the whole point: what it removes is provably invisible, so no hole
-   can open.  The old rule kept the INTERSECTION of the two edges' in-bound runs, which on a cell
-   whose two edges sit at very different depths removes lines that DO show -- a band of ceiling
-   or floor that simply is not drawn, and at worst an empty intersection and no cell at all.
-   That was the holes of 2026-09-25. */
-static void vdp1Hidden(const XyInt *poly,int above,int c,int *t0p,int *t1p)
-{int i,lo=0,hi=VCLIPONE;
- for (i=0;i<2;i++)
-    {int ya=poly[i].y,yb=poly[3-i].y;
-     int pa=above? ya<c: ya>c,pb=above? yb<c: yb>c,r;
-     if (pa==pb)
-	{if (pa)
-	    continue;                   /* the edge is past everywhere: it constrains nothing */
-	 lo=hi;                         /* ... or nowhere: this side hides nothing */
-	 break;
-	}
-     r=((c-ya)<<10)/(yb-ya);            /* where the edge crosses c; pa!=pb, so it does */
-     if (pa)
-	{if (r<hi) hi=r;}               /* past c BEFORE r */
-     else
-	{if (r>lo) lo=r;}               /* past c AFTER r */
-    }
- if (lo<0) lo=0;
- if (hi>VCLIPONE) hi=VCLIPONE;
- if (lo>=hi)
-    return;
- if (lo<=0 && hi>=VCLIPONE)
-    {*t0p=VCLIPONE; *t1p=0; return;}    /* the whole cell is past this side */
- if (lo<=0)
-    {if (hi>*t0p) *t0p=hi;}
- else if (hi>=VCLIPONE)
-    {if (lo<*t1p) *t1p=lo;}
-}
-
 /* GCC14: a wall cell fitted to the VDP1's range, for the master's cells (EZ_distSprVClip) and the
    slave's (WALLS.C slaveCmdCell) alike.  Returns 0 when nothing of it can be drawn; else poly is
    in range and [*t0p,*t1p) is the V window of its pattern, in 1/1024 (0, VCLIPONE: all of it).
    `over` looks at |y| only: only V can be windowed (known limits above), and a wall's V edges
    are vertical, so its x never enters the window.  `wide` (an |x| past the range) goes to
    vdp1Range, after the window if there is one.  One copy for both: not inlined.
-   vdp1VCut 0 is the exact rule (vdp1Hidden); a positive value is the old fixed bound, kept live
-   on the L+R+C chord so the two can be judged in place on one binary. */
+   THE V CUT IS NOT A LEVER, and 2026-09-25 proved it three ways.  The VDP1 draws a cell as a fan
+   of LINES, and a V rule can only drop whole lines -- but a line is invisible only when BOTH its
+   ends are off the window, which is exactly the predicate the hardware's own pre-clipping already
+   applies for free (Pclp = 0 on every cell).  Simulated over 916716 lines a correct rule removed:
+   not one the pre-clip had left.  A rule that DOES pay -- the fixed bound of 256 -- pays by
+   deleting lines that still show: 36.8 % of the painted content of a frame, which is the holes in
+   the flats and the swim on the walls the console showed.  So the cut stays where the engine put
+   it, at the plane, where its job is to WINDOW a cell too tall for the plane instead of letting
+   vdp1Range squeeze it.  The waste is not across the lines, it is ALONG them, and the lever is
+   WALLS.C's pattern order: turned a quarter, a flat's fan runs across depth and the pre-clip
+   takes the off-window spans for nothing (x0.49 of the stepped pixels, simulated). */
 static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
 {int i,a,over=0,wide=0,tall=0,t0,t1;
  XyInt src[4];
-#ifdef WALKPROBE
- vdp1FitN++;
- vdp1FitSaw=vdp1VCut;
-#endif
+
  for (i=0;i<4;i++)
     {
 #if VDP1PROBE
@@ -311,14 +280,8 @@ static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
      a=poly[i].y; if (a<0) a=-a;
      if (a>vdp1MaxY) vdp1MaxY=a; if (a>vdp1MaxCoord) vdp1MaxCoord=a;
 #endif
-     if (vdp1VCut)
-	{a=poly[i].y; if (a<0) a=-a;
-	 if (a>vdp1VCut) over|=1;
-	}
-     else
-	{if (poly[i].y<viewYmin) over|=1;   /* which SIDE overhangs: a side with no corner past */
-	 if (poly[i].y>viewYmax) over|=2;   /* it hides nothing, and its two divides are waste */
-	}
+     a=poly[i].y; if (a<0) a=-a;
+     if (a>vdp1VCut) over=1;
      a=poly[i].x; if (a<0) a=-a;
      if (a>VDP1LIM) wide=1;
     }
@@ -328,33 +291,24 @@ static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
     return 1;
  if (!over)
     return vdp1Range(poly);
-#ifdef WALKPROBE
- vdp1FitOver++;
-#endif
  t0=0; t1=VCLIPONE;
- if (!vdp1VCut)
-    {if (over&1) vdp1Hidden(poly,1,viewYmin,&t0,&t1);
-     if (over&2) vdp1Hidden(poly,0,viewYmax,&t0,&t1);
-    }
- else
-    {for (i=0;i<2;i++)
-	{int ya=poly[i].y,yb=poly[3-i].y,d=yb-ya,lo,hi,sp,sm;
-	 if (d==0)
-	    {if (ya>VDP1LIM || ya<-VDP1LIM)
-		return vdp1Range(poly);  /* edge wholly out of range at constant height: nothing
-					    to window in V, it is an overflow along U -- slid there */
-	     continue;
-	    }
-	 sp=(( vdp1VCut-ya)<<10)/d;
-	 sm=((-vdp1VCut-ya)<<10)/d;
-	 lo=sp<sm? sp: sm;
-	 hi=sp<sm? sm: sp;
-	 if (lo>t0) t0=lo;
-	 if (hi<t1) t1=hi;
+ for (i=0;i<2;i++)
+    {int ya=poly[i].y,yb=poly[3-i].y,d=yb-ya,lo,hi,sp,sm;
+     if (d==0)
+	{if (ya>VDP1LIM || ya<-VDP1LIM)
+	    return vdp1Range(poly);     /* edge wholly out of range at constant height: nothing
+					   to window in V, it is an overflow along U -- slid there */
+	 continue;
 	}
-     if (t0<0) t0=0;
-     if (t1>VCLIPONE) t1=VCLIPONE;
+     sp=(( vdp1VCut-ya)<<10)/d;
+     sm=((-vdp1VCut-ya)<<10)/d;
+     lo=sp<sm? sp: sm;
+     hi=sp<sm? sm: sp;
+     if (lo>t0) t0=lo;
+     if (hi<t1) t1=hi;
     }
+ if (t0<0) t0=0;
+ if (t1>VCLIPONE) t1=VCLIPONE;
  if (t1-t0<=0)
     return 0;   /* nothing representable: the cell is over 3 screen heights away, off view */
  /* onto the pattern's row grid (VCLIPSTEP), OUTWARD and with a unit of slack: the texture can
@@ -367,9 +321,6 @@ static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
  if (t1>VCLIPONE) t1=VCLIPONE;
  if (t0<=0 && t1>=VCLIPONE)
     return wide? vdp1Range(poly): 1;    /* the slack gave the whole pattern back */
-#ifdef WALKPROBE
- vdp1FitCut++;
-#endif
  for (i=0;i<4;i++)
     src[i]=poly[i];
  for (i=0;i<2;i++)
