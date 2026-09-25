@@ -132,6 +132,14 @@ static void vdp1WalkProbe(XyInt *q)
    can be judged in place against the same binary.  rho (WALLS.C) follows it: rho is what keeps the
    cut OUTSIDE the window, and a cut bound without it opens a hole at the top of near cells. */
 #define VCLIPONE 1024   /* cut fractions in 1/1024: (30000<<10) fits in an int */
+/* GCC14: and one PATTERN ROW of a wall tile, in the same fractions.  Every cell that reaches
+   here draws a 64 x 64 tile (PIC.C classType[TILE16BPP], and both cell paths assert it), and
+   EZ_specialDistSpr2V can only start and end the pattern on a whole row -- CMDSRCA is an address
+   and CMDSIZE a size, with no stride (SPR.C).  A cut that is not on a row boundary therefore
+   moves the texture against the geometry by (the cell's full height)/64 pixels, and that offset
+   CRAWLS as the camera drifts the cut across a row: 47 px on a 3000 px cell.  That is the swim
+   the console showed on 2026-09-25.  The cut is quantised to this grid, outward. */
+#define VCLIPSTEP 16
 
 /* GCC14: past -1024..1023 the manual only says "operation cannot be guaranteed" (HW_VDP1.md:184).
    On console it HANGS: 2026-09-18, a wall cell with two corners at x 3017 held COPR on itself
@@ -239,26 +247,74 @@ static __inline__ void cellOut(short charNm,short colour,int t0,int t1,XyInt *po
     EZ_specialDistSpr2(charNm,poly,g);
 }
 
+/* GCC14: the run of V where BOTH V edges lie past the bound c -- above it when `above`, below it
+   otherwise -- kept only where it touches an end of [0,VCLIPONE).
+   The VDP1 draws the cell as lines from edge poly[0]-poly[3] to edge poly[1]-poly[2]
+   (vdp1WalkProbe above), and y is affine along a line, so a line whose TWO ends lie past one
+   side of the view cannot show a pixel: that run is free.  A run in the MIDDLE is not taken --
+   dropping it would split the cell in two, which one command cannot express -- so only the
+   prefix and the suffix move the caller's [t0,t1).
+   This is exact, and that is the whole point: what it removes is provably invisible, so no hole
+   can open.  The old rule kept the INTERSECTION of the two edges' in-bound runs, which on a cell
+   whose two edges sit at very different depths removes lines that DO show -- a band of ceiling
+   or floor that simply is not drawn, and at worst an empty intersection and no cell at all.
+   That was the holes of 2026-09-25. */
+static void vdp1Hidden(const XyInt *poly,int above,int c,int *t0p,int *t1p)
+{int i,lo=0,hi=VCLIPONE;
+ for (i=0;i<2;i++)
+    {int ya=poly[i].y,yb=poly[3-i].y;
+     int pa=above? ya<c: ya>c,pb=above? yb<c: yb>c,r;
+     if (pa==pb)
+	{if (pa)
+	    continue;                   /* the edge is past everywhere: it constrains nothing */
+	 lo=hi;                         /* ... or nowhere: this side hides nothing */
+	 break;
+	}
+     r=((c-ya)<<10)/(yb-ya);            /* where the edge crosses c; pa!=pb, so it does */
+     if (pa)
+	{if (r<hi) hi=r;}               /* past c BEFORE r */
+     else
+	{if (r>lo) lo=r;}               /* past c AFTER r */
+    }
+ if (lo<0) lo=0;
+ if (hi>VCLIPONE) hi=VCLIPONE;
+ if (lo>=hi)
+    return;
+ if (lo<=0 && hi>=VCLIPONE)
+    {*t0p=VCLIPONE; *t1p=0; return;}    /* the whole cell is past this side */
+ if (lo<=0)
+    {if (hi>*t0p) *t0p=hi;}
+ else if (hi>=VCLIPONE)
+    {if (lo<*t1p) *t1p=lo;}
+}
+
 /* GCC14: a wall cell fitted to the VDP1's range, for the master's cells (EZ_distSprVClip) and the
    slave's (WALLS.C slaveCmdCell) alike.  Returns 0 when nothing of it can be drawn; else poly is
    in range and [*t0p,*t1p) is the V window of its pattern, in 1/1024 (0, VCLIPONE: all of it).
    `over` looks at |y| only: only V can be windowed (known limits above), and a wall's V edges
    are vertical, so its x never enters the window.  `wide` (an |x| past the range) goes to
-   vdp1Range, after the window if there is one.  One copy for both: not inlined. */
+   vdp1Range, after the window if there is one.  One copy for both: not inlined.
+   vdp1VCut 0 is the exact rule (vdp1Hidden); a positive value is the old fixed bound, kept live
+   on the L+R+C chord so the two can be judged in place on one binary. */
 static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
-{int i,a,over=0,wide=0,t0,t1;
+{int i,a,over=0,wide=0,tall=0,t0,t1;
  XyInt src[4];
  for (i=0;i<4;i++)
     {
 #if VDP1PROBE
      a=poly[i].x; if (a<0) a=-a;
      if (a>vdp1MaxX) vdp1MaxX=a; if (a>vdp1MaxCoord) vdp1MaxCoord=a;
-#endif
      a=poly[i].y; if (a<0) a=-a;
-#if VDP1PROBE
      if (a>vdp1MaxY) vdp1MaxY=a; if (a>vdp1MaxCoord) vdp1MaxCoord=a;
 #endif
-     if (a>vdp1VCut) over=1;
+     if (vdp1VCut)
+	{a=poly[i].y; if (a<0) a=-a;
+	 if (a>vdp1VCut) over|=1;
+	}
+     else
+	{if (poly[i].y<viewYmin) over|=1;   /* which SIDE overhangs: a side with no corner past */
+	 if (poly[i].y>viewYmax) over|=2;   /* it hides nothing, and its two divides are waste */
+	}
      a=poly[i].x; if (a<0) a=-a;
      if (a>VDP1LIM) wide=1;
     }
@@ -269,25 +325,41 @@ static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
  if (!over)
     return vdp1Range(poly);
  t0=0; t1=VCLIPONE;
- for (i=0;i<2;i++)
-    {int ya=poly[i].y,yb=poly[3-i].y,d=yb-ya,lo,hi,sp,sm;
-     if (d==0)
-	{if (ya>VDP1LIM || ya<-VDP1LIM)
-	    return vdp1Range(poly);     /* edge wholly out of range at constant height: nothing
-					   to window in V, it is an overflow along U -- slid there */
-	 continue;
-	}
-     sp=(( vdp1VCut-ya)<<10)/d;
-     sm=((-vdp1VCut-ya)<<10)/d;
-     lo=sp<sm? sp: sm;
-     hi=sp<sm? sm: sp;
-     if (lo>t0) t0=lo;
-     if (hi<t1) t1=hi;
+ if (!vdp1VCut)
+    {if (over&1) vdp1Hidden(poly,1,viewYmin,&t0,&t1);
+     if (over&2) vdp1Hidden(poly,0,viewYmax,&t0,&t1);
     }
- if (t0<0) t0=0;
- if (t1>VCLIPONE) t1=VCLIPONE;
+ else
+    {for (i=0;i<2;i++)
+	{int ya=poly[i].y,yb=poly[3-i].y,d=yb-ya,lo,hi,sp,sm;
+	 if (d==0)
+	    {if (ya>VDP1LIM || ya<-VDP1LIM)
+		return vdp1Range(poly);  /* edge wholly out of range at constant height: nothing
+					    to window in V, it is an overflow along U -- slid there */
+	     continue;
+	    }
+	 sp=(( vdp1VCut-ya)<<10)/d;
+	 sm=((-vdp1VCut-ya)<<10)/d;
+	 lo=sp<sm? sp: sm;
+	 hi=sp<sm? sm: sp;
+	 if (lo>t0) t0=lo;
+	 if (hi<t1) t1=hi;
+	}
+     if (t0<0) t0=0;
+     if (t1>VCLIPONE) t1=VCLIPONE;
+    }
  if (t1-t0<=0)
     return 0;   /* nothing representable: the cell is over 3 screen heights away, off view */
+ /* onto the pattern's row grid (VCLIPSTEP), OUTWARD and with a unit of slack: the texture can
+    only be cut on a whole row, so geometry and texture have to agree there or the texture
+    crawls.  Outward costs at most one row of band -- pixels that were drawn anyway before the
+    cut existed -- and cannot uncover anything, which is why it is the only safe direction. */
+ t0=(t0-1)&~(VCLIPSTEP-1);
+ t1=(t1+VCLIPSTEP)&~(VCLIPSTEP-1);
+ if (t0<0) t0=0;
+ if (t1>VCLIPONE) t1=VCLIPONE;
+ if (t0<=0 && t1>=VCLIPONE)
+    return wide? vdp1Range(poly): 1;    /* the slack gave the whole pattern back */
  for (i=0;i<4;i++)
     src[i]=poly[i];
  for (i=0;i<2;i++)
@@ -297,7 +369,13 @@ static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
      poly[j].x=src[i].x+(((src[j].x-src[i].x)*t1)>>10);
      poly[j].y=src[i].y+(((src[j].y-src[i].y)*t1)>>10);
     }
- if (wide && !vdp1Range(poly))
+ /* the exact rule cuts at the VIEW, not at the plane: the edge that binds can leave the other
+    one far past VDP1LIM, and past the drawing plane the console HANGS.  vdp1Range clamps it. */
+ for (i=0;i<4;i++)
+    {a=poly[i].y; if (a<0) a=-a;
+     if (a>VDP1LIM) tall=1;
+    }
+ if ((wide|tall) && !vdp1Range(poly))
     return 0;
  *t0p=t0;
  *t1p=t1;

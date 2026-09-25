@@ -43,7 +43,12 @@ void movePlax(Fixed32 yaw,Fixed32 pitch)
  POKE_W(SCL_VDP2_VRAM_A0+0x500+0x36,120+y);
 #endif
 
- SclRotregBuff->screenst.x=F(x);
+/* GCC14: the sky's screen-column -> texture mapping is anchored on the picture's middle column,
+   which the 352 centring moved by viewOrgOff (SPR.C).  Its WINDOW already follows it
+   (SRUINS.C SCL_SetWindow), so without this the sky sits 16 dots out of register with the walls.
+   It goes on screenst, not on viewp: under this 90-degree matrix viewp.x feeds the texture's Y
+   as well, and the sky would slide vertically too. */
+ SclRotregBuff->screenst.x=F(x-viewOrgOff);
  SclRotregBuff->viewp.x=160+x;
  SclRotregBuff->screenst.y=F(y);
  SclRotregBuff->viewp.y=20;

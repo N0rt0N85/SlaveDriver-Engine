@@ -110,6 +110,9 @@ void EZ_distSpr(short dir,short drawMode,short color,short charNm,XyInt *xy,
 void EZ_cmd(struct cmdTable *inCmd);
 void EZ_scaleSpr(short dir,short drawMode,short color,short charNm,XyInt *pos,
 		 struct gourTable *gTable);
+/* GCC14: the 16-dot centring of the 320 picture in the 352 raster, added by EZ_localCoord and
+   EZ_userClip to every command in the list (SPR.C, where the full rule is).  0 at 320 dots. */
+extern int viewOrgOff;
 void EZ_localCoord(short x,short y);
 void EZ_sysClip(void);
 void EZ_polygon(short drawMode,short color,XyInt *xy,

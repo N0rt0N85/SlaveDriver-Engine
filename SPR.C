@@ -58,13 +58,17 @@ void EZ_setErase(int eraseWriteEndLine,unsigned short eraseWriteColor)
     {first->control=JUMP_ASSIGN|ZOOM_NOPOINT|DIR_NOREV|FUNC_POLYGON;
      first->drawMode=COLOR_5|ECDSPD_DISABLE;
      first->color=eraseWriteColor;
-     /* GCC14: the local origin stays at 160 on both arms, so screen column 351 is local +191:
-	the right edge follows the clock, the left one does not. */
-     {int right=SYS_GETSYSCK? 192: 160;
-      first->ax=-160;   first->ay=ERASEWRITESTARTLINE-120;
-      first->bx= right; first->by=ERASEWRITESTARTLINE-120;
-      first->cx= right; first->cy=eraseWriteEndLine-120;
-      first->dx=-160;   first->dy=eraseWriteEndLine-120;
+     /* GCC14: this is command 0 -- it runs BEFORE any local coordinate of the frame being built,
+	so it inherits the one the PREVIOUS list left, which on the 352 arm is 176 and not 160
+	(viewOrgOff above).  Translating it by 16 would leave screen columns 0..15 to the hardware
+	erase alone, which does not finish a framebuffer in one vblank: a strip of last frame's
+	garbage down the left.  So it is WIDENED, not moved -- +/-192 covers the whole 0..351
+	raster for either origin, at 32 columns of extra walk (~0.25 ms). */
+     {int h=SYS_GETSYSCK? 192: 160;
+      first->ax=-h;   first->ay=ERASEWRITESTARTLINE-120;
+      first->bx= h;   first->by=ERASEWRITESTARTLINE-120;
+      first->cx= h;   first->cy=eraseWriteEndLine-120;
+      first->dx=-h;   first->dy=eraseWriteEndLine-120;
      }
     }
  else
@@ -353,11 +357,25 @@ void EZ_scaleSpr(short dir,short drawMode,
  setGourPara(cmd,gTable);
 }
 
+/* GCC14: the 352-dot raster is 32 dots wider than the picture, which stayed 320 (the projection
+   is isotropic, so no width/focal pair reproduces the 320 image at 352, and widening the render
+   costs more than the clock gives -- the measured bill is in the 2026-09-25 study).  viewOrgOff
+   carries the 16-dot centring for the WHOLE program, in the only two commands that place
+   anything: the LOCAL COORDINATE, an additive offset the hardware applies to every command after
+   it -- so it moves the world, the things, the gun, the HUD and the text together -- and the USER
+   CLIP, which has to be moved by hand because the hardware does NOT add the local coordinate to
+   the clipping coordinates (HW_VDP1.md: "the clipping area does not move").
+   Every caller therefore stays written for a 320-wide picture, in solo and in split screen alike.
+   What must NOT follow it is anything that addresses the RASTER: the erase data, the system clip
+   and the erase polygon below -- those are 0..351 and are handled where they are written.
+   SRUINS.C main() sets it; INIT leaves it at 0 (a cold boot is always 320 dots). */
+int viewOrgOff;
+
 void EZ_localCoord(short x,short y)
 {struct cmdTable *cmd;
  cmd=getCmdTable();
  cmd->control=FUNC_LCOORD;
- cmd->ax=x;
+ cmd->ax=x+viewOrgOff;
  cmd->ay=y;
 }
 
@@ -366,9 +384,9 @@ void EZ_userClip(XyInt *xy)
  validPtr(xy);
  cmd=getCmdTable();
  cmd->control=FUNC_UCLIP;
- cmd->ax=xy[0].x;
+ cmd->ax=xy[0].x+viewOrgOff;
  cmd->ay=xy[0].y;
- cmd->cx=xy[1].x;
+ cmd->cx=xy[1].x+viewOrgOff;
  cmd->cy=xy[1].y;
 }
 

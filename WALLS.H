@@ -71,8 +71,12 @@ int vdp1ClsWalk[4],vdp1Cls;
 /* GCC14: where the HARDWARE stops -- past the drawing plane the console hangs -- and, separately,
    where vdp1Fit CUTS a quad in V.  They were the same constant and that was a category error:
    the screen shows |y| <= 112 in solo, so everything out to 767 was walked by the VDP1 and then
-   thrown away.  vdp1VCut is live (L+R+C) so the two can be compared on one binary.  Full story
-   and the console figures: WALLASM.H, above vdp1Fit. */
+   thrown away.  Making it a smaller CONSTANT was the second error: it cuts lines that still show,
+   which is holes in floors and ceilings, and it never lands on a pattern row, which is swim.
+   vdp1VCut 0 -- the default -- is the exact rule: drop only the lines whose two ends lie past
+   one side of the VIEW, and only on a pattern row.  A positive value is the old fixed bound,
+   still reachable on L+R+C so the three can be judged in place on one binary.  Full story and
+   the console figures: WALLASM.H, above vdp1Hidden. */
 #define VDP1LIM 767
 extern int vdp1VCut;
 /* The same for the list the VDP1 is drawing, the previous image's: saved by drawWalls before it

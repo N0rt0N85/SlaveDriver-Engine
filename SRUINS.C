@@ -1933,16 +1933,19 @@ static void mpRegisterEngine(void)
 typedef struct {short x0,y0,w,h,cy;} MpView;
 /* GCC14: the 352-dot raster is 32 dots wider than the picture, which stayed 320 (the projection
    is isotropic -- one focalDist for x and y -- so no width/focal pair reproduces the 320 image at
-   352, and widening it would move the workload by more than the clock saves).  Centring the
-   picture costs NOTHING: the local origin is an additive offset per command, so moving it moves
-   the world, the things, the gun, the HUD and the text together.  SOLO ONLY: in 2p the right
-   view's origin would reach 256, and 256+VDP1LIM = 1023 is the last legal value of the drawing
-   plane -- zero margin, and past the plane the console HANGS (the freeze of 2026-09-18). */
-int viewOrgOff;                 /* 16 on the 352 arm in solo, 0 everywhere else */
+   352, and widening it would move the workload by more than the clock saves).  The centring is
+   NOT done here any more: it lives in EZ_localCoord and EZ_userClip (SPR.C viewOrgOff), so every
+   view, every menu and every HUD gets it without arithmetic, split screen included.  These
+   numbers stay the 320-raster ones, and so does viewCx.
+   The plane: the widest local origin is the right-hand view's, 240, and 240+16+VDP1LIM = 1023 is
+   the last LEGAL value of the drawing plane -- exact, not over.  It is exact because vdp1Range
+   clamps every coordinate to VDP1LIM before it leaves (WALLASM.H); past the plane the console
+   HANGS (the freeze of 2026-09-18).  Any new emitter that does not clamp has to, or this becomes
+   false: MAP.C's EZ_line did not, and that was fixed the same day. */
 
 static void mpViewGeometry(int k,MpView *v)
 {if (mpPlayers==1)
-    {v->x0=viewOrgOff; v->y0=0; v->w=320; v->h=192; v->cy=CFG_YCENTER;}
+    {v->x0=0; v->y0=0; v->w=320; v->h=192; v->cy=CFG_YCENTER;}
  else if (mpPlayers==2)
     {/* the horizon stays on the line solo puts it on: a taller view adds FLOOR below it */
      v->x0=160*k; v->y0=0; v->w=160; v->h=CFG_SPLIT_H; v->cy=CFG_YCENTER;}
@@ -2448,7 +2451,7 @@ static void probeSample(int lines)
 }
 
 int runLevel(char *filename,int levelNm)
-{XyInt noUserClip[2]={{0,0},{320-1,240-1}};   /* GCC14: shifted by viewOrgOff below */
+{XyInt noUserClip[2]={{0,0},{320-1,240-1}};
  int i,monsterMoveCounter,musicMark;
  int nmWeaponTiles,nmStaticSounds;
  int lastDraw=0,lastCalc=0;
@@ -2462,8 +2465,6 @@ int runLevel(char *filename,int levelNm)
  MthMatrix matstack[4];
 
  /* GCC14: the full-screen clip follows the centred picture (mpViewGeometry) */
- noUserClip[0].x=viewOrgOff;
- noUserClip[1].x=320-1+viewOrgOff;
 
  dPrint("vroom!\n");
 #ifdef STATUSTEXT
@@ -2700,6 +2701,11 @@ int runLevel(char *filename,int levelNm)
  if (mpArmed>1 || mpPadsPresent>1)
     picWeaponSprites();
  mipBase=createMippedPics();
+ /* GCC14: the servo's fog is not carried over.  mpBalance pins mpFog[] at MPFOGMIN on a heavy
+    level; without this the NEXT level starts in that same fog and needs 67 images to open again
+    (it closes by 1/16 an image and opens by 1/32).  One heavy room was poisoning the session. */
+ for (i=0;i<MPMAX;i++)
+    mpFog[i]=MPFOGMAX;
  setFog((fogDist<fogCap)? fogDist: fogCap);   /* fills the table; fogDist survives from one level
 						  to the next, under the options' ceiling */
  setPlaxFade(skyFadeFor(fogDist));  /* initPlax restored the original palette on load */
@@ -2797,18 +2803,20 @@ int runLevel(char *filename,int levelNm)
       else
 	 holeChord=0;
      }
-     {/* GCC14: L+R+C cycles the V-CUT BOUND (WALLASM.H vdp1VCut), the last free L+R chord.
-	 767 is where the HARDWARE stops; the screen shows |y| <= 112, so everything between is
-	 walked by the VDP1 and thrown away -- 33 windows for one shown, measured on console.
-	 Live, so the same binary gives the A/B on the spot, which is the only valid form
-	 (a rebuild moves the frame by more than the lever does). */
+     {/* GCC14: L+R+C cycles the V CUT (WALLASM.H vdp1Fit), the last free L+R chord.
+	 0 is the exact rule -- drop only the lines whose two ends lie past one side of the view,
+	 on a pattern row.  767 is where the HARDWARE stops: the engine's own behaviour, 33
+	 windows walked for one shown.  256 is the fixed bound measured on 2026-09-25, kept so
+	 its frame can be reproduced beside the other two: it is fast and it is WRONG (holes in
+	 the flats, swim on the walls).  Live, so the same binary gives the A/B on the spot,
+	 which is the only valid form (a rebuild moves the frame by more than the lever does). */
       static char cutChord=0;
       if ((((~lastInputSample)&(PER_DGT_TL|PER_DGT_TR|PER_DGT_C)))==
 	  (PER_DGT_TL|PER_DGT_TR|PER_DGT_C))
 	 {if (!cutChord)
-	     {vdp1VCut=(vdp1VCut==VDP1LIM)? 256: (vdp1VCut==256)? 200: VDP1LIM;
-	      changeMessage((vdp1VCut==VDP1LIM)? "VCUT 767 (ENGINE)":
-			    (vdp1VCut==256)? "VCUT 256": "VCUT 200");
+	     {vdp1VCut=(vdp1VCut==0)? VDP1LIM: (vdp1VCut==VDP1LIM)? 256: 0;
+	      changeMessage((vdp1VCut==0)? "VCUT EXACT (WINDOW)":
+			    (vdp1VCut==VDP1LIM)? "VCUT 767 (ENGINE)": "VCUT 256 (HOLES)");
 	      cutChord=1;
 	     }
 	 }
@@ -2875,7 +2883,7 @@ int runLevel(char *filename,int levelNm)
 			-camera->pos.z);
 	 if (mpPlayers==1)
 	    {EZ_userClip(noUserClip);
-	     EZ_localCoord(320/2+viewOrgOff,CFG_YCENTER);
+	     EZ_localCoord(320/2,CFG_YCENTER);
 	    }
 	 pushProfile("Walls");
 #if WALLPIPE
@@ -3023,7 +3031,7 @@ int runLevel(char *filename,int levelNm)
      mpSwitch(0);
      if (mpPlayers>1)
 	{mpSetViewport(0,0);
-	 EZ_localCoord(320/2+viewOrgOff,CFG_YCENTER);
+	 EZ_localCoord(320/2,CFG_YCENTER);
 	 EZ_userClip(noUserClip);
 	 drawMessage(framesElapsed);
 	}

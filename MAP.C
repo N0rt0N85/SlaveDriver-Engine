@@ -37,6 +37,44 @@ static short mapXmin=MINX,mapXmax=MAXX,mapYmin=MINY,mapYmax=MAXY;
 static Fixed32 mapScale;
 static int gotFullMap;
 
+/* GCC14: cut a map segment to the VDP1's DRAWING PLANE before it is drawn.
+   The trivial rejects below only drop a line lying wholly on one side of the map's window; a line
+   that CROSSES it keeps its far end wherever the zoom put it, f() lands that in the Sint16 of an
+   XyInt, and EZ_line copies both points to the VDP1 verbatim (SPR.C).  Past the plane the console
+   HANGS -- the freeze of 2026-09-18 -- and a value past a short does not even arrive past the
+   plane, it WRAPS, so a wall behind you can put a command anywhere.  The map's window is inside
+   +/-160 and the plane bound is VDP1LIM, so cutting there moves nothing that shows.
+   Returns 0 when the segment misses the plane entirely. */
+static int mapPlaceLine(XyInt *q,int ax,int ay,int bx,int by)
+{int i,t0=0,t1=1<<12,p,e,r;
+ for (i=0;i<4;i++)
+    {switch (i)
+	{case 0:  p=ax-bx; e= ax+VDP1LIM; break;    /* x >= -VDP1LIM */
+	 case 1:  p=bx-ax; e= VDP1LIM-ax; break;    /* x <=  VDP1LIM */
+	 case 2:  p=ay-by; e= ay+VDP1LIM; break;
+	 default: p=by-ay; e= VDP1LIM-ay; break;
+	}
+     if (!p)
+	{if (e<0) return 0;                         /* parallel to this side and outside it */
+	 continue;
+	}
+     r=(e<<12)/p;
+     if (p<0)
+	{if (r>t1) return 0;
+	 if (r>t0) t0=r;
+	}
+     else
+	{if (r<t0) return 0;
+	 if (r<t1) t1=r;
+	}
+    }
+ q[0].x=(short)(ax+(((bx-ax)*t0)>>12));
+ q[0].y=(short)(ay+(((by-ay)*t0)>>12));
+ q[1].x=(short)(ax+(((bx-ax)*t1)>>12));
+ q[1].y=(short)(ay+(((by-ay)*t1)>>12));
+ return 1;
+}
+
 /* MPLAYER.H: each player zooms ITS OWN map.  mapOn is registered by the engine (SRUINS.C
    mpRegisterEngine), the scale belongs here. */
 void mapMpRegister(void)
@@ -226,22 +264,23 @@ static void doomDrawMapWalls(int cx,int cy,MthXyz *north,MthXyz *east)
 	 p2.x=f(wallP.x-cx);
 	 p2.y=f(wallP.z-cy);
 
-	 mapLine[0].x=f(p1.x*north->x+p1.y*north->y);
-	 mapLine[0].y=f(p1.x*east->x+p1.y*east->y);
-	 mapLine[1].x=f(p2.x*north->x+p2.y*north->y);
-	 mapLine[1].y=f(p2.x*east->x+p2.y*east->y);
-	 if (mapLine[0].x<mapXmin && mapLine[1].x<mapXmin)
-	    continue;
-	 if (mapLine[0].x>mapXmax && mapLine[1].x>mapXmax)
-	    continue;
-	 if (mapLine[0].y<mapYmin && mapLine[1].y<mapYmin)
-	    continue;
-	 if (mapLine[0].y>mapYmax && mapLine[1].y>mapYmax)
-	    continue;
-	 /* GCC14: a wall shorter than a pixel is a dot the neighbouring walls already cover --
-	    zoomed out, most of them are */
-	 if (mapLine[0].x==mapLine[1].x && mapLine[0].y==mapLine[1].y)
-	    continue;
+	 {int ax=f(p1.x*north->x+p1.y*north->y),ay=f(p1.x*east->x+p1.y*east->y);
+	  int bx=f(p2.x*north->x+p2.y*north->y),by=f(p2.x*east->x+p2.y*east->y);
+	  if (ax<mapXmin && bx<mapXmin)
+	     continue;
+	  if (ax>mapXmax && bx>mapXmax)
+	     continue;
+	  if (ay<mapYmin && by<mapYmin)
+	     continue;
+	  if (ay>mapYmax && by>mapYmax)
+	     continue;
+	  /* GCC14: a wall shorter than a pixel is a dot the neighbouring walls already cover --
+	     zoomed out, most of them are */
+	  if (ax==bx && ay==by)
+	     continue;
+	  if (!mapPlaceLine(mapLine,ax,ay,bx,by))
+	     continue;
+	 }
 	 if (EZ_getCmdRoom()<DOOM_AM_RESERVE)
 	    return;
 	 EZ_line(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|COMPO_REP,color,mapLine,NULL);
@@ -404,19 +443,20 @@ void drawMap(int cx,int cy,int cz,int yaw,int currentSector)
 	 p2.x=f(wallP.x-cx);
 	 p2.y=f(wallP.z-cy);
 
-	 mapLine[0].x=f(p1.x*north.x+p1.y*north.y);
-	 mapLine[0].y=f(p1.x*east.x+p1.y*east.y);
-	 mapLine[1].x=f(p2.x*north.x+p2.y*north.y);
-	 mapLine[1].y=f(p2.x*east.x+p2.y*east.y);
-	 /* clip */
-	 if (mapLine[0].x<mapXmin && mapLine[1].x<mapXmin)
-	    continue;
-	 if (mapLine[0].x>mapXmax && mapLine[1].x>mapXmax)
-	    continue;
-	 if (mapLine[0].y<mapYmin && mapLine[1].y<mapYmin)
-	    continue;
-	 if (mapLine[0].y>mapYmax && mapLine[1].y>mapYmax)
-	    continue;
+	 {int ax=f(p1.x*north.x+p1.y*north.y),ay=f(p1.x*east.x+p1.y*east.y);
+	  int bx=f(p2.x*north.x+p2.y*north.y),by=f(p2.x*east.x+p2.y*east.y);
+	  /* clip */
+	  if (ax<mapXmin && bx<mapXmin)
+	     continue;
+	  if (ax>mapXmax && bx>mapXmax)
+	     continue;
+	  if (ay<mapYmin && by<mapYmin)
+	     continue;
+	  if (ay>mapYmax && by>mapYmax)
+	     continue;
+	  if (!mapPlaceLine(mapLine,ax,ay,bx,by))
+	     continue;
+	 }
 	 if (transp)
 	    EZ_line(UCLPIN_ENABLE|ECDSPD_DISABLE|COLOR_5|COMPO_TRANS,
 		    color,mapLine,NULL);

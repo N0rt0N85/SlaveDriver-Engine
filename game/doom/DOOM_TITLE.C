@@ -503,8 +503,14 @@ static void setLayers(int loading)
     the SAME 2 VRAM accesses unreduced as enlarged (VDP2 table 3.3), and the cycle table below
     already gives NBG1 two in B0 -- this is free.  Its contour cannot be antialiased: 8 bpp
     indexed, index 0 transparent, no per-pixel alpha. */
- SCL_Open(SCL_NBG1); SCL_MoveTo(0,0,0); SCL_Scale(FIXED(1),FIXED(1)); SCL_Close();
- SCL_Open(SCL_NBG0); SCL_MoveTo(0,0,0); SCL_Scale(FIXED(1),FIXED(1)); SCL_Close();
+/* GCC14: both are VDP2 layers, which the VDP1's local coordinate does not reach: the 352
+    centring has to be given to them by hand.  Scrolling a 512-wide bitmap LEFT by 16 shows it
+    16 dots right; INTRO.C zeroes the whole of VDP2 VRAM before the title is built, so the
+    columns that wrap in are index 0 = transparent. */
+ {Fixed32 sx=FIXED(-viewOrgOff);
+  SCL_Open(SCL_NBG1); SCL_MoveTo(sx,0,0); SCL_Scale(FIXED(1),FIXED(1)); SCL_Close();
+  SCL_Open(SCL_NBG0); SCL_MoveTo(sx,0,0); SCL_Scale(FIXED(1),FIXED(1)); SCL_Close();
+ }
  if (SclProcess==0)
     SclProcess=1;
 }

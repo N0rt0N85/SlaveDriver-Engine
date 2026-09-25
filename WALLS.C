@@ -137,7 +137,7 @@ void project_point(MthXyz *v,XyInt *p)
 int viewXmin=-160,viewXmax=160,viewYmin=CFG_YMIN,viewYmax=CFG_YMAX;
 int viewCx=160,viewCy=CFG_YCENTER;
 int focalDist=FOCALDIST;       /* read by the asm projection too (wallasm_gnu.s, 3 sites) */
-int vdp1VCut=VDP1LIM;          /* GCC14: the V-cut bound (WALLASM.H); L+R+C cycles it in game */
+int vdp1VCut;                  /* GCC14: 0 = the exact V cut (WALLS.H); L+R+C cycles it in game */
 #define XMIN        viewXmin
 #define YMIN        viewYmin   /* GP_GAME_DOOM: -112 (3D window = screen lines 0..191, SPEC_PLAYER 3.1) */
 #define XMAX        viewXmax
@@ -1318,7 +1318,10 @@ static int fitCorner(const MthXyz *A,const MthXyz *N,XyInt *s)
  projectWide(&E,&ex,&ey);
  projectWide(&Q,&qx,&qy);
  p=(viewYmax>-viewYmin)? viewYmax: -viewYmin;
- rz=(A->z/vdp1VCut)*p;                  /* rho z_A -- follows the V-cut bound, WALLASM.H */
+ /* GCC14: rho exists to keep the OLD cut out of the window, so it follows that bound -- and under
+    the exact cut (vdp1VCut 0) there is nothing to keep out: the cut is at the window by
+    construction.  VDP1LIM there leaves fitCorner exactly as the engine shipped it. */
+ rz=(A->z/(vdp1VCut? vdp1VCut: VDP1LIM))*p;
  num=ze-rz;
  den=MTH_Mul(rz,k);
  lam=(num<=0)? 0: (num>=den)? F(1): MTH_Div(num,den);
@@ -2292,6 +2295,7 @@ static void slaveCmdFlat(XyInt *q,short colour,struct gourTable *g)
 static void slaveCmdCell(int pic,XyInt *poly,struct gourTable *g,const MeshFace *m)
 {int i,x0,x1,y0,y1,t0,t1;
  struct cmdTable *c;
+ struct gourTable cut;
  x0=x1=poly[0].x;
  y0=y1=poly[0].y;
  for (i=1;i<4;i++)
@@ -2306,6 +2310,13 @@ static void slaveCmdCell(int pic,XyInt *poly,struct gourTable *g,const MeshFace 
  y1-=y0;
  if (!vdp1Fit(poly,&t0,&t1))
     return;
+ /* GCC14: the master's cellOut moves the shading with the cut quad (WALLASM.H gourCut); this
+    copy did not, so a cut cell drawn by the slave carried the shading of a quad that no longer
+    exists.  It never showed while the cut sat far off screen; at the window it does. */
+ if (g && (t0>0 || t1<VCLIPONE))
+    {gourCut(&cut,g,t0,t1);
+     g=&cut;
+    }
  c=slaveCmdNext(ZOOM_NOPOINT|DIR_NOREV|FUNC_DISTORSP,
 		UCLPIN_ENABLE|COLOR_5|HSS_ENABLE|ECD_DISABLE|DRAW_GOURAU,pic,poly,g);
  c->charAddr=t0;
@@ -3230,10 +3241,12 @@ void slaveDraw(void)
     {SLAVESTEP=0x10000|i;
      first=nmSlavePolys;
 #if RECTCLIP
-     {XyInt q[4];                /* the sector's clip box, EZ_userClip's A and C */
-      q[0].x=updateList[i]->xmin+viewCx; q[0].y=updateList[i]->ymin+viewCy;
+     {XyInt q[4];                /* the sector's clip box, EZ_userClip's A and C.  GCC14: this one
+				    is written by hand, so it carries the 352 centring by hand too
+				    -- EZ_userClip is what adds it everywhere else (SPR.C). */
+      q[0].x=updateList[i]->xmin+viewCx+viewOrgOff; q[0].y=updateList[i]->ymin+viewCy;
       q[1].x=q[1].y=q[3].x=q[3].y=0;
-      q[2].x=updateList[i]->xmax+viewCx; q[2].y=updateList[i]->ymax+viewCy;
+      q[2].x=updateList[i]->xmax+viewCx+viewOrgOff; q[2].y=updateList[i]->ymax+viewCy;
       slaveCmdNext(FUNC_UCLIP,0,0,q,NULL);
      }
 #endif
@@ -3471,7 +3484,8 @@ static void compoDraw(const CompoPlan *p,int zoom,int md,int bk,int pic,XyInt *p
 	     cl[1].y=cl[0].y+ch;
 	     if (cl[0].x<0) cl[0].x=0;
 	     if (cl[0].y<0) cl[0].y=0;
-	     if (cl[1].x>319) cl[1].x=319;
+	     if (cl[1].x>319) cl[1].x=319;   /* GCC14: the PICTURE -- EZ_userClip adds the 352
+					        centring after this (SPR.C viewOrgOff) */
 	     if (cl[1].y>239) cl[1].y=239;
 	     if (cl[1].x<=cl[0].x || cl[1].y<=cl[0].y)
 		continue;

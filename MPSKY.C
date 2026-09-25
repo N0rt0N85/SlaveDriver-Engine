@@ -628,17 +628,21 @@ static void moonSeas(int cx,int cy,int r,Uint16 color,int disc)
 static void setWindows(int players)
 {const short (*b)[4]=bandRect[players-2];
  int two=players>2,bits=two? 0x8f: 0x03;      /* cut outside W0 (AND outside W1) */
- Scl_w_reg.win0_start[0]=b[0][0]<<1; Scl_w_reg.win0_start[1]=b[0][1];
- Scl_w_reg.win0_end[0]=b[0][2]<<1;   Scl_w_reg.win0_end[1]=b[0][3];
- Scl_w_reg.win1_start[0]=b[1][0]<<1; Scl_w_reg.win1_start[1]=b[1][1];
- Scl_w_reg.win1_end[0]=b[1][2]<<1;   Scl_w_reg.win1_end[1]=b[1][3];
+/* GCC14: bandRect is in SCREEN columns, so the 352 centring goes in INSIDE the shift -- the
+    register counts half-dots, and 16 columns are 32 of them. */
+ Scl_w_reg.win0_start[0]=(b[0][0]+viewOrgOff)<<1; Scl_w_reg.win0_start[1]=b[0][1];
+ Scl_w_reg.win0_end[0]=(b[0][2]+viewOrgOff)<<1;   Scl_w_reg.win0_end[1]=b[0][3];
+ Scl_w_reg.win1_start[0]=(b[1][0]+viewOrgOff)<<1; Scl_w_reg.win1_start[1]=b[1][1];
+ Scl_w_reg.win1_end[0]=(b[1][2]+viewOrgOff)<<1;   Scl_w_reg.win1_end[1]=b[1][3];
  Scl_w_reg.wincontrl[0]=(bits<<8)|bits;
  Scl_w_reg.wincontrl[2]=(Scl_w_reg.wincontrl[2]&0xff00)|bits;
 }
 
 static void setVault(int players)
 {SclRotreg *r=SclRotregBuff;
- r->screenst.x=r->screenst.y=r->screenst.z=0;
+ r->screenst.x=F(-viewOrgOff);   /* GCC14: texel 0 lands on the picture's first column, not the
+				    raster's (SPR.C viewOrgOff) */
+ r->screenst.y=r->screenst.z=0;
  r->screendlt.x=0;       r->screendlt.y=F(1);
  r->delta.x=F(1);        r->delta.y=0;
  r->matrix_a=F(1); r->matrix_b=0; r->matrix_c=0;
