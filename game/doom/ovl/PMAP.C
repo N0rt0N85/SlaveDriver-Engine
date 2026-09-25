@@ -113,7 +113,7 @@ static void pmClear(volatile unsigned char *h)
 {int y,x;
  for (y=0;y<PM_ROWS;y++)
     {volatile Uint32 *d=(volatile Uint32 *)(h+(y<<9));
-     for (x=0;x<PM_W/4;x++)
+     for (x=0;x<512/4;x++)              /* GCC14: the whole row pitch, as PAUSE.C clearRows */
 	d[x]=PM_BACK*0x01010101u;
     }
 }

@@ -38,6 +38,7 @@
 #include <string.h>
 #include <sega_scl.h>
 #include "util.h"
+#include "spr.h"
 #include "sprite.h"
 #include "sound.h"
 #include "v_blank.h"
@@ -67,7 +68,8 @@
 #define PAUSE_ROWS  224                 /* NBG0 rows the pause owns (the MAP clears these only) */
 #define PAUSE_COLS  320
 #define VEIL_Y      224                 /* the veil's pixels: B0 rows 224..237, columns 0..19 */
-#define VEIL_W      20
+#define VEIL_W      22                  /* GCC14: 16 px a cell, and the veil covers the whole
+					   RASTER -- 352 dots at the 352 clock, not the picture */
 #define VEIL_H      14
 #define VEIL_INDEX  247                 /* PLAYPAL (0,0,0), opaque */
 #define VEIL_FIELDS 6
@@ -236,7 +238,10 @@ static Uint16 pauseReg(int o,int v)
      case 0x28: return 0x1216;          /* NBG1 512x256, NBG0 512x512: 256-colour bitmaps */
      case 0x2c: return b&~0x3737;       /* palette 0, no special bits */
      case 0x3c: return (b&~0x0077)|0x0022;  /* both bitmaps at 0x40000 (B0) */
-     case 0x78: case 0x7c: return 1;    /* NBG0 1:1 at 0,0 */
+     case 0x78:                         /* GCC14: the menu is a VDP2 bitmap, so the 352 centring
+					   is its own: scrolling the layer LEFT shows it right */
+	return (Uint16)(1-viewOrgOff);
+     case 0x7c: return 1;               /* NBG0 1:1 at 0,0 */
      case 0x84: return VEIL_Y;          /* NBG1 at 0,224 ... */
      case 0x8a: case 0x8e: return 0x1000;   /* ... zoomed x16: 1/16 bitmap pixel a pixel */
      case 0x98: return b&~0x0303;       /* no reduction */
@@ -396,7 +401,9 @@ static void clearRows(int y0,int y1)
  for (y=y0;y<y1;y++)
     {volatile Uint32 *d=(volatile Uint32 *)(HALF+(y<<9));
      unsigned int v=(y>=HUD_ROW0)? VEIL_INDEX*0x01010101u: 0;
-     for (x=0;x<PAUSE_COLS/4;x++)
+     /* GCC14: the whole 512-byte row pitch, not PAUSE_COLS -- once the bitmap is shifted to
+	centre it in the 352 raster, columns 320..335 show and must be cleared too */
+     for (x=0;x<512/4;x++)
 	d[x]=v;
     }
 }

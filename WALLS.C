@@ -4070,6 +4070,7 @@ void drawWalls(int k,MthMatrix *view)
      vdp1PrevWalk=vdp1Walk; vdp1PrevMaxX=vdp1MaxX; vdp1PrevMaxY=vdp1MaxY;
      vdp1Walk=0; vdp1Big=0; vdp1BigWalk=0; vdp1MaxX=0; vdp1MaxY=0; vdp1RotWalk=0;
      vdp1ClsWalk[0]=vdp1ClsWalk[1]=vdp1ClsWalk[2]=vdp1ClsWalk[3]=0;
+     vdp1FitN=0; vdp1FitOver=0; vdp1FitCut=0;
     }
 #endif
  autoTarget=NULL;

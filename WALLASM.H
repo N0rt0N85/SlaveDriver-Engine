@@ -299,6 +299,10 @@ static void vdp1Hidden(const XyInt *poly,int above,int c,int *t0p,int *t1p)
 static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
 {int i,a,over=0,wide=0,tall=0,t0,t1;
  XyInt src[4];
+#ifdef WALKPROBE
+ vdp1FitN++;
+ vdp1FitSaw=vdp1VCut;
+#endif
  for (i=0;i<4;i++)
     {
 #if VDP1PROBE
@@ -324,6 +328,9 @@ static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
     return 1;
  if (!over)
     return vdp1Range(poly);
+#ifdef WALKPROBE
+ vdp1FitOver++;
+#endif
  t0=0; t1=VCLIPONE;
  if (!vdp1VCut)
     {if (over&1) vdp1Hidden(poly,1,viewYmin,&t0,&t1);
@@ -360,6 +367,9 @@ static int __attribute__((noinline)) vdp1Fit(XyInt *poly,int *t0p,int *t1p)
  if (t1>VCLIPONE) t1=VCLIPONE;
  if (t0<=0 && t1>=VCLIPONE)
     return wide? vdp1Range(poly): 1;    /* the slack gave the whole pattern back */
+#ifdef WALKPROBE
+ vdp1FitCut++;
+#endif
  for (i=0;i<4;i++)
     src[i]=poly[i];
  for (i=0;i<2;i++)

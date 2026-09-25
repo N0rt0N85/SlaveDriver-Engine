@@ -3204,7 +3204,9 @@ int runLevel(char *filename,int levelNm)
 		      the time the master replays their records.  The 3D window is 60 units.
 		      Six studies disagreed on whether the floor or the walls dominate; this is
 		      the row that settles it. */
-     drawStringf(-158,0,1,"vc:%d cls:%d/%d/%d/%d",vdp1VCut,
+     drawStringf(-158,0,1,"vc:%d/%d fit:%d/%d/%d",vdp1VCut,vdp1FitSaw,
+		 vdp1FitN,vdp1FitOver,vdp1FitCut);
+     drawStringf(-158,10,1,"cls:%d/%d/%d/%d",
 		 vdp1ClsWalk[0]>>4,vdp1ClsWalk[1]>>4,vdp1ClsWalk[2]>>4,vdp1ClsWalk[3]>>4);
 #endif
 
