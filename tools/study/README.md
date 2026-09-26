@@ -15,6 +15,7 @@ plafonds 31,2 % des cellules), l'inverse du retail (66,8 / 19,6 / 13,5).
 | `debord_sur.py` | **et ces faces-là, peut-on vraiment les retirer ?** | **NON : 311 sur 319 ouvrent un trou**, 1 073 positions sur 1 089 en verraient un, pire face 4 096 u². Le gisement du débord est CLOS par cette voie |
 | `bandes_plafond.py` | jusqu'où la soudure de faces peut aller | 54,4 % aujourd'hui, **81,1 %** par réordonnancement seul, 95,7 % avec le virage ; tessellation = 51 jointures |
 | `soldom_vue.py` | le plan dominant, par position debout et non par saut de portail | 140 cellules médianes retirées (19,6 % de l'image), p90 324 |
+| `soldom_secteur.py` | le même, élu par SECTEUR, avec tolérance de lumière et hystérésis | E1 : médiane 22,5 % de l'image (E1M8 70 %) ; aucun secteur ne porte deux plans ; marge x1,6 = 0,5-1,3 % du dépôt |
 
 ## Études 2026-09-12
 

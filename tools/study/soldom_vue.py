@@ -18,6 +18,11 @@ le MEILLEUR plan de l'image (borne haute, non realisable puisque le joueur ne le
 Le resultat est donne en CELLULES, jamais en pourcentage seul : la loi de cout se juge contre les
 paliers 470 / 896 / 1321 (tools/cout.py).
 
+⚠ CE FICHIER ELIT LE PLAN SOUS LES PIEDS, et la mesure du 26-09 dit que ce n'est pas le plan
+dominant : le plus grand plan de l'image rend 3 a 5 points de plus sur huit cartes sur neuf. Il
+ignore aussi la lumiere, qu'un plan VDP2 ne peut pas nuancer. Pour la regle a implementer, voir
+`soldom_secteur.py` et VDP2_DOMINANT_FLOOR.md §7 ; celui-ci reste comme temoin.
+
 Lancer depuis la racine du fork : python tools\\study\\soldom_vue.py [--duke]
 """
 import argparse

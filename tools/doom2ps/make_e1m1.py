@@ -21,7 +21,7 @@ Chaine (tout en memoire sauf les JSON intermediaires sous build/doom2ps/) :
   7. lev_write.engine_problems == [], tools/lev.py --stats, verif_doom.py (etendu), verif_static.py
 
 Usage : python tools\\doom2ps\\make_e1m1.py [--wad W] [--map E1M1] [--skill 3] [--lift-contact]
-            [--e1m1-weapons] [--loading TITLEPIC|black] [--static-doors] [--name E1M1.LEV]
+            [--e1m1-weapons] [--loading TITLEPIC|black] [--static-doors] [--name <MAP>.LEV]
             [--out-dir cd_doom] [--retail cd/KILENTRY.LEV] [--no-verify]
 Code de retour : 0 si tout est vert (engine_problems vides, verificateurs a 0 echec), 1 sinon.
 """
@@ -478,7 +478,12 @@ def main(argv=None):
     ap.add_argument("--loading", default="TITLEPIC", help="ecran de chargement : lump 320x200 ou `black`")
     ap.add_argument("--static-doors", action="store_true",
                     help="geometrie de controle : portes ouvertes en dur, sans push blocks ni speciaux")
-    ap.add_argument("--name", default="E1M1.LEV", help="nom du .LEV (celui de doomLevelNames[])")
+    # Le defaut SUIT --map. Une valeur fixe est un piege : une boucle sur les neuf cartes qui
+    # oublie --name les ecrit TOUTES dans E1M1.LEV, et seule la derniere survit -- ce qui est
+    # arrive au disque du 25-09 (E1M1 portait la geometrie d'E1M9, les huit autres etaient
+    # celles de la veille).
+    ap.add_argument("--name", default=None,
+                    help="nom du .LEV (celui de doomLevelNames[]) ; defaut <MAP>.LEV")
     ap.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     ap.add_argument("--params", default=DEFAULT_PARAMS,
                     help="le .cfg du disque : ses episodes et son logo (episodes.py)")
@@ -496,6 +501,8 @@ def main(argv=None):
                     help="DIAGNOSTIC (doom3d --diag-fusion) : damier sur les feuilles fusionnees")
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
+    if a.name is None:
+        a.name = a.map.upper() + ".LEV"
     if a.optim is None:
         a.optim = OPTIM_CARTE.get(a.map.upper())
 

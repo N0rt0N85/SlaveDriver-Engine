@@ -2706,14 +2706,22 @@ def main(argv=None):
     ap.add_argument("--gros-bloc", type=int, default=GROS_BLOC,
                     help="avec `--optim ...,grossiers` : plus gros bloc, en carres de %d u (defaut %d)"
                          % (TILESIZE, GROS_BLOC))
-    ap.add_argument("--quart-de-tour", choices=("non", "plats", "murs", "tout"), default="plats",
+    # DEFAUT `non` DEPUIS LE 26-09, SUR CONSTAT CONSOLE. Le tour etait livre en `plats` ; le
+    # proprietaire voit alors LES QUADS DU SOL, un par un, sur tout le niveau. La condition qu'il
+    # avait posee en l'autorisant -- « le resultat doit correspondre a la carte de depart » --
+    # n'est donc pas tenue, et aucun gain de queue ne rachete une image qui se decoupe. Ce que je
+    # verifiais (comptes de tuiles, familles disjointes, orientation homogene) ne dit RIEN du
+    # texel affiche : l'anneau tourne change aussi l'axe de l'eventail de lignes du VDP1, donc la
+    # facon dont deux cellules voisines se rejoignent. Le mecanisme reste, sous option, pour
+    # pouvoir le reprendre avec un controle de TEXEL et non de comptage.
+    ap.add_argument("--quart-de-tour", choices=("non", "plats", "murs", "tout"), default="non",
                     help="tourne l'anneau des cellules d'un quart et stocke leur tuile tournee "
-                         "d'autant : l'image est IDENTIQUE, seul change l'axe sur lequel le VDP1 "
-                         "range son eventail de lignes (geom3d.tourner_tout). `plats` (defaut) "
-                         "echange la moyenne contre la queue : x1,045 sur l'image moyenne, mais "
-                         "la pire image d'E1M3 passe de 197,5 a 173,6 ms. `murs` et `tout` "
-                         "OUVRENT UN TROU (vdp1Fit jette la cellule) : etude seulement, jamais "
-                         "livre. `non` = comme avant.")
+                         "d'autant : seul doit changer l'axe sur lequel le VDP1 range son "
+                         "eventail de lignes (geom3d.tourner_tout). `plats` echangeait la moyenne "
+                         "contre la queue (x1,045 sur l'image moyenne, pire image d'E1M3 197,5 -> "
+                         "173,6 ms) mais DECOUPE L'IMAGE EN QUADS sur console : retire du defaut "
+                         "le 26-09. `murs` et `tout` OUVRENT EN PLUS UN TROU (vdp1Fit jette la "
+                         "cellule). `non` (defaut) = comme avant le 25-09.")
     a = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
     if a.partition:

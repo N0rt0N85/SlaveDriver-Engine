@@ -243,3 +243,63 @@ est donc une intersection de rectangles déjà calculés, pas une machinerie nou
 
 ⚠ Règle du projet : ne pas lancer l'émulateur soi-même ; livrer un disque et une table
 « vu -> sens » (`never-launch-emulator-yourself`).
+
+---
+
+## 7. Le contenu Doom, mesuré par SECTEUR (2026-09-26) — `tools/study/soldom_secteur.py`
+
+Le §1 ci-dessus mesure du contenu **PowerSlave**, dont les sols sont des mosaïques cellule par
+cellule. Les neuf `.LEV` d'Aguzzino sont du contenu **Doom** : un secteur = une hauteur + un flat,
+et la clé de tuile d'un plat vaut `(pic,0,0,1,1)` — pas de décalage, pas de fenêtre. Conséquence
+vérifiée sur les neuf cartes : **aucun secteur ne porte plus d'un couple (hauteur, tuile) sur son
+sol** (colonne `sect>1` du script, 0 partout). Élire le couple, c'est donc déjà élire des
+**secteurs entiers**, tous les quads avec — et tous les autres secteurs de même hauteur et même
+texture en même temps. Le §1 (13,8 %) ne s'applique pas ici.
+
+Ce que le plan retire, en part des cellules VDP1 de l'image, sur la grille des positions debout
+(`ordre.visibilite`, pas de 64 u), tolérance de lumière 8 crans :
+
+| carte | plan sous les pieds | **plus grand plan de l'image** | cellules médianes | p90 |
+|---|---|---|---|---|
+| E1M1 | 19,3 % | **22,5 %** | 180 | 40,6 % |
+| E1M2 | 33,1 % | **38,4 %** | 218 | 46,9 % |
+| E1M3 | 22,3 % | **24,9 %** | 119 | 40,9 % |
+| E1M4 | 15,5 % | **19,9 %** | 102 | 30,6 % |
+| E1M5 | 16,4 % | **20,8 %** | 123 | 35,3 % |
+| E1M6 | 22,8 % | **28,9 %** | 145 | 42,4 % |
+| E1M7 | 14,0 % | **18,8 %** | 195 | 31,2 % |
+| E1M8 | 70,0 % | **70,0 %** | 1561 | 77,3 % |
+| E1M9 | 17,7 % | **21,0 %** | 123 | 35,6 % |
+| **médiane** | **19,3 %** | **22,5 %** | | |
+
+**Le critère compte.** Élire le plan *sous les pieds* est stable et gratuit à désigner, mais ce
+n'est pas le plan dominant : le plus grand plan de l'image rend **3 à 5 points de plus** partout
+sauf sur E1M8, où un seul plan écrase tout de toute façon. C'est le critère à retenir.
+
+**La lumière.** `sector.light` vaut 128 partout : le convertisseur ne s'en sert pas, la lumière
+réelle est par sommet (`vertexLight`, bornée à 32 pour indexer `worldGrey`). Un plan VDP2 n'a pas
+de Gouraud, donc réunir deux secteurs de tons différents, c'est promettre une marche visible.
+L'écart de lumière **à l'intérieur** d'une famille (hauteur, tuile) est de 0 à 8 crans sur 32 ;
+médiane 0,0-1,5 selon la carte. D'où la courbe :
+
+| tolérance | ce que ça donne |
+|---|---|
+| 0 cran | effondre le dépôt : 9-15 % au lieu de 19-25 % sur six cartes. Trop dur |
+| **4 crans** | **coûte 0,3 point de dépôt médian et plafonne l'erreur de ton à un huitième de la rampe** |
+| 8 crans | saturé : aucune famille ne dépasse 8 crans, la contrainte ne filtre plus rien |
+
+**L'hystérésis.** Sans mémoire, le plan élu change de 1,2 % (E1M8) à 13,9 % (E1M7) des pas de
+64 u — à la course de Doom (~17 u/tic) un pas vaut 3,8 images, donc sur E1M7 le plan changerait
+**toutes les 0,8 s**. Une marge qui exige du candidat 1,6 fois ce que rend le plan courant ramène
+ça à 2,5-4,5 % (une fois toutes les 2,5 s) et coûte **0,5 à 1,3 % du dépôt total**. C'est le bon
+réglage : la marge est presque gratuite.
+
+⚠ **Ce que l'hystérésis ne règle pas** : un échange reste visible si le plan ne reproduit pas ce
+que les quads dessinaient. Le ton est le seul écart possible (même flat, même hauteur), ce qui est
+la deuxième raison de serrer la tolérance de lumière.
+
+**Récapitulatif de la règle à implémenter** : élire, par image, le couple (hauteur de sol, tuile)
+qui couvre le plus de cellules de sol visibles ; la lumière de référence est celle du plus grand
+secteur visible qui le porte ; rejoignent la famille tous les secteurs visibles de même couple dont
+la lumière moyenne est à **4 crans** ; **tous** leurs quads de sol sont retirés du VDP1 ; on ne
+change de plan que si le candidat vaut **1,6 fois** le plan courant.
