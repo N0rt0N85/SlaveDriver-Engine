@@ -75,6 +75,11 @@ TILE_GEOM = 0x32                                              # 64x64 | 16BPP | 
 SKY_W, SKY_H = 512, 256                                       # PLAX.C:91-93
 SKY_TABLE = 320                                               # PLAX.C:115
 SKY_HORIZON = 260                                             # xb de la ligne d'horizon (sky_block)
+# Ciel sur NBG0 : voir SPRITE.H CFG_SKY_SCREEN et PLAX.C. Le bloc garde SA TAILLE (512 x 256,
+# VRAM A1) -- seul le SENS de ses axes change, donc le format du .LEV ne bouge pas.
+SKY_NBG0 = True
+SKY_MIDROW = 112                                              # PLAX.C SKY_MIDROW
+SKY_VPER = 128                                                # periode verticale, divise SKY_H
 
 
 def log(msg=""):
@@ -195,12 +200,32 @@ def sky_block(W, retail_path, lump="SKY1", horizon=SKY_HORIZON):
     while hv > 1 and all(px[(hv - 1) * w + c] in noir for c in range(w)):
         hv -= 1                                  # SKY1 : 120, les 8 dernieres lignes sont noires
     bmp = bytearray(SKY_W * SKY_H)
-    for yb in range(SKY_H):
-        col = (-yb) % w
-        orow = yb * SKY_W
-        for xb in range(SKY_W):
-            r = 100 - (xb - horizon)
-            bmp[orow + xb] = px[(0 if r < 0 else r % hv) * w + col]
+    if SKY_NBG0:
+        # Le ciel est sur NBG0 (SPRITE.H CFG_SKY_SCREEN) : pas de matrice, donc le bitmap est
+        # RANGE COMME L'ECRAN. Sa colonne x est l'azimut -- 512 dots = DEUX copies du quart de
+        # 256 texels, et NBG0 boucle donc sans couture -- et sa ligne y la hauteur, 256 = deux
+        # copies d'un ciel de 128 lignes, ce qui donne une boucle verticale sans couture elle
+        # aussi. Repeter tous les 128 est exactement ce que fait Doom (R_DrawColumn masque la
+        # ligne par 127). Les `hv` lignes utiles de SKY1 sont donc reechantillonnees a 128 : la
+        # bande noire de fin de texture disparait au lieu de revenir tous les 128 texels, et
+        # l'etirement (120 -> 128) ne se voit pas sur un ciel.
+        # La ligne SKY_MIDROW est celle que le centre de la vue lit a tangage nul : on y met le
+        # BAS du ciel, si bien que les SKY_MIDROW lignes au-dessus remplissent exactement la
+        # demi-vue (CFG_YCENTER 112) sans boucler. Sous l'horizon il reste 16 lignes avant la
+        # couture, que le sol couvre presque toujours -- et Doom reboucle la aussi.
+        for yv in range(SKY_H):
+            r = yv % SKY_VPER                               # ligne de SKY1 vue a cette hauteur
+            src = (r * hv) // SKY_VPER
+            orow = yv * SKY_W
+            for xv in range(SKY_W):
+                bmp[orow + xv] = px[src * w + ((-xv) % w)]
+    else:
+        for yb in range(SKY_H):
+            col = (-yb) % w
+            orow = yb * SKY_W
+            for xb in range(SKY_W):
+                r = 100 - (xb - horizon)
+                bmp[orow + xb] = px[(0 if r < 0 else r % hv) * w + col]
     r = levmod.Reader(retail_path)
     s = levmod.parse_sky(r)
     assert (s["width"], s["height"]) == (SKY_W, SKY_H), "ciel retail attendu 512x256 (PLAX.C:91-93)"

@@ -40,6 +40,8 @@ void resetPics(void);
 /* GCC14: the tile-upload buffer, lent while the world is not drawn (MENU.C) */
 void *picScratch(int *size);
 /* GCC14: how many more pics the table takes (a game adding tiles of its own: PSMULTI.C) */
+/* GCC14: a 16 bpp tile's indices and palette, for a VDP2 plane (HWFLOOR.C) */
+const unsigned char *picTexels(int picNm,const short **pal);
 int picRoom(void);
 int picAddSpriteRle(void *rle);  /* ... and one: a 64x64 8 bpp RLE tile of the sprites' class */
 

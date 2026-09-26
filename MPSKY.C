@@ -143,7 +143,15 @@ static Uint16 pack(const C3 *c,int x,int y)
    up as xb grows, the horizon near 256) ---- */
 #define H0 256
 static const unsigned short *pal;
+#if CFG_SKY_SCREEN==SCL_NBG0
+/* GCC14: the same 128 KB of A1, laid out screen-wise for NBG0 (PLAX.C): the AZIMUTH is now the
+   column and the height the row, top at row 0 and horizon at SKY_MIDROW 112.  Everything here
+   still asks in PowerSlave's terms -- yb azimuth, xb height growing upwards with the horizon
+   near 256 -- so the two axes are swapped and xb is turned over, here and nowhere else. */
+#define PANO(yb,xb) (*(volatile unsigned char *)    (SCL_VDP2_VRAM_A1+((((372-(xb))&255))<<9)+((yb)&511)))
+#else
 #define PANO(yb,xb) (*(volatile unsigned char *)(SCL_VDP2_VRAM_A1+((yb)<<9)+(xb)))
+#endif
 
 static void panoPixel(int yb,int xb,C3 *c)
 {unsigned short v=pal[PANO(yb&255,xb)];

@@ -745,12 +745,20 @@ int vdp2PicCount(void)
 {return nmVDP2Pics;
 }
 
+/* GCC14: NBG0 is the sky's when CFG_SKY_SCREEN says so (SPRITE.H), and a disc whose sky is
+   there has no VDP2 picture at all -- so this would only set an EMPTY W0 window on NBG0 and
+   hide the sky. */
 void updateVDP2Pic(void)
-{SCL_Open(SCL_NBG0);
+{
+#if CFG_SKY_SCREEN==SCL_NBG0
+ return;
+#else
+ SCL_Open(SCL_NBG0);
  SCL_MoveTo(vx<<16,vy<<16,0);
  SCL_Close();
  SCL_SetWindow(SCL_W0,0,SCL_NBG0,0xfffffff,vxmin,vymin,
 	       vxmax,vymax);
+#endif
 }
 
 void displayVDP2Pic(int picNm,int xo,int yo)
@@ -894,6 +902,22 @@ int picWeaponSprites(void)
 
 /* the sub-tile of VDP2 picture `picNm` at column cx, row cy -- -1 = the picture was not cut.
    A sub-tile covers 128 x 128 pixels of the 320-wide frame the gun is laid out in. */
+/* GCC14: a 16 bpp tile as the pic system keeps it -- 64x64 palette indices and the 256 entries
+   they read (load16BPPTile, COMPRESS16BPP).  For a plane that is not the VDP1's: HWFLOOR.C
+   builds its RGB cells from these.  NULL if the tile is not a wall tile or is not loaded. */
+const unsigned char *picTexels(int picNm,const short **pal)
+{
+#if COMPRESS16BPP
+ if (picNm<0 || picNm>=MAXNMPICS || pics[picNm].class!=TILE16BPP || !pics[picNm].data)
+    return NULL;
+ *pal=(const short *)pics[picNm].pallete;
+ return (const unsigned char *)pics[picNm].data;
+#else
+ (void)picNm; (void)pal;
+ return NULL;
+#endif
+}
+
 int picVdp2Sub(int picNm,int cx,int cy)
 {int i;
  if (!weaponSpritesOn || getPicClass(picNm)!=TILEVDP)
@@ -911,8 +935,11 @@ void delay_dontDisplayVDP2Pic(void)
 }
 
 void dontDisplayVDP2Pic(void)
-{SCL_SetWindow(SCL_W0,0,SCL_NBG0,0xfffffff,0,0,
+{
+#if CFG_SKY_SCREEN!=SCL_NBG0
+ SCL_SetWindow(SCL_W0,0,SCL_NBG0,0xfffffff,0,0,
 	       0,0);
+#endif
  vxmin=0; vymin=0; vxmax=0; vymax=0;
 }
 

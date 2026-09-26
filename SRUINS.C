@@ -67,6 +67,7 @@
 #include "intro.h"
 #include "mov.h"
 #include "plax.h"
+#include "hwfloor.h"
 #include "mpsky.h"
 #include "airbub.c"
 #include "initmain.h"
@@ -1102,19 +1103,38 @@ void movePlayer(int inputEnd,int nmFrames)
     }
 }
 
+static Uint16 *vdp2Cycle;       /* GCC14: the access pattern setVDP2 chose (vdp2CycleTable) */
+
 void setVDP2(void)
-{static Uint16 cycle[]=
+{/* GCC14: banks A0, A1, B0, B1, two words of four timings each.  0xe is no access; 0x4 is one
+    NBG0 character read, and an 8 bpp screen wants two of them in the bank it reads from.  When
+    the sky is NBG0's (SPRITE.H CFG_SKY_SCREEN) its bitmap stays in A1, so A1 is the bank that
+    must grant them, and A1 stops being reserved for RBG0 -- which keeps A0 for the coefficient
+    table the dominant floor will want. */
+#if CFG_SKY_SCREEN==SCL_NBG0
+ static Uint16 cycle[]=
+   {0xeeee, 0xeeee,
+    0x44ee, 0xeeee,
+    0xeeee, 0xeeee,
+    0xeeee, 0xeeee};
+#else
+ static Uint16 cycle[]=
    {0xeeee, 0xeeee,
     0xeeee, 0xeeee,
     0x44ee, 0xeeee,
     0x44ee, 0xeeee};
+#endif
 
  SclVramConfig vcfg;
  SCL_InitVramConfigTb(&vcfg);
  vcfg.vramModeA=ON;
  vcfg.vramModeB=ON;
  vcfg.vramA0=SCL_RBG0_K;
+#if CFG_SKY_SCREEN==SCL_NBG0
+ vcfg.vramA1=SCL_NON;           /* NBG0's bitmap: a normal scroll, so the cycle table rules it */
+#else
  vcfg.vramA1=SCL_RBG0_CHAR;
+#endif
 
  SCL_SetVramConfig(&vcfg);
 
@@ -1128,6 +1148,16 @@ void setVDP2(void)
 
  SCL_SetSpriteMode(SCL_TYPE1,SCL_MIX,SCL_SP_WINDOW);
  SCL_SetCycleTable(cycle);
+ vdp2Cycle=cycle;
+}
+
+/* GCC14: re-apply the access pattern.  SCL_SetVramConfig recomputes it from the bank
+   assignment, so anything that changes the banks after setVDP2 -- the dominant floor
+   taking B0 (HWFLOOR.C) -- puts it back or the screens it does not mention go unfed:
+   the sky came out as a black band the first time (console, 2026-09-26). */
+void vdp2CycleTable(void)
+{if (vdp2Cycle)
+    SCL_SetCycleTable(vdp2Cycle);
 }
 
 
@@ -2481,6 +2511,7 @@ int runLevel(char *filename,int levelNm)
  /* do hardware initialization */
  dPrint("A!\n");
  plaxOff();
+ hwFloorOff();
  mpSkyOff();                    /* the solo set-up below takes the VDP2 back */
  dPrint("A1!\n");
  setVDP2();
@@ -2528,6 +2559,7 @@ int runLevel(char *filename,int levelNm)
  initFlames();
 
  SCL_SetWindow(SCL_W1,0,SCL_RBG0,0xfffffff,0,0,0,0);
+ SCL_SetWindow(SCL_W0,0,CFG_SKY_SCREEN,0xfffffff,0,0,0,0);
 
  SCL_SetColOffset(SCL_OFFSET_A,SCL_SP0|SCL_NBG0|SCL_RBG0,0,0,0);
  fs_startProgress(1);
@@ -2581,6 +2613,7 @@ int runLevel(char *filename,int levelNm)
 #endif
 
  CFG_LOADING_END();            /* GCC14: the game's VDP2 back from its loading screen */
+ hwFloorLevelStart();          /* ... and B0-B1, which it was using, become the floor's */
  startSlave(wallRenderSlaveMain);
  delay(1);
 
@@ -3210,6 +3243,15 @@ int runLevel(char *filename,int levelNm)
 #endif
 #endif
 
+     /* GCC14: THE DOMINANT FLOOR (HWFLOOR.C), on the right end of the cls: row -- every row
+	above it is taken.
+	  hw:P/N   P = the plane held this image, -1 = none elected; N = how many the level has
+	  c:C      C = cells the election kept off the VDP1 -- compare it with polys
+	  y:H      H = the plane's world height                                            */
+     if (mpPlayers==1)
+	drawStringf(-40,0,1,"hw:%d/%d c:%d y:%d",hwFloorPlane,hwFloorPlaneCount(),
+		    hwFloorCells,hwFloorY());
+
      if (profileShow)
 	drawProfileData(-158,-28);
      CFG_PROF_END();
@@ -3387,6 +3429,14 @@ int runLevel(char *filename,int levelNm)
 	}
      else
 	{movePlax(lastYaw,lastPitch);
+	 /* GCC14: the dominant floor's plane, from the camera the image was drawn with
+	    (HWFLOOR.C).  After drawWalls, because the boxes it windows are made there. */
+	 /* the EYE, not the camera's foot: the view matrix moves by -pos.y + playerHeightOffset
+	    + CFG_VIEW_BOB (SRUINS.C:2880), so the plane must ride the same bob or it stays put
+	    while the whole screen breathes. */
+	 hwFloorFrame(lastYaw,f(camera->pos.x),
+		      f(camera->pos.y-playerHeightOffset-CFG_VIEW_BOB),f(camera->pos.z),
+		      CFG_YCENTER-f(MTH_Mul(lastPitch,F(HWFLOOR_FOCAL)))/45);
 	 if (currentState.currentLevel==18)
 	    {plaxBBxmin=-160;
 	     plaxBBymin=-110;
@@ -3405,7 +3455,7 @@ int runLevel(char *filename,int levelNm)
 	     plaxBBxmax=160;
 	     plaxBBymax=CFG_YMAX;
 	    }
-	 SCL_SetWindow(SCL_W1,0,SCL_RBG0,0xfffffff,
+	 SCL_SetWindow(SCL_W0,0,CFG_SKY_SCREEN,0xfffffff,
 		       plaxBBxmin+160+viewOrgOff,plaxBBymin+CFG_YCENTER,
 		       plaxBBxmax+160+viewOrgOff,plaxBBymax+CFG_YCENTER);
 	 updateVDP2Pic();

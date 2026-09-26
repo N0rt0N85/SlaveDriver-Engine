@@ -287,6 +287,15 @@ void doom_useRefused(void);                          /* DOOM_PLAYER.C: sfx_noway
    small, and the box has always been right for it -- the full view would let RBG0 through every
    crack of the geometry. */
 #define CFG_SKY_FULLWINDOW     1
+/* GCC14: WHICH VDP2 SCREEN CARRIES THE SKY.  RBG0 has one coefficient table and two
+   customers for it: the sky wants it per COLUMN (the atan of the yaw, PLAX.C:150-162)
+   and a dominant floor wants it per LINE (the depth of a screen row).  They cannot
+   share, so the sky moves.  Doom's sky is the one that can: it is a backdrop with no
+   depth, a plain scroll shows it, and NBG0's VRAM is free on a Doom disc -- the gun is
+   in VDP1 tiles and CFG_VDP2_SHEET is empty, so B0-B1 hold nothing (PIC.C
+   vdp2PicCount).  What it costs: the atan correction, so the sky pans linearly and
+   shears against the walls towards the edges of the view. */
+#define CFG_SKY_SCREEN         SCL_NBG0
 #define CFG_USE_REFUSED        else doom_useRefused();           /* SRUINS.C:853: use on a plain wall => sfx_noway (p_map.c PTR_UseTraverse) */
 /* AI2.C:535: Doom uses the whole line (P_UseSpecialLine), not a 40 u disc around the orifice --
    the disc (L1-like approxDist) left 5-84 % of an episode-1 switch wall pressable */
@@ -400,6 +409,7 @@ extern int updateListSize,slaveSize,nmSlavePolys;    /* WALLS.C: sectors drawn, 
 #define CFG_DEATH_HOLD         0        /* PowerSlave fades and reloads on its own */
 #define CFG_DEATH_LOOK()                /* ... and does not turn towards anything */
 #define CFG_SKY_FULLWINDOW   0          /* the box of the sky walls, as it always was */
+#define CFG_SKY_SCREEN       SCL_RBG0   /* a panorama in rotation: it needs the K table */
 #define CFG_WEAPON_UP(m)       weaponUp(m)
 #define CFG_WEAPON_DN(m)       weaponDown(m)
 #define CFG_BOWLDOTS()         redrawBowlDots()

@@ -19,10 +19,35 @@
 #include "file.h"
 #include "util.h"
 #include "spr.h"
+#include "sprite.h"
+#include "pic.h"
 #include "plax.h"
 #include "mpsky.h"
 
 #define PLAXPERSCREEN 128
+
+/* GCC14: the sky's display and no-transparency bits in BGON, for whichever screen carries it
+   (SPRITE.H CFG_SKY_SCREEN): N0ON/N0TPON or R0ON/R0TPON. */
+#if CFG_SKY_SCREEN==SCL_NBG0
+#define SKY_ON     0x0001
+#define SKY_TP     0x0100
+#else
+#define SKY_ON     0x0010
+#define SKY_TP     0x1000
+#endif
+
+/* The block on the disc is 512 x 256 either way and goes into VRAM A1 either way -- 128 KB, the
+   space the sky has always had.  What changes is what its axes MEAN.  For RBG0 a row is an
+   azimuth and a column a height, because the 90-degree matrix below reads it transposed.  For
+   NBG0 there is no matrix, so the converter writes it screen-wise: a column is an azimuth (512
+   dots = two copies of the 256-texel quarter, and the bitmap wraps) and a row is a height (256
+   = two copies of a 128-texel sky, so the vertical wrap is seamless too -- and repeating every
+   128 is what Doom itself does, R_DrawColumn masking the line by 127).
+   It cannot go to B0-B1, free though they are: Doom's loading screen is THERE (DOOM_TITLE.C
+   VRAM_B0/VRAM_B1) and it is on screen while this runs. */
+#define SKY_W        512                /* dots across the bitmap                              */
+#define SKY_H        256                /* dots down                                           */
+#define SKY_MIDROW   112                /* the row the view's centre line reads at pitch 0     */
 void movePlax(Fixed32 yaw,Fixed32 pitch)
 {int x,y;
  extern SclRotreg *SclRotregBuff;
@@ -48,10 +73,19 @@ void movePlax(Fixed32 yaw,Fixed32 pitch)
    (SRUINS.C SCL_SetWindow), so without this the sky sits 16 dots out of register with the walls.
    It goes on screenst, not on viewp: under this 90-degree matrix viewp.x feeds the texture's Y
    as well, and the sky would slide vertically too. */
+#if CFG_SKY_SCREEN==SCL_NBG0
+ /* GCC14: a scroll, not a matrix.  Screen dot (c,r) reads bitmap dot (x+c, y+r), so putting
+    SKY_MIDROW on the view's centre line is one subtraction.  `y` still carries the pitch term
+    the RBG0 path used, less its own -100 offset. */
+ SCL_Open(SCL_NBG0);
+ SCL_MoveTo((x-viewOrgOff)<<16,(SKY_MIDROW-CFG_YCENTER+y+100)<<16,0);
+ SCL_Close();
+#else
  SclRotregBuff->screenst.x=F(x-viewOrgOff);
  SclRotregBuff->viewp.x=160+x;
  SclRotregBuff->screenst.y=F(y);
  SclRotregBuff->viewp.y=20;
+#endif
 
  if (SclProcess==0)
     SclProcess=1;
@@ -64,9 +98,9 @@ void enablePlax(int setting)
      return;
     }
  if (setting)
-    Scl_s_reg.dispenbl|=0x10;
+    Scl_s_reg.dispenbl|=SKY_ON;
  else
-    Scl_s_reg.dispenbl&=~0x10;
+    Scl_s_reg.dispenbl&=~SKY_ON;
 }
 
 static unsigned short plaxPal[256];
@@ -103,7 +137,7 @@ const unsigned short *plaxPalette(void)
 }
 
 void plaxOff(void)
-{Scl_s_reg.dispenbl&=0xffef;
+{Scl_s_reg.dispenbl&=~SKY_ON;
  if (SclProcess==0)
     SclProcess=1;
 /* SclConfig scfg;
@@ -122,10 +156,30 @@ void initPlax(int fd)
  /* SCL_SetColRam(0,256*7,256,plaxPal); */
 
  fs_read(fd,(char *)&x,4);
- assert(x==512);
+ assert(x==SKY_W);
  fs_read(fd,(char *)&x,4);
- assert(x==256);
- fs_read(fd,(char *)SCL_VDP2_VRAM_A1,512*256);
+ assert(x==SKY_H);
+ fs_read(fd,(char *)SCL_VDP2_VRAM_A1,SKY_W*SKY_H);
+
+#if CFG_SKY_SCREEN==SCL_NBG0
+ SCL_InitConfigTb(&scfg);
+ scfg.dispenbl=ON;
+ scfg.bmpsize=SCL_BMP_SIZE_512X256;
+ scfg.coltype=SCL_COL_TYPE_256;
+ scfg.datatype=SCL_BITMAP;
+ scfg.mapover=SCL_OVER_0;
+ scfg.plate_addr[0]=128*1024;                  /* VRAM A1 */
+ scfg.patnamecontrl=0;
+ SCL_SetConfig(SCL_NBG0, &scfg);
+
+ SCL_SET_N0CAOS(7);
+ SCL_SetPriority(SCL_NBG0,1);   /* behind everything: setVDP2 puts it at 6 for the gun sheet */
+ Scl_s_reg.dispenbl|=SKY_TP;    /* turn off transparency for plax */
+ if (SclProcess==0)
+    SclProcess=1;
+
+ fs_read(fd,(char *)SCL_VDP2_VRAM_A0,320*4);   /* the K table: read past it, RBG0 is free now */
+#else
 
  SCL_InitRotateTable(SCL_VDP2_VRAM_A0+0x500,1,SCL_RBG0,SCL_NON);
 
@@ -142,11 +196,12 @@ void initPlax(int fd)
  SCL_SET_R0CAOS(7);
  Scl_r_reg.k_contrl=0x1;
  Scl_r_reg.k_offset=0;
- Scl_s_reg.dispenbl|=0x1000; /* turn off transparency for plax */
+ Scl_s_reg.dispenbl|=SKY_TP; /* turn off transparency for plax */
  if (SclProcess==0)
     SclProcess=1;
 
  fs_read(fd,(char *)SCL_VDP2_VRAM_A0,320*4);
+#endif
 
 #if 0
  {int x,d;
@@ -165,6 +220,7 @@ void initPlax(int fd)
  }
 #endif
 
+#if CFG_SKY_SCREEN!=SCL_NBG0
  {extern SclRotreg *SclRotregBuff;
   SclRotregBuff->k_tab=0;
   SclRotregBuff->k_delta.y=1<<16;
@@ -176,6 +232,7 @@ void initPlax(int fd)
   SclRotregBuff->matrix_e=0;
   SclRotregBuff->matrix_f=0;
  }
+#endif
  if (SclProcess==0)
     SclProcess=1;
 

@@ -12,6 +12,7 @@
 #include "level.h"
 #include "sprite.h"
 #include "walls.h"
+#include "hwfloor.h"
 #include "mplayer.h"
 #include "util.h"
 #include "spr.h"
@@ -2835,6 +2836,25 @@ void drawSector(int sectorNm,MthMatrix *view,int slave)
 	 continue;
 	}
 
+     /* GCC14: THE DOMINANT FLOOR.  This sector's floor is the plane RBG0 is showing, so the
+	VDP1 does not walk its quads -- only their screen box, which is what opens the
+	plane's window (HWFLOOR.C).  Exactly the sky's bargain, one line above, except that
+	the sky's walls are marked in the level and this is decided afresh each image. */
+     if (hwFloorOn && hwFloorSector[sectorNm] && theWall->normal[1]>0)
+	{int x0=poly[0].x,x1=x0,y0=poly[0].y,y1=y0;
+	 for (i=1;i<4;i++)
+	    {if (poly[i].x<x0) x0=poly[i].x;
+	     if (poly[i].x>x1) x1=poly[i].x;
+	     if (poly[i].y<y0) y0=poly[i].y;
+	     if (poly[i].y>y1) y1=poly[i].y;
+	    }
+	 hwFloorQuad(x0,y0,x1,y1);
+	 hwFloorCells+=(theWall->flags & WALLFLAG_PARALLELOGRAM)?
+	    theWall->tileLength*theWall->tileHeight:
+	    (theWall->firstFace>=0? theWall->lastFace-theWall->firstFace+1: 0);
+	 continue;
+	}
+
      /* we're going to draw the wall */
      if (slave)
 	{if (level_sector[sectorNm].flags & SECFLAG_WATER)
@@ -4117,6 +4137,17 @@ void drawWalls(int k,MthMatrix *view)
      wLightPos[i][1]=f(lp.y);
      wLightPos[i][2]=f(lp.z);
      lightLeaf[i]=(short)lightSource[i]->s;
+    }
+
+ /* GCC14: elect the image's floor plane before anything is drawn -- the slave reads
+    hwFloorSector[] too, and it is kicked a few lines below (HWFLOOR.C). */
+ if (k==0)
+    {hwFloorBegin();
+     for (i=0;i<updateListSize;i++)
+	hwFloorSee(updateList[i]-sectorDraw,
+		   updateList[i]->xmax-updateList[i]->xmin,
+		   updateList[i]->ymax-updateList[i]->ymin);
+     hwFloorChoose(viewSector);
     }
 
  slaveSize=slaveSplit[k];
